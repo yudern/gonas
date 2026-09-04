@@ -1,0 +1,230 @@
+package appstore
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/bng147/gonas/internal/docker"
+)
+
+// ServiceOverride 是使用者在安裝精靈裡針對某個服務實際填的值,
+// 用來覆蓋/補齊範本裡沒有預設值的部分(尤其是 VolumeHostPaths —— 範本
+// 刻意不預設資料要落在哪顆碟,詳見 template.go 的說明)。
+type ServiceOverride struct {
+	Env               map[string]string // env key -> 使用者填的值
+	VolumeHostPaths   map[string]string // containerPath -> 使用者選的陣列路徑
+	PortHostOverrides map[int]int       // containerPort -> 使用者改過的 hostPort
+}
+
+// InstallRequest 是安裝一個 App 所需的完整輸入。
+type InstallRequest struct {
+	Template AppTemplate
+	// Overrides 依服務名稱(ServiceTemplate.Name)對應各自的使用者輸入,
+	// 沒填的服務就完全套用範本預設值。
+	Overrides map[string]ServiceOverride
+	// OnPullProgress 是選用的拉取進度回呼，可為 nil。
+	OnPullProgress func(serviceName, status string)
+}
+
+// InstallResult 記錄安裝完成後每個服務對應到的容器 ID，方便呼叫端記錄下來
+// (例如寫進 Web UI 的「已安裝 App」清單）。
+type InstallResult struct {
+	ContainerIDs map[string]string // service name -> container id
+	NetworkID    string            // 多服務 App 才會非空
+}
+
+// Install 把範本翻譯成實際的 Docker 資源並啟動起來：需要的話先建立專屬網路、
+// 依序拉取映像、建立並啟動每個服務的容器。任何一步失敗，會盡力把這次呼叫
+// 已經建立的容器/網路清乾淨再回傳錯誤 —— 不留下「裝到一半」的殘骸,
+// 讓使用者可以直接重試而不必先手動清理。
+func Install(ctx context.Context, client *docker.Client, req InstallRequest) (InstallResult, error) {
+	if err := req.Template.Validate(); err != nil {
+		return InstallResult{}, fmt.Errorf("invalid app template: %w", err)
+	}
+
+	result := InstallResult{ContainerIDs: make(map[string]string, len(req.Template.Services))}
+	var createdNetwork bool
+
+	rollback := func() {
+		for svcName, id := range result.ContainerIDs {
+			_ = client.StopContainer(ctx, id, 5)
+			if err := client.RemoveContainer(ctx, id, true); err != nil {
+				// 盡力而為的清理，記不到 log 就算了 —— 呼叫端會拿到原始錯誤,
+				// 之後 Phase 5 接上告警系統時這裡可以補上通知。
+				_ = fmt.Errorf("rollback: removing container for service %q: %w", svcName, err)
+			}
+		}
+		if createdNetwork {
+			_ = client.RemoveNetwork(ctx, docker.AppNetworkName(req.Template.ID))
+		}
+	}
+
+	networkMode := ""
+	if len(req.Template.Services) > 1 {
+		netID, err := client.EnsureAppNetwork(ctx, req.Template.ID)
+		if err != nil {
+			return InstallResult{}, fmt.Errorf("preparing network for app %q: %w", req.Template.ID, err)
+		}
+		result.NetworkID = netID
+		networkMode = docker.AppNetworkName(req.Template.ID)
+		createdNetwork = true // 就算是重用既有網路也一併視為「這次安裝擁有它」，Uninstall 時會清掉
+	}
+
+	for _, svc := range req.Template.Services {
+		override := req.Overrides[svc.Name]
+
+		env, err := ResolveEnv(svc, override.Env)
+		if err != nil {
+			rollback()
+			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+
+		mounts, err := resolveMounts(svc, override.VolumeHostPaths)
+		if err != nil {
+			rollback()
+			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+
+		ports := resolvePorts(svc, override.PortHostOverrides)
+
+		// 先看本機是不是已經有這個 image，有的話就不用去 registry —— 這對
+		// 網路受限的環境、或是使用者自建的本機映像檔(RepoTag 不在任何
+		// registry 上)特別重要,詳見 docker.ImageExists 的說明。
+		exists, err := client.ImageExists(ctx, svc.Image)
+		if err != nil {
+			rollback()
+			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+		if exists {
+			if req.OnPullProgress != nil {
+				req.OnPullProgress(svc.Name, "image already present locally, skipping pull")
+			}
+		} else {
+			progress := func(status string) {
+				if req.OnPullProgress != nil {
+					req.OnPullProgress(svc.Name, status)
+				}
+			}
+			if err := client.PullImage(ctx, svc.Image, progress); err != nil {
+				rollback()
+				return InstallResult{}, fmt.Errorf("service %q: pulling image %q: %w", svc.Name, svc.Image, err)
+			}
+		}
+
+		containerName := req.Template.ID + "-" + svc.Name
+		id, _, err := client.CreateContainer(ctx, docker.CreateContainerRequest{
+			Name:          containerName,
+			Image:         svc.Image,
+			Cmd:           svc.Command,
+			Env:           env,
+			Ports:         ports,
+			Mounts:        mounts,
+			RestartPolicy: svc.RestartPolicy,
+			NetworkMode:   networkMode,
+			Labels: map[string]string{
+				"com.gonas.app":     req.Template.ID,
+				"com.gonas.service": svc.Name,
+			},
+		})
+		if err != nil {
+			rollback()
+			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+		result.ContainerIDs[svc.Name] = id
+
+		if err := client.StartContainer(ctx, id); err != nil {
+			rollback()
+			return InstallResult{}, fmt.Errorf("service %q: starting container: %w", svc.Name, err)
+		}
+	}
+
+	return result, nil
+}
+
+// Uninstall 找出所有標記為屬於這個 App 的容器並停止、移除，多服務 App
+// 也會一併移除專屬網路。刻意用 Docker 標籤(com.gonas.app)重新查詢,
+// 而不是要求呼叫端自己保存容器 ID 清單 —— 就算 GoNAS daemon 重開機、
+// 記憶體裡的狀態遺失了，也還能靠標籤把整個 App 找回來清乾淨。
+func Uninstall(ctx context.Context, client *docker.Client, appID string) error {
+	containers, err := client.ListContainers(ctx, true)
+	if err != nil {
+		return fmt.Errorf("listing containers to uninstall app %q: %w", appID, err)
+	}
+
+	var firstErr error
+	recordErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	removedAny := false
+	for _, c := range containers {
+		if c.Labels["com.gonas.app"] != appID {
+			continue
+		}
+		removedAny = true
+		_ = client.StopContainer(ctx, c.ID, 10) // 停止失敗也繼續嘗試強制移除，不要因此卡住整個解除安裝
+		if err := client.RemoveContainer(ctx, c.ID, true); err != nil {
+			recordErr(fmt.Errorf("removing container %s (app %q): %w", c.ID, appID, err))
+		}
+	}
+
+	if removedAny {
+		// 先查一次網路是不是真的存在，而不是直接呼叫 RemoveNetwork 再吞掉
+		// 「找不到」的錯誤 —— 單服務 App 從來沒建立過專屬網路是完全正常的情況,
+		// 不該讓 Uninstall 對這種最常見的案例回報一個其實無害的錯誤。
+		networks, err := client.ListNetworks(ctx)
+		if err != nil {
+			recordErr(fmt.Errorf("checking for app network before removal (app %q): %w", appID, err))
+		} else {
+			name := docker.AppNetworkName(appID)
+			for _, n := range networks {
+				if n.Name != name {
+					continue
+				}
+				if err := client.RemoveNetwork(ctx, n.ID); err != nil {
+					recordErr(fmt.Errorf("removing network %q for app %q: %w", name, appID, err))
+				}
+				break
+			}
+		}
+	}
+
+	return firstErr
+}
+
+func resolveMounts(svc ServiceTemplate, hostPaths map[string]string) ([]docker.Mount, error) {
+	mounts := make([]docker.Mount, 0, len(svc.Volumes))
+	for _, v := range svc.Volumes {
+		hostPath := v.HostPath
+		if override, ok := hostPaths[v.ContainerPath]; ok && override != "" {
+			hostPath = override
+		}
+		if hostPath == "" {
+			return nil, fmt.Errorf("volume %q has no host path: this template requires the installer to choose one on the array", v.ContainerPath)
+		}
+		mounts = append(mounts, docker.Mount{
+			HostPath:      hostPath,
+			ContainerPath: v.ContainerPath,
+			ReadOnly:      v.ReadOnly,
+		})
+	}
+	return mounts, nil
+}
+
+func resolvePorts(svc ServiceTemplate, overrides map[int]int) []docker.PortSpec {
+	ports := make([]docker.PortSpec, 0, len(svc.Ports))
+	for _, p := range svc.Ports {
+		hostPort := p.HostPort
+		if override, ok := overrides[p.ContainerPort]; ok && override != 0 {
+			hostPort = override
+		}
+		ports = append(ports, docker.PortSpec{
+			ContainerPort: p.ContainerPort,
+			HostPort:      hostPort,
+			Protocol:      p.Protocol,
+		})
+	}
+	return ports
+}

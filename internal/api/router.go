@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/bng147/gonas/internal/docker"
 	"github.com/bng147/gonas/internal/storage"
 	"github.com/bng147/gonas/internal/version"
 )
@@ -25,6 +26,11 @@ type Server struct {
 	// array 在還沒有人透過 Web UI / 設定檔建立 pool 之前是 nil。
 	// Phase 4 接上設定持久化後,這裡會在啟動時從設定檔載入既有的 pool。
 	array *storage.Array
+	// docker 指向本機 Docker daemon。這裡先只掛唯讀端點(ping/containers/
+	// images/networks)—— 安裝/解除安裝需要使用者在 Web UI 上選陣列路徑、
+	// 填環境變數,那是 Phase 4 的範圍,現在貿然開放 POST 端點沒有介面把關,
+	// 容易被誤用。
+	docker *docker.Client
 }
 
 // New 建立一個 Server,並回傳已掛好所有路由的 http.Handler。
@@ -33,6 +39,7 @@ func New(logger *slog.Logger) (*Server, http.Handler) {
 		logger:    logger,
 		startedAt: time.Now(),
 		runner:    storage.NewExecRunner(),
+		docker:    docker.NewClient(""),
 	}
 
 	mux := http.NewServeMux()
@@ -40,6 +47,10 @@ func New(logger *slog.Logger) (*Server, http.Handler) {
 	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
 	mux.HandleFunc("GET /api/v1/storage/disks", s.handleStorageDisks)
 	mux.HandleFunc("GET /api/v1/storage/array", s.handleStorageArrayStatus)
+	mux.HandleFunc("GET /api/v1/docker/ping", s.handleDockerPing)
+	mux.HandleFunc("GET /api/v1/docker/containers", s.handleDockerContainers)
+	mux.HandleFunc("GET /api/v1/docker/images", s.handleDockerImages)
+	mux.HandleFunc("GET /api/v1/docker/networks", s.handleDockerNetworks)
 
 	return s, withLogging(logger, mux)
 }
@@ -88,6 +99,51 @@ func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, s.array.Status())
+}
+
+// dockerStatusResponse 讓 Web UI 能區分「Docker 沒裝/沒啟動」跟其他錯誤,
+// 這是安裝任何 App 之前第一件要確認的事。
+type dockerStatusResponse struct {
+	Available bool   `json:"available"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (s *Server) handleDockerPing(w http.ResponseWriter, r *http.Request) {
+	if err := s.docker.Ping(r.Context()); err != nil {
+		writeJSON(w, http.StatusOK, dockerStatusResponse{Available: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, dockerStatusResponse{Available: true})
+}
+
+func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) {
+	containers, err := s.docker.ListContainers(r.Context(), true)
+	if err != nil {
+		s.logger.Error("listing docker containers failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, containers)
+}
+
+func (s *Server) handleDockerImages(w http.ResponseWriter, r *http.Request) {
+	images, err := s.docker.ListImages(r.Context())
+	if err != nil {
+		s.logger.Error("listing docker images failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, images)
+}
+
+func (s *Server) handleDockerNetworks(w http.ResponseWriter, r *http.Request) {
+	networks, err := s.docker.ListNetworks(r.Context())
+	if err != nil {
+		s.logger.Error("listing docker networks failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, networks)
 }
 
 type errorResponse struct {

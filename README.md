@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 1 完成 — 儲存核心
+## 目前狀態:Phase 2 完成 — Docker 整合
 
 **Phase 0(專案骨架)**
 
@@ -32,16 +32,33 @@
 > 時刻執行一次」的簡化排程器。等你在自己的機器上開發、或這裡的網路權限開放後,可以
 > 直接換成完整 cron 語法的套件,對外的 `Scheduler` 介面不需要變動。
 
+**Phase 2(Docker 整合,`internal/docker` + `internal/appstore`)**
+
+- `internal/docker`:不依賴官方 SDK,直接用標準函式庫打 Docker Engine API 的
+  Unix socket(見套件註解「已知取捨」——網路白名單擋掉了 Go module proxy,
+  這同時也讓 GoNAS 維持零第三方依賴)。涵蓋容器 CRUD/啟停、映像列表與拉取
+  (含串流進度、正確處理「HTTP 200 但錯誤藏在串流裡」這個 Docker API 的坑)、
+  本機映像存在檢查(避免不必要的網路存取)、網路列表與建立/移除
+- `internal/appstore`:App 範本 schema(單一/多容器)、Install/Uninstall
+  生命週期(多容器 App 自動建立共用網路、安裝失敗會自動回滾已建立的資源、
+  Uninstall 靠 Docker 標籤重新找回整個 App,即使 daemon 重啟過也能清乾淨)
+- 新增 `GET /api/v1/docker/{ping,containers,images,networks}`(唯讀;
+  安裝/解除安裝需要 Web UI 讓使用者選陣列路徑、填環境變數,留到 Phase 4)
+- 30 個單元測試(全部用 httptest 假伺服器,不需要真的 Docker),另外用一支
+  臨時腳本對著這台開發機**真正在跑的 Docker daemon**(本機建置的
+  `FROM scratch` 測試映像,不需要外部網路)驗證過完整流程:ping → 安裝
+  單容器 App → 確認執行中 → 解除安裝 → 確認清乾淨;同樣流程也用多容器 App
+  驗證過共用網路的建立與清除。腳本本身沒有留在版本庫裡。
+
 尚未實作(依路線圖排序,接下來的 Phase):
 
-1. Docker 引擎整合 — 容器生命週期 API、App 商店範本
-2. 檔案共享與帳號 — Samba / NFS / 使用者管理
-3. Web 管理介面 — Vue 3 SPA
-4. 監控與告警
-5. 網路與安全 — WireGuard、HTTPS、2FA
-6. 備份與快照
-7. 安裝與封裝 — `install.sh`
-8. 實機測試與強化
+1. 檔案共享與帳號 — Samba / NFS / 使用者管理
+2. Web 管理介面 — Vue 3 SPA
+3. 監控與告警
+4. 網路與安全 — WireGuard、HTTPS、2FA
+5. 備份與快照
+6. 安裝與封裝 — `install.sh`
+7. 實機測試與強化
 
 ## 開發
 
