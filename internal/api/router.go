@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/bng147/gonas/internal/storage"
 	"github.com/bng147/gonas/internal/version"
 )
 
@@ -20,6 +21,10 @@ import (
 type Server struct {
 	logger    *slog.Logger
 	startedAt time.Time
+	runner    storage.Runner
+	// array 在還沒有人透過 Web UI / 設定檔建立 pool 之前是 nil。
+	// Phase 4 接上設定持久化後,這裡會在啟動時從設定檔載入既有的 pool。
+	array *storage.Array
 }
 
 // New 建立一個 Server,並回傳已掛好所有路由的 http.Handler。
@@ -27,11 +32,14 @@ func New(logger *slog.Logger) (*Server, http.Handler) {
 	s := &Server{
 		logger:    logger,
 		startedAt: time.Now(),
+		runner:    storage.NewExecRunner(),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
+	mux.HandleFunc("GET /api/v1/storage/disks", s.handleStorageDisks)
+	mux.HandleFunc("GET /api/v1/storage/array", s.handleStorageArrayStatus)
 
 	return s, withLogging(logger, mux)
 }
@@ -56,6 +64,34 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		GoOS:      runtime.GOOS,
 		GoArch:    runtime.GOARCH,
 	})
+}
+
+// handleStorageDisks 探測系統上目前有哪些區塊裝置。這是唯讀操作,
+// 所以不需要陣列先被設定好才能呼叫 —— 使用者第一次設定 pool 之前,
+// 就是靠這支 API 看到「有哪些硬碟可以選」。
+func (s *Server) handleStorageDisks(w http.ResponseWriter, r *http.Request) {
+	disks, err := storage.DiscoverDisks(r.Context(), s.runner)
+	if err != nil {
+		s.logger.Error("disk discovery failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, disks)
+}
+
+// handleStorageArrayStatus 回傳目前陣列的狀態。在使用者還沒建立任何
+// pool 設定之前(Phase 1 還沒有設定持久化,Phase 4 會補上),回傳
+// "unconfigured" 而不是錯誤 —— 這是合法的初始狀態,不是異常。
+func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request) {
+	if s.array == nil {
+		writeJSON(w, http.StatusOK, storage.Status{State: "unconfigured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.array.Status())
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
