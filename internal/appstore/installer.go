@@ -29,8 +29,8 @@ type InstallRequest struct {
 // InstallResult 記錄安裝完成後每個服務對應到的容器 ID，方便呼叫端記錄下來
 // (例如寫進 Web UI 的「已安裝 App」清單）。
 type InstallResult struct {
-	ContainerIDs map[string]string // service name -> container id
-	NetworkID    string            // 多服務 App 才會非空
+	ContainerIDs map[string]string `json:"containerIds"` // service name -> container id
+	NetworkID    string            `json:"networkId"`    // 多服務 App 才會非空
 }
 
 // Install 把範本翻譯成實際的 Docker 資源並啟動起來：需要的話先建立專屬網路、

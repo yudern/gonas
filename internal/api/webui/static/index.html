@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoNAS</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">◇</span>
+      <span class="brand-name">GoNAS</span>
+    </div>
+    <ul class="nav-list">
+      <li><a href="#/dashboard" data-route="dashboard">儀表板</a></li>
+      <li><a href="#/storage" data-route="storage">儲存</a></li>
+      <li><a href="#/apps" data-route="apps">應用程式</a></li>
+      <li><a href="#/shares" data-route="shares">共享</a></li>
+      <li><a href="#/users" data-route="users">使用者</a></li>
+    </ul>
+    <div class="sidebar-footer" id="sidebar-version">gonasd</div>
+  </nav>
+  <main class="content" id="content">
+    <p class="loading">載入中…</p>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

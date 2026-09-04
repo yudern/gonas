@@ -1,0 +1,58 @@
+// 對 GoNAS REST API 的薄封裝。刻意不用任何框架（fetch 是瀏覽器內建的),
+// 因為這個開發環境沒有辦法拉 npm 套件建置前端(見 gonasd 專案 README「已知
+// 取捨」),而且對一個要在使用者自己 NAS 上跑的管理介面來說,不依賴建置
+// 工具鏈、瀏覽器打開就能動,其實才是正確的方向。
+
+async function request(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 204) return null;
+
+  let data = null;
+  const text = await res.text();
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = text; }
+  }
+
+  if (!res.ok) {
+    const message = (data && data.error) ? data.error : `${res.status} ${res.statusText}`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+export const api = {
+  health: () => request("GET", "/api/v1/health"),
+  version: () => request("GET", "/api/v1/version"),
+
+  disks: () => request("GET", "/api/v1/storage/disks"),
+  arrayStatus: () => request("GET", "/api/v1/storage/array"),
+  setPool: (pool) => request("PUT", "/api/v1/storage/pool", pool),
+  startArray: () => request("POST", "/api/v1/storage/array/start"),
+  stopArray: () => request("POST", "/api/v1/storage/array/stop"),
+
+  dockerPing: () => request("GET", "/api/v1/docker/ping"),
+  containers: () => request("GET", "/api/v1/docker/containers"),
+  images: () => request("GET", "/api/v1/docker/images"),
+  networks: () => request("GET", "/api/v1/docker/networks"),
+
+  catalog: () => request("GET", "/api/v1/appstore/catalog"),
+  installedApps: () => request("GET", "/api/v1/appstore/apps"),
+  installApp: (templateId, overrides) => request("POST", "/api/v1/appstore/apps", { templateId, overrides }),
+  uninstallApp: (id) => request("DELETE", `/api/v1/appstore/apps/${encodeURIComponent(id)}`),
+
+  shares: () => request("GET", "/api/v1/share/shares"),
+  createShare: (share) => request("POST", "/api/v1/share/shares", share),
+  deleteShare: (name) => request("DELETE", `/api/v1/share/shares/${encodeURIComponent(name)}`),
+
+  exports: () => request("GET", "/api/v1/share/exports"),
+  createExport: (exp) => request("POST", "/api/v1/share/exports", exp),
+
+  users: () => request("GET", "/api/v1/share/users"),
+  createUser: (user) => request("POST", "/api/v1/share/users", user),
+  deleteUser: (username) => request("DELETE", `/api/v1/share/users/${encodeURIComponent(username)}`),
+};

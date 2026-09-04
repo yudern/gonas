@@ -1,0 +1,204 @@
+/* GoNAS 管理介面樣式。刻意不載入任何外部字型/CDN 資源 —— 這支介面要能在
+   一個完全沒有網際網路連線的區域網路裡正常運作(NAS 常見場景：斷網、
+   隔離 VLAN、甚至災難復原時的救援模式),所以只用系統內建字型。 */
+
+:root {
+  --bg: #f4f6f5;
+  --surface: #ffffff;
+  --surface-2: #eaf0ee;
+  --border: #d7e1de;
+  --text: #16211f;
+  --text-dim: #55655f;
+  --text-faint: #7c8b85;
+  --accent: #2f8b80;
+  --accent-soft: #d9efeb;
+  --danger: #b3432f;
+  --danger-soft: #f5ded9;
+  --warn: #b5721f;
+  --warn-soft: #f5e8d5;
+  --ok: #2f8b52;
+  --ok-soft: #dcefe0;
+  --sidebar-bg: #16211f;
+  --sidebar-text: #cfd9d5;
+  --sidebar-text-dim: #8a9a94;
+  --sidebar-active: #223330;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10161a;
+    --surface: #171e23;
+    --surface-2: #1d2530;
+    --border: #2a343d;
+    --text: #e6ece9;
+    --text-dim: #9aabA4;
+    --text-faint: #6c7d78;
+    --accent: #59c2b6;
+    --accent-soft: rgba(89, 194, 182, 0.14);
+    --danger: #e0705a;
+    --danger-soft: rgba(224, 112, 90, 0.14);
+    --warn: #e0a458;
+    --warn-soft: rgba(224, 164, 88, 0.14);
+    --ok: #5cc98a;
+    --ok-soft: rgba(92, 201, 138, 0.14);
+    --sidebar-bg: #0c1214;
+    --sidebar-text: #c7d2ce;
+    --sidebar-text-dim: #74857f;
+    --sidebar-active: #182420;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 208px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 20px;
+  font-weight: 600;
+  font-size: 16px;
+  color: #fff;
+}
+.brand-mark { color: var(--accent); }
+
+.nav-list { list-style: none; margin: 0; padding: 0; flex: 1; }
+.nav-list li { margin-bottom: 2px; }
+.nav-list a {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 13.5px;
+}
+.nav-list a:hover { background: var(--sidebar-active); color: #fff; }
+.nav-list a.active { background: var(--sidebar-active); color: var(--accent); font-weight: 600; }
+
+.sidebar-footer {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--sidebar-text-dim);
+  padding: 10px 12px 4px;
+}
+
+.content { flex: 1; padding: 32px 40px; max-width: 1000px; }
+
+h1 { font-size: 22px; font-weight: 650; margin: 0 0 4px; }
+h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
+.page-subtitle { color: var(--text-dim); margin: 0 0 28px; font-size: 13.5px; }
+.loading { color: var(--text-faint); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-bottom: 20px;
+}
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 24px; }
+
+.stat-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.stat-tile .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); margin-bottom: 6px; }
+.stat-tile .value { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat-tile .value.ok { color: var(--ok); }
+.stat-tile .value.danger { color: var(--danger); }
+.stat-tile .value.warn { color: var(--warn); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); font-weight: 600; }
+tbody tr:last-child td { border-bottom: none; }
+.table-wrap { overflow-x: auto; }
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 100px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.danger { background: var(--danger-soft); color: var(--danger); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.neutral { background: var(--surface-2); color: var(--text-dim); }
+
+form.stacked { display: grid; gap: 12px; max-width: 480px; }
+.field { display: grid; gap: 5px; }
+.field label { font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
+.field .hint { font-size: 11.5px; color: var(--text-faint); }
+input[type=text], input[type=password], input[type=number], select, textarea {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+}
+input[type=checkbox] { margin-right: 6px; }
+.checkbox-row { display: flex; align-items: center; font-size: 13px; }
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.05); }
+button.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+button.danger { background: var(--danger); }
+button:disabled { opacity: 0.55; cursor: default; }
+
+.btn-row { display: flex; gap: 8px; margin-top: 4px; }
+
+.msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+.msg.error { background: var(--danger-soft); color: var(--danger); }
+.msg.warn { background: var(--warn-soft); color: var(--warn); }
+.msg.ok { background: var(--ok-soft); color: var(--ok); }
+
+.app-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.app-card:last-child { border-bottom: none; }
+.app-card h3 { margin: 0 0 4px; font-size: 14px; }
+.app-card p { margin: 0; color: var(--text-dim); font-size: 12.5px; max-width: 60ch; }
+.app-card .services { margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-faint); }
+
+.install-form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); display: none; }
+.install-form.open { display: grid; gap: 10px; }
+
+.empty-state { color: var(--text-faint); font-size: 13px; padding: 8px 0; }
+
+a { color: var(--accent); }

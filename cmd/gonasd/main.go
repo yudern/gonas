@@ -1,8 +1,5 @@
-// Command gonasd 是 GoNAS 的核心 daemon。
-//
-// Phase 0 的範圍:啟動一個會回應健康檢查與版本資訊的 HTTP server,
-// 並且能被 systemd 正常啟動、停止(收到 SIGTERM 時優雅關閉)。
-// 之後每個 Phase 都會往這裡掛上新的 Manager(Storage/Docker/Share/...)。
+// Command gonasd 是 GoNAS 的核心 daemon:REST API、內嵌的 Web 管理介面,
+// 以及儲存/Docker/檔案共享/帳號等各個 Manager 的啟動進入點。
 package main
 
 import (
@@ -40,7 +37,11 @@ func main() {
 		logger.Warn("failed to ensure data dir, continuing without it", "dataDir", cfg.DataDir, "err", err)
 	}
 
-	_, handler := api.New(logger)
+	_, handler, err := api.New(logger, cfg.DataDir)
+	if err != nil {
+		logger.Error("failed to initialize API server", "err", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,

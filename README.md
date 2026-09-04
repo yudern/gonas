@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 3 完成 — 檔案共享與帳號
+## 目前狀態:Phase 4 完成 — Web 管理介面
 
 **Phase 0(專案骨架)**
 
@@ -74,14 +74,62 @@
   (Phase 4 的 Web UI 範圍),現在開放端點沒有介面把關容易被誤用,
   跟 Phase 2 App 商店安裝/解除安裝端點延後的理由一樣
 
+**Phase 4(Web 管理介面 + 設定持久化,`internal/state` + `internal/api` 擴充 + 內嵌前端)**
+
+> **技術路線圖的修正**:原規劃是 Vue 3 + Vite,但這個沙盒的 npm registry
+> 也被同一層網路白名單擋掉了(`npm view vue version` → 403),連建置工具都
+> 拉不下來。與其等一個可能拉得到套件的環境,不如正視一件事:**NAS 管理介面
+> 本來就不該依賴外部 CDN 或建置鏈才能動** —— 使用者的 NAS 可能就在一個
+> 斷網、隔離的區網裡。所以 Phase 4 改成純手寫的 vanilla HTML/CSS/JS
+> (ES module、fetch API,無任何第三方依賴),用 Go 1.16+ 的 `embed.FS`
+> 直接內嵌進 `gonasd` 執行檔 —— 使用者拿到的仍然是「一個檔案、複製過去就能跑」,
+> 瀏覽器打開就有完整介面,不需要 Node.js、不需要建置步驟、不需要網路。
+> 這跟 Phase 0 開始就堅持的「零第三方依賴」是同一個方向,只是連前端也一併
+> 貫徹了。
+
+- `internal/state`:唯一的設定持久化層,一份原子寫入的 `state.json`(pool
+  設定、共享、匯出、使用者中繼資料、已安裝的 App),沒有資料庫(理由跟
+  Docker SDK/robfig-cron 一樣:module proxy 被擋,而且對這個資料量與存取
+  型態,flat file 已經足夠——這跟 Unraid 本身的做法一致)
+- `internal/api` 新增:
+  - `PUT /api/v1/storage/pool`、`POST /api/v1/storage/array/{start,stop}`
+  - `GET /api/v1/appstore/catalog`(內建 3 個示範範本:單服務的 Portainer/
+    code-server、多服務的 WordPress+MySQL)、`GET/POST /api/v1/appstore/apps`、
+    `DELETE /api/v1/appstore/apps/{id}`
+  - `GET/POST /api/v1/share/shares`、`DELETE .../{name}`、
+    `GET/POST /api/v1/share/exports`、`GET/POST /api/v1/share/users`、
+    `DELETE .../{username}` —— 套用系統設定(smbd/exportfs 重載)失敗時只回
+    警告,不會讓「存設定」這件事跟著失敗
+- 內嵌前端(`internal/api/webui/static`):儀表板、儲存(硬碟列表 + 設定
+  pool + 啟停陣列)、應用程式(已安裝列表 + 商店目錄 + 安裝表單)、共享
+  (SMB/NFS)、使用者,五個頁面,純 hash routing,無框架
+- 修正一個真的會讓前端讀錯資料的 bug:`appstore.InstallResult` 原本沒有
+  json tag,序列化出來是 `ContainerIDs`/`NetworkID`(PascalCase),前端寫的
+  是 `containerIds`/`networkId` —— 是在做端對端驗證、真的用瀏覽器會呼叫的
+  同一組 API 跑一次安裝流程時發現的,已修正並在單元測試/live 驗證都過。
+- 已對這台機器完整跑過一輪端對端(透過 gonasd 自己的 HTTP API,不是繞過
+  API 直接呼叫 Go 套件):啟動 daemon → 首頁與 `/app.js` 正確以
+  `text/html`/`text/javascript` 回應 → 設定並驗證一份合法 pool 設定 →
+  透過 `/api/v1/appstore/apps` 對真正的 dockerd 安裝一個本機建置的測試映像
+  (見前面 Phase 2 的說明,不需要外部網路)→ 確認容器真的在跑 → 解除安裝 →
+  新增一個 SMB 共享(這台機器沒裝 Samba,確認回應是「設定已存、套用失敗」
+  的優雅降級,不是整個請求失敗)→ 透過 API 建立一個真正的系統使用者、
+  用 `getent passwd` 確認存在 → **重啟 daemon**,確認 pool 設定、共享、
+  使用者清單都從 `state.json` 正確載入回來,已解除安裝的 App 確實不在列表裡。
+
+已知但刻意不修的小地方:`internal/docker` 的 Container/Image/Network 型別
+為了直接對應 Docker Engine API 自己的 JSON 格式,用的是 PascalCase 標籤
+(`"Id"`、`"Names"`……),這跟 GoNAS 其他端點的 camelCase 風格不一致;
+目前的前端沒有直接渲染這幾支端點的原始資料所以不影響功能,但之後如果
+要在 Web UI 上直接列 Docker 原始容器清單,值得加一層轉換成一致的 DTO。
+
 尚未實作(依路線圖排序,接下來的 Phase):
 
-1. Web 管理介面 — Vue 3 SPA
-2. 監控與告警
-3. 網路與安全 — WireGuard、HTTPS、2FA
-4. 備份與快照
-5. 安裝與封裝 — `install.sh`
-6. 實機測試與強化
+1. 監控與告警
+2. 網路與安全 — WireGuard、HTTPS、2FA
+3. 備份與快照
+4. 安裝與封裝 — `install.sh`
+5. 實機測試與強化
 
 ## 開發
 
@@ -100,6 +148,9 @@ go test ./...       # 跑全部單元測試(不需要真硬碟/root)
 curl -s localhost:8291/api/v1/health | jq
 curl -s localhost:8291/api/v1/version | jq
 ```
+
+啟動後,瀏覽器打開 `http://<主機位址>:8291/` 就是 Web 管理介面(內嵌在執行檔裡,
+不需要另外部署前端)。
 
 ## 部署(之後 Phase 8 會做成 install.sh,目前先手動)
 
