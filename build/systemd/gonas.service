@@ -1,0 +1,28 @@
+[Unit]
+Description=GoNAS core daemon
+Documentation=https://github.com/bng147/gonas
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gonasd
+Restart=on-failure
+RestartSec=3s
+
+# GoNAS 需要能操作硬碟裝置、掛載檔案系統、控制 Docker、寫 Samba 設定,
+# 因此以 root 執行(這與 Unraid / OMV / TrueNAS 的作法一致)。
+# Phase 6(網路與安全)會補上更細緻的能力限制(如 CAP_SYS_ADMIN 白名單)
+# 而不是完全放棄 sandboxing。
+User=root
+Environment=GONAS_LISTEN_ADDR=:8291
+Environment=GONAS_DATA_DIR=/var/lib/gonas
+
+# 基本強化:仍允許裝置/掛載操作,但阻擋一些不必要的攻擊面。
+NoNewPrivileges=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
