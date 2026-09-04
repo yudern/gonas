@@ -117,6 +117,26 @@
   用 `getent passwd` 確認存在 → **重啟 daemon**,確認 pool 設定、共享、
   使用者清單都從 `state.json` 正確載入回來,已解除安裝的 App 確實不在列表裡。
 
+- 又修正一個真的會讓前端整頁掛掉的 bug,一樣是端對端驗證抓到的:用
+  Playwright 對著真的在跑的 `gonasd` 截圖檢查每一頁,結果「應用程式」
+  頁面只顯示一條錯誤訊息 `Cannot read properties of null (reading 'length')`,
+  什麼都沒渲染出來。追下去發現是 `internal/state.State` 全新安裝時
+  (或是舊版 state.json 剛好缺欄位/欄位是 `null`)的零值切片欄位
+  (`Shares`/`Exports`/`Users`/`InstalledApps`)是 Go 的 nil slice,
+  `encoding/json` 會把它序列化成 JSON `null` 而不是 `[]`;前端
+  `app.js` 對這些端點的呼叫用 `.catch(() => [])` 接錯誤,但 HTTP 200
+  加上回應主體 `null` 根本不會進到 `.catch()`,`installed.length` 就直接
+  對著 `null` 炸掉。已在 `internal/state/store.go` 新增 `State.normalize()`,
+  在 `Open()`(不管是全新安裝還是讀到舊檔案)、`Update()` 寫檔前、以及
+  `Snapshot()` 這三個會把資料交出去的地方一律確保這四個欄位不是 nil,
+  並新增兩個迴歸測試直接斷言序列化出來的原始 JSON 位元組裡不會出現
+  `"shares":null` 這類字串(而不是只檢查 Go 型別層面的 `len()==0`,因為
+  bug 本身就是「Go 看起來沒事,但序列化出來是 null」)。修完後重新對著
+  這台機器真正在跑的 `gonasd` 走一次:建一個真的系統使用者、確認
+  `/api/v1/share/users` 回應是 `[]` 不是 `null`、用 Playwright 截圖確認
+  應用程式/共享/使用者三個頁面都正常渲染、刪除該使用者並用 `getent passwd`
+  確認真的清乾淨。
+
 已知但刻意不修的小地方:`internal/docker` 的 Container/Image/Network 型別
 為了直接對應 Docker Engine API 自己的 JSON 格式,用的是 PascalCase 標籤
 (`"Id"`、`"Names"`……),這跟 GoNAS 其他端點的 camelCase 風格不一致;

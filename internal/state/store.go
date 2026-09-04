@@ -55,6 +55,27 @@ type Store struct {
 	data State
 }
 
+// normalize 確保所有切片欄位都不是 nil。Go 的 encoding/json 會把 nil
+// 切片序列化成 `null`,但這幾個欄位在 Web UI 那邊一律當成陣列處理
+// (例如直接讀 .length)——一個全新安裝、state.json 還不存在的零值
+// State{},或是舊版 state.json 裡剛好缺欄位/欄位是 null,都不該讓前端
+// 收到 null 就整頁掛掉。呼叫端只讀,所以這裡淺淺地把 nil 換成空切片就夠,
+// 不需要真的深拷貝。
+func (st *State) normalize() {
+	if st.Shares == nil {
+		st.Shares = []share.Share{}
+	}
+	if st.Exports == nil {
+		st.Exports = []share.Export{}
+	}
+	if st.Users == nil {
+		st.Users = []UserRecord{}
+	}
+	if st.InstalledApps == nil {
+		st.InstalledApps = []InstalledApp{}
+	}
+}
+
 // Open 從 path 載入既有的狀態檔;檔案不存在時視為全新安裝，回傳一個空的
 // Store 而不是錯誤 —— 這是第一次執行 GoNAS 的正常情況,不是異常。
 func Open(path string) (*Store, error) {
@@ -62,6 +83,7 @@ func Open(path string) (*Store, error) {
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
+		s.data.normalize()
 		return s, nil
 	}
 	if err != nil {
@@ -71,16 +93,21 @@ func Open(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &s.data); err != nil {
 		return nil, fmt.Errorf("parsing state file %s: %w", path, err)
 	}
+	s.data.normalize()
 	return s, nil
 }
 
 // Snapshot 回傳目前狀態的一份副本，呼叫端可以安心讀取，不會跟其他
 // goroutine 的寫入互相影響(淺拷貝對這裡的用途已經足夠：呼叫端只讀,
-// 不會去改 Snapshot 裡的切片內容)。
+// 不會去改 Snapshot 裡的切片內容)。這裡也順手 normalize 一次,對已經
+// 從 Open 正確初始化過的 Store 是沒有作用的 no-op,但對之後如果有新程式碼
+// 路徑直接建構 Store{} 而略過 Open 的情況,是最後一道防線。
 func (s *Store) Snapshot() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data
+	snap := s.data
+	snap.normalize()
+	return snap
 }
 
 // Update 在鎖保護下呼叫 fn 修改狀態，成功後原子寫回磁碟;fn 回傳錯誤時
@@ -95,6 +122,11 @@ func (s *Store) Update(fn func(*State) error) error {
 	if err := fn(&next); err != nil {
 		return err
 	}
+	// fn 可能把某個切片欄位設回 nil（例如清空一個清單時手滑寫成
+	// `st.Shares = nil` 而不是 `st.Shares = []share.Share{}`）,寫檔跟
+	// 之後的 Snapshot 前都再 normalize 一次，確保這個欄位永遠不會以
+	// null 的型態出現在 state.json 或是 API 回應裡。
+	next.normalize()
 
 	if err := s.writeLocked(next); err != nil {
 		return err
