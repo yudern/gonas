@@ -24,6 +24,10 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	return f.output[name], nil
 }
 
+func (f *fakeRunner) RunWithStdin(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return f.Run(ctx, name, args...)
+}
+
 const sampleLsblkJSON = `{
   "blockdevices": [
     {"name":"sda","path":"/dev/sda","type":"disk","size":"4000787030016","model":"WDC WD40EFAX","serial":"WD-ABC123","fstype":null,"mountpoint":null,"rota":true,
