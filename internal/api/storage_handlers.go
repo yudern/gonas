@@ -58,6 +58,11 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 	// ——「編輯設定」不該悄悄延續舊的執行狀態。
 	s.array = storage.NewArray(pool)
 
+	// 監控要看的磁碟使用率也跟著換成新陣列的掛載點,不然使用者改了 pool
+	// 之後,監控頁顯示的還是舊路徑(或是還沒設定 pool 前的 "/")的用量,
+	// 跟畫面上其他地方顯示的陣列資訊對不起來。
+	s.monitorCollector.SetDiskPath(pool.MountPoint)
+
 	writeJSON(w, http.StatusOK, s.array.Status())
 }
 

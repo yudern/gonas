@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,9 +11,24 @@ import (
 	"time"
 
 	"github.com/bng147/gonas/internal/docker"
+	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
 	"github.com/bng147/gonas/internal/version"
+)
+
+// monitorPollInterval 是系統資源取樣的週期。10 秒對一台 NAS 的監控用途
+// 已經夠即時(不是給高頻交易系統用的),又不會因為太頻繁而讓 History 的
+// 時間跨度太短、或是不必要地增加 SMART 檢查(見 monitor_handlers.go 的
+// anyDiskSmartFailed)對硬碟的存取次數。
+//
+// monitorHistoryCapacity 搭配上面的間隔,保留最近 30 分鐘的走勢
+// (180 * 10s = 1800s)給 Web UI 畫圖表 —— 這個時間長度足夠讓使用者看出
+// 「剛剛发生了什麼」，daemon 重啟後從頭累積是可接受的(見 monitor.History
+// 的套件註解)。
+const (
+	monitorPollInterval    = 10 * time.Second
+	monitorHistoryCapacity = 180
 )
 
 // Server 持有建立路由所需的共用依賴。
@@ -27,6 +43,11 @@ type Server struct {
 	// 會在這裡建立對應的 *storage.Array(但不會自動 Start —— 掛載陣列
 	// 是使用者的明確動作,不該在 daemon 重啟時靜默發生)。
 	array *storage.Array
+
+	monitorCollector *monitor.Collector
+	monitorHistory   *monitor.History
+	alertEngine      *monitor.AlertEngine
+	monitorPoller    *monitor.Poller
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -45,9 +66,22 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		store:     store,
 	}
 
+	// 監控用的磁碟路徑預設是 "/"(還沒設定 pool 前至少能看到系統碟的
+	// 使用率);使用者設定/變更 pool 之後,handleStoragePoolSet 會呼叫
+	// s.monitorCollector.SetDiskPath 換成陣列的掛載點。
+	diskPath := "/"
 	if pool := store.Snapshot().Pool; pool != nil {
 		s.array = storage.NewArray(*pool)
+		diskPath = pool.MountPoint
 	}
+
+	s.monitorCollector = monitor.NewCollector(diskPath)
+	s.monitorHistory = monitor.NewHistory(monitorHistoryCapacity)
+	s.alertEngine = monitor.NewAlertEngine(logger)
+	s.rebuildNotifier() // 從 state 讀回既有的 webhook 設定,一併掛上保底的 LogNotifier
+
+	s.monitorPoller = monitor.NewPoller(logger, s.monitorCollector, s.monitorHistory, monitorPollInterval, s.onMonitorSample)
+	s.monitorPoller.Start(context.Background())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
@@ -78,9 +112,28 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/share/users", s.handleUsersCreate)
 	mux.HandleFunc("DELETE /api/v1/share/users/{username}", s.handleUsersDelete)
 
+	mux.HandleFunc("GET /api/v1/monitor/system", s.handleMonitorSystem)
+	mux.HandleFunc("GET /api/v1/monitor/history", s.handleMonitorHistory)
+	mux.HandleFunc("GET /api/v1/monitor/alerts", s.handleMonitorAlertsList)
+	mux.HandleFunc("POST /api/v1/monitor/alerts", s.handleMonitorAlertsCreate)
+	mux.HandleFunc("DELETE /api/v1/monitor/alerts/{id}", s.handleMonitorAlertsDelete)
+	mux.HandleFunc("GET /api/v1/monitor/notifiers", s.handleMonitorNotifiersList)
+	mux.HandleFunc("POST /api/v1/monitor/notifiers", s.handleMonitorNotifiersCreate)
+	mux.HandleFunc("DELETE /api/v1/monitor/notifiers/{id}", s.handleMonitorNotifiersDelete)
+
 	mux.Handle("/", webUIHandler())
 
 	return s, withLogging(logger, mux), nil
+}
+
+// Close 釋放 Server 持有的背景資源，目前就是停掉監控輪詢的 goroutine。
+// 拆成獨立方法而不是讓呼叫端自己去戳 monitorPoller,是為了讓
+// cmd/gonasd/main.go 的優雅關閉流程不需要知道 Server 內部是用 Poller
+// 實作監控 —— 之後這裡要多停別的背景工作,呼叫端完全不用改。
+func (s *Server) Close() {
+	if s.monitorPoller != nil {
+		s.monitorPoller.Stop()
+	}
 }
 
 type healthResponse struct {

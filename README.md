@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 4 完成 — Web 管理介面
+## 目前狀態:Phase 5 完成 — 監控與告警
 
 **Phase 0(專案骨架)**
 
@@ -143,13 +143,76 @@
 目前的前端沒有直接渲染這幾支端點的原始資料所以不影響功能,但之後如果
 要在 Web UI 上直接列 Docker 原始容器清單,值得加一層轉換成一致的 DTO。
 
+**Phase 5(監控與告警,`internal/monitor` + `internal/api`/`internal/state` 擴充 + 內嵌前端)**
+
+- `internal/monitor`:跟其他套件一樣零第三方依賴 —— 不用 gopsutil,
+  直接解析 `/proc/stat`(CPU)、`/proc/meminfo`(記憶體)、`/proc/uptime`,
+  用 `syscall.Statfs` 算磁碟使用率,這些正是 top/free/df 實際的資料來源
+  - `Collector`:單次取樣,CPU 使用率靠保存上一次讀數算差值(第一次呼叫
+    沒有基準點,回傳 0,由週期性輪詢自然補上)
+  - `History`:固定容量的取樣紀錄(預設 180 筆、間隔 10 秒,約 30 分鐘),
+    刻意不落地到磁碟 —— 這是「最近走勢」,跟 state.json 那種設定遺失會
+    讓人困擾的資料不是同一回事,daemon 重啟後重新累積是可接受的
+  - `Poller`:背景 goroutine 週期性取樣、寫入 History,並把結果交給
+    告警規則引擎評估,啟動時立刻取樣一次(不用空等一個 interval)
+  - `AlertRule`/`Facts`/`evaluateRule`:規則可以是連續數值指標
+    (CPU/記憶體/磁碟使用率 + 比較方式 + 門檻值)或布林狀態指標
+    (陣列變成 failed、任一顆碟 SMART 沒過),同一個型別涵蓋兩種,
+    因為對使用者來說「選一個指標、決定觸發條件」是同一個心智模型
+  - `AlertEngine`:只在規則的觸發狀態真的「轉換」時才通知一次(防抖),
+    持續超標不會每次輪詢都重複發通知,解除時也會通知一次
+  - `Notifier`:可插拔介面,內建 `LogNotifier`(永遠可用的保底管道,
+    寫進 daemon 的 log)跟 `WebhookNotifier`(標準函式庫 `net/http` POST
+    JSON,不透過任何第三方 HTTP 用戶端),`MultiNotifier` 讓兩者(或多個
+    webhook)同時掛著,其中一個失敗不影響其他的送達
+  - 43 個單元測試,涵蓋 `/proc` 格式解析(用這台機器真實的 `/proc/stat`
+    等內容當 fixture)、CPU 使用率計算(含計數器倒退的邊界情況)、History
+    容量裁切、Poller 的啟動/停止/取樣失敗處理、規則驗證與評估、
+    AlertEngine 的防抖/解除通知/規則刪除清理,以及對著真的 httptest
+    server 驗證 WebhookNotifier 送出的請求方法/Header/Body 都正確
+- `internal/state`:新增 `AlertRules`/`Notifiers` 兩個持久化欄位,一併
+  納入 Phase 4 那個 nil slice → JSON null 的 `normalize()` 防護裡
+  (新增規則/通知管道時如果忘記這麼做,就會重演應用程式頁面那個 bug,
+  所以這次直接把迴歸測試也一起擴充覆蓋這兩個新欄位)
+- `internal/api` 新增:
+  - `GET /api/v1/monitor/system`(最新一筆快照,History 還沒有資料時
+    直接同步取樣一次,不會回「還沒有資料」的錯誤)、
+    `GET /api/v1/monitor/history`(最近的走勢)
+  - `GET/POST /api/v1/monitor/alerts`、`DELETE .../{id}`(規則清單會
+    附上 AlertEngine 記錄的「目前是否觸發中」)
+  - `GET/POST /api/v1/monitor/notifiers`、`DELETE .../{id}`(新增/刪除
+    後重建 AlertEngine 實際在用的 `MultiNotifier`)
+  - `Server.Close()`:daemon 優雅關閉時停掉監控輪詢的背景 goroutine,
+    `cmd/gonasd/main.go` 改成保留 `api.New` 回傳的 `*Server` 並 `defer`
+    呼叫,而不是像 Phase 0-4 那樣直接丟棄
+  - 使用者設定/變更 pool 時,監控要看的磁碟路徑會跟著換成新陣列的
+    掛載點(`Collector.SetDiskPath`),不會繼續顯示舊路徑或預設的 `/`
+  - 告警評估的 SMART 檢查(`anyDiskSmartFailed`)對每顆碟的 `smartctl`
+    呼叫都有 5 秒逾時,單顆碟檢查失敗(裝置不支援、smartctl 沒裝)只記
+    debug log 略過,不會被誤判成「SMART 故障」而亂觸發告警
+- 內嵌前端新增「監控」頁:即時 CPU/記憶體/磁碟/執行時間統計卡、用
+  Canvas 手寫的三色走勢折線圖(顏色直接讀取 CSS 變數,深色/淺色主題
+  切換不用另外處理)、告警規則清單(附觸發中/監控中/已停用燈號)與
+  新增表單(依指標是連續數值還是布林狀態動態顯示/隱藏比較方式欄位)、
+  通知管道清單與新增表單
+- 已對這台機器完整跑過一輪端到端驗證(透過 `gonasd` 自己的 HTTP API):
+  啟動 daemon → 確認 `/monitor/system`/`/monitor/history` 回傳這台機器
+  真實的 CPU/記憶體/磁碟數字、且 History 隨著時間累積 → 架一個真的在
+  跑的本機 HTTP 監聽器當 webhook 端點,新增一個保證會觸發的告警規則
+  (`memPercent > 0`)跟一個指到這個監聽器的 webhook 通知管道 → 確認
+  規則觸發後 `firing` 變成 `true`、webhook 真的收到一次 JSON 通知 →
+  等過至少一次輪詢間隔,確認持續觸發不會重複發送(防抖生效)→ 刪除
+  規則與通知管道確認清單清空 → 新增另一組規則/通知管道後**重啟
+  daemon**,確認兩者都從 `state.json` 正確載入回來 → 用 Playwright
+  截圖確認監控頁完整渲染(統計卡、走勢圖、規則列表含真實的「監控中」
+  燈號、通知管道列表)、瀏覽器主控台沒有任何 JS 錯誤。
+
 尚未實作(依路線圖排序,接下來的 Phase):
 
-1. 監控與告警
-2. 網路與安全 — WireGuard、HTTPS、2FA
-3. 備份與快照
-4. 安裝與封裝 — `install.sh`
-5. 實機測試與強化
+1. 網路與安全 — WireGuard、HTTPS、2FA
+2. 備份與快照
+3. 安裝與封裝 — `install.sh`
+4. 實機測試與強化
 
 ## 開發
 

@@ -10,4 +10,6 @@ var (
 	errShareAlreadyExists = errors.New("a share with that name already exists")
 	errUserNotFound       = errors.New("no user with that username")
 	errPasswordRequired   = errors.New("password is required")
+	errAlertRuleNotFound  = errors.New("no alert rule with that id")
+	errNotifierNotFound   = errors.New("no notifier with that id")
 )

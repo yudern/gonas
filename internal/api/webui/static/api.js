@@ -55,4 +55,15 @@ export const api = {
   users: () => request("GET", "/api/v1/share/users"),
   createUser: (user) => request("POST", "/api/v1/share/users", user),
   deleteUser: (username) => request("DELETE", `/api/v1/share/users/${encodeURIComponent(username)}`),
+
+  monitorSystem: () => request("GET", "/api/v1/monitor/system"),
+  monitorHistory: () => request("GET", "/api/v1/monitor/history"),
+
+  alertRules: () => request("GET", "/api/v1/monitor/alerts"),
+  createAlertRule: (rule) => request("POST", "/api/v1/monitor/alerts", rule),
+  deleteAlertRule: (id) => request("DELETE", `/api/v1/monitor/alerts/${encodeURIComponent(id)}`),
+
+  notifiers: () => request("GET", "/api/v1/monitor/notifiers"),
+  createNotifier: (notifier) => request("POST", "/api/v1/monitor/notifiers", notifier),
+  deleteNotifier: (id) => request("DELETE", `/api/v1/monitor/notifiers/${encodeURIComponent(id)}`),
 };

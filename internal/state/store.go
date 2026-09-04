@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/bng147/gonas/internal/appstore"
+	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/storage"
 )
@@ -24,11 +25,13 @@ import (
 // (空陣列/nil pool),這樣全新安裝、還沒有 state.json 檔案時可以直接用
 // 零值 State{} 開始運作,不需要特殊的「第一次執行」邏輯。
 type State struct {
-	Pool          *storage.PoolConfig `json:"pool,omitempty"`
-	Shares        []share.Share       `json:"shares"`
-	Exports       []share.Export      `json:"exports"`
-	Users         []UserRecord        `json:"users"`
-	InstalledApps []InstalledApp      `json:"installedApps"`
+	Pool          *storage.PoolConfig     `json:"pool,omitempty"`
+	Shares        []share.Share           `json:"shares"`
+	Exports       []share.Export          `json:"exports"`
+	Users         []UserRecord            `json:"users"`
+	InstalledApps []InstalledApp          `json:"installedApps"`
+	AlertRules    []monitor.AlertRule     `json:"alertRules"`
+	Notifiers     []monitor.WebhookConfig `json:"notifiers"`
 }
 
 // UserRecord 是 Web UI 顯示用的使用者中繼資料。真正的帳號存在系統的
@@ -73,6 +76,12 @@ func (st *State) normalize() {
 	}
 	if st.InstalledApps == nil {
 		st.InstalledApps = []InstalledApp{}
+	}
+	if st.AlertRules == nil {
+		st.AlertRules = []monitor.AlertRule{}
+	}
+	if st.Notifiers == nil {
+		st.Notifiers = []monitor.WebhookConfig{}
 	}
 }
 

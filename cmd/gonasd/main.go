@@ -37,11 +37,12 @@ func main() {
 		logger.Warn("failed to ensure data dir, continuing without it", "dataDir", cfg.DataDir, "err", err)
 	}
 
-	_, handler, err := api.New(logger, cfg.DataDir)
+	apiServer, handler, err := api.New(logger, cfg.DataDir)
 	if err != nil {
 		logger.Error("failed to initialize API server", "err", err)
 		os.Exit(1)
 	}
+	defer apiServer.Close() // 停掉監控輪詢的背景 goroutine，見 internal/api.Server.Close 的說明
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,

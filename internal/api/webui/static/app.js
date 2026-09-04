@@ -9,7 +9,13 @@ const routes = {
   apps: renderApps,
   shares: renderShares,
   users: renderUsers,
+  monitor: renderMonitor,
 };
+
+// 跟後端 internal/api.monitorPollInterval 一致，純粹用來在頁面文字上
+// 告訴使用者「多久取樣一次」，不影響任何實際輪詢行為 —— 真正的輪詢是
+// 後端的 Poller 在背景做的,前端只是每次切頁/重新整理時讀最新資料。
+const MONITOR_POLL_SECONDS = 10;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -63,7 +69,7 @@ async function renderDashboard(el) {
     ${!dockerStatus.available ? msg("warn", "Docker 無法連線:" + (dockerStatus.error || "未知原因") + "。安裝應用程式前需要先確認 Docker 已安裝並啟動。") : ""}
     <div class="card">
       <h2>快速連結</h2>
-      <p style="color:var(--text-dim);font-size:13px;margin:0">前往「<a href="#/storage">儲存</a>」設定並啟動陣列、「<a href="#/apps">應用程式</a>」安裝服務、「<a href="#/shares">共享</a>」設定 SMB/NFS,或「<a href="#/users">使用者</a>」管理帳號。</p>
+      <p style="color:var(--text-dim);font-size:13px;margin:0">前往「<a href="#/storage">儲存</a>」設定並啟動陣列、「<a href="#/apps">應用程式</a>」安裝服務、「<a href="#/shares">共享</a>」設定 SMB/NFS、「<a href="#/users">使用者</a>」管理帳號,或「<a href="#/monitor">監控</a>」查看資源使用率與設定告警。</p>
     </div>
   `;
 }
@@ -459,5 +465,270 @@ async function renderUsers(el) {
       box.innerHTML = res.sambaWarning ? msg("warn", "使用者已建立,但 " + res.sambaWarning) : msg("ok", "使用者已建立。");
       await renderUsers(el);
     } catch (err) { box.innerHTML = msg("error", err.message); }
+  });
+}
+
+// ---------- 監控 ----------
+
+const METRIC_LABELS = {
+  cpuPercent: "CPU 使用率",
+  memPercent: "記憶體使用率",
+  diskPercent: "磁碟使用率",
+  arrayFailed: "陣列狀態變成 failed",
+  smartFailed: "任一顆碟 SMART 檢查沒過",
+};
+const COMPARATOR_LABELS = { ">": ">", ">=": "≥", "<": "<", "<=": "≤" };
+
+function isBooleanMetric(metric) {
+  return metric === "arrayFailed" || metric === "smartFailed";
+}
+
+async function renderMonitor(el) {
+  const [system, history, rules, notifiers] = await Promise.all([
+    api.monitorSystem().catch(() => null),
+    api.monitorHistory().catch(() => []),
+    api.alertRules().catch(() => []),
+    api.notifiers().catch(() => []),
+  ]);
+
+  el.innerHTML = `
+    <h1>監控</h1>
+    <p class="page-subtitle">每 ${MONITOR_POLL_SECONDS} 秒在背景取樣一次系統資源;告警規則觸發或解除時,會寫進 daemon 的 log,也會送到下面設定的通知管道。</p>
+
+    <div class="grid">
+      ${statTile("CPU 使用率", formatPercent(system && system.cpuPercent), percentClass(system && system.cpuPercent))}
+      ${statTile("記憶體使用率", formatPercent(system && system.memPercent), percentClass(system && system.memPercent))}
+      ${statTile("磁碟使用率", formatPercent(system && system.diskPercent), percentClass(system && system.diskPercent))}
+      ${statTile("執行時間", system ? formatUptime(system.uptimeSeconds) : "—", "")}
+    </div>
+
+    <div class="card chart-card">
+      <h2>最近趨勢</h2>
+      ${history.length < 2 ? `<p class="empty-state">取樣資料還不夠畫圖,daemon 剛啟動時需要等一小段時間累積。</p>` : `<canvas id="monitor-chart"></canvas>`}
+      <div class="chart-legend">
+        <span><span class="swatch" style="background:var(--accent)"></span>CPU</span>
+        <span><span class="swatch" style="background:var(--warn)"></span>記憶體</span>
+        <span><span class="swatch" style="background:var(--ok)"></span>磁碟${system ? `(${esc(system.diskPath)})` : ""}</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>告警規則(${rules.length})</h2>
+      ${rules.length ? rules.map((r) => renderRuleRow(r)).join("") : `<p class="empty-state">還沒有設定告警規則。</p>`}
+      <div id="rule-msg"></div>
+      <form class="stacked" id="rule-form" style="margin-top:16px">
+        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="CPU 過載" required></div>
+        <div class="field">
+          <label>指標</label>
+          <select name="metric" id="rule-metric">
+            <option value="cpuPercent">CPU 使用率(%)</option>
+            <option value="memPercent">記憶體使用率(%)</option>
+            <option value="diskPercent">磁碟使用率(%)</option>
+            <option value="arrayFailed">陣列狀態變成 failed</option>
+            <option value="smartFailed">任一顆碟 SMART 檢查沒過</option>
+          </select>
+        </div>
+        <div class="field" id="rule-comparator-field">
+          <label>比較方式</label>
+          <select name="comparator">
+            <option value=">">大於</option>
+            <option value=">=">大於等於</option>
+            <option value="<">小於</option>
+            <option value="<=">小於等於</option>
+          </select>
+        </div>
+        <div class="field" id="rule-threshold-field"><label>門檻值</label><input type="number" name="threshold" value="90" step="0.1"></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用</label></div>
+        <div class="btn-row"><button type="submit">新增規則</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>通知管道(${notifiers.length})</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">告警一律會寫進 daemon 的 log;下面可以額外加 webhook 端點,規則觸發或解除時會 POST 一份 JSON 過去。</p>
+      ${notifiers.length ? notifiers.map((n) => renderNotifierRow(n)).join("") : `<p class="empty-state">還沒有設定額外的通知管道。</p>`}
+      <div id="notifier-msg"></div>
+      <form class="stacked" id="notifier-form" style="margin-top:16px">
+        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="Slack" required></div>
+        <div class="field"><label>Webhook URL</label><input type="text" name="url" placeholder="https://example.com/hook" required></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用</label></div>
+        <div class="btn-row"><button type="submit">新增通知管道</button></div>
+      </form>
+    </div>
+  `;
+
+  const canvas = el.querySelector("#monitor-chart");
+  if (canvas) {
+    drawSparklineChart(canvas, {
+      cpu: history.map((h) => h.cpuPercent),
+      mem: history.map((h) => h.memPercent),
+      disk: history.map((h) => h.diskPercent),
+    });
+  }
+
+  const metricSelect = el.querySelector("#rule-metric");
+  const toggleBooleanFields = () => {
+    const hide = isBooleanMetric(metricSelect.value);
+    el.querySelector("#rule-comparator-field").style.display = hide ? "none" : "";
+    el.querySelector("#rule-threshold-field").style.display = hide ? "none" : "";
+  };
+  metricSelect.addEventListener("change", toggleBooleanFields);
+  toggleBooleanFields();
+
+  el.querySelectorAll("[data-del-rule]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api.deleteAlertRule(btn.dataset.delRule);
+        await renderMonitor(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+      }
+    });
+  });
+
+  el.querySelector("#rule-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const metric = f.get("metric");
+    const rule = { name: f.get("name").trim(), metric, enabled: f.get("enabled") === "on" };
+    if (!isBooleanMetric(metric)) {
+      rule.comparator = f.get("comparator");
+      rule.threshold = Number(f.get("threshold"));
+    }
+    const box = el.querySelector("#rule-msg");
+    try {
+      await api.createAlertRule(rule);
+      box.innerHTML = msg("ok", "告警規則已新增。");
+      await renderMonitor(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+
+  el.querySelectorAll("[data-del-notifier]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api.deleteNotifier(btn.dataset.delNotifier);
+        await renderMonitor(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+      }
+    });
+  });
+
+  el.querySelector("#notifier-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const notifier = { name: f.get("name").trim(), url: f.get("url").trim(), enabled: f.get("enabled") === "on" };
+    const box = el.querySelector("#notifier-msg");
+    try {
+      await api.createNotifier(notifier);
+      box.innerHTML = msg("ok", "通知管道已新增。");
+      await renderMonitor(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function formatPercent(v) {
+  return v === undefined || v === null ? "—" : `${v.toFixed(1)}%`;
+}
+
+function percentClass(v) {
+  if (v === undefined || v === null) return "";
+  if (v >= 90) return "danger";
+  if (v >= 75) return "warn";
+  return "ok";
+}
+
+function renderRuleRow(r) {
+  const boolean = isBooleanMetric(r.metric);
+  const metricLabel = METRIC_LABELS[r.metric] || r.metric;
+  const cond = boolean ? metricLabel : `${metricLabel} ${COMPARATOR_LABELS[r.comparator] || r.comparator} ${r.threshold}`;
+  const statusCls = !r.enabled ? "neutral" : r.firing ? "danger" : "ok";
+  const statusText = !r.enabled ? "已停用" : r.firing ? "觸發中" : "監控中";
+  return `
+    <div class="rule-row">
+      <div class="rule-main">
+        <span class="pill ${statusCls}">${statusText}</span>
+        <div>
+          <div class="rule-name">${esc(r.name)}</div>
+          <div class="rule-cond">${esc(cond)}</div>
+        </div>
+      </div>
+      <button class="secondary" data-del-rule="${esc(r.id)}">刪除</button>
+    </div>`;
+}
+
+function renderNotifierRow(n) {
+  return `
+    <div class="rule-row">
+      <div class="rule-main">
+        <span class="pill ${n.enabled ? "ok" : "neutral"}">${n.enabled ? "啟用" : "停用"}</span>
+        <div>
+          <div class="rule-name">${esc(n.name)}</div>
+          <div class="rule-cond">${esc(n.url)}</div>
+        </div>
+      </div>
+      <button class="secondary" data-del-notifier="${esc(n.id)}">刪除</button>
+    </div>`;
+}
+
+// drawSparklineChart 用 Canvas 2D 畫三條(CPU/記憶體/磁碟)百分比折線圖,
+// 刻意不用任何圖表函式庫 —— 這個開發環境拉不到 npm 套件(見 README「已知
+// 取捨」),而且對「畫三條 0-100% 的折線」這種需求,手寫幾十行 Canvas
+// 程式碼遠比引入一整個圖表函式庫合理。顏色直接讀取目前套用的 CSS 變數,
+// 深色/淺色主題切換時不需要另外處理。
+function drawSparklineChart(canvas, series) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || canvas.clientWidth || 600;
+  const h = rect.height || 180;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const styles = getComputedStyle(document.documentElement);
+  const gridColor = styles.getPropertyValue("--border").trim();
+  const lines = [
+    { data: series.cpu, color: styles.getPropertyValue("--accent").trim() },
+    { data: series.mem, color: styles.getPropertyValue("--warn").trim() },
+    { data: series.disk, color: styles.getPropertyValue("--ok").trim() },
+  ];
+
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75].forEach((f) => {
+    const y = h - f * h;
+    ctx.beginPath();
+    ctx.moveTo(0, y + 0.5);
+    ctx.lineTo(w, y + 0.5);
+    ctx.stroke();
+  });
+
+  const n = Math.max(series.cpu.length, 2);
+  lines.forEach(({ data, color }) => {
+    if (!data.length) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.75;
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (n - 1)) * w;
+      const y = h - (Math.min(100, Math.max(0, v || 0)) / 100) * h;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    const lastIdx = data.length - 1;
+    const lastX = (lastIdx / (n - 1)) * w;
+    const lastY = h - (Math.min(100, Math.max(0, data[lastIdx] || 0)) / 100) * h;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 2.75, 0, Math.PI * 2);
+    ctx.fill();
   });
 }
