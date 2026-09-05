@@ -266,7 +266,7 @@ async function renderStorage(el) {
       <h2>${esc(t("storage.disksDetected"))}</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>${esc(t("storage.colDevice"))}</th><th>${esc(t("storage.colModel"))}</th><th>${esc(t("storage.colCapacity"))}</th><th>${esc(t("storage.colType"))}</th><th>${esc(t("storage.colMountPoint"))}</th></tr></thead>
+          <thead><tr><th>${esc(t("storage.colDevice"))}</th><th>${esc(t("storage.colModel"))}</th><th>${esc(t("storage.colCapacity"))}</th><th>${esc(t("storage.colType"))}</th><th>${esc(t("storage.colMountPoint"))}</th><th>${esc(t("storage.colSmart"))}</th></tr></thead>
           <tbody>
             ${disks.length ? disks.map((d) => `
               <tr>
@@ -275,7 +275,8 @@ async function renderStorage(el) {
                 <td>${formatBytes(d.sizeBytes)}</td>
                 <td>${d.rotational ? "HDD" : "SSD/NVMe"}</td>
                 <td>${esc(d.mountpoint || "—")}</td>
-              </tr>`).join("") : `<tr><td colspan="5" class="empty-state">${esc(t("storage.noDisksDetected"))}</td></tr>`}
+                <td data-smart-cell="${esc(d.path)}"><span class="pill neutral">${esc(t("common.loading"))}</span></td>
+              </tr>`).join("") : `<tr><td colspan="6" class="empty-state">${esc(t("storage.noDisksDetected"))}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -298,6 +299,8 @@ async function renderStorage(el) {
 
   el.querySelector("#start-array").addEventListener("click", () => runAction(api.startArray, renderStorage, el));
   el.querySelector("#stop-array").addEventListener("click", () => runAction(api.stopArray, renderStorage, el));
+
+  if (disks.length) loadSmartData(el);
 
   el.querySelector("#pool-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -340,6 +343,40 @@ function formatBytes(n) {
   let v = n;
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// loadSmartData 在硬碟表格已經先用偵測到的基本資訊(型號/容量之類)畫出來
+// 之後,才另外非同步抓 SMART 健康狀態填進「SMART」那一欄——刻意分兩階段
+// 而不是等 SMART 查完才一次畫出整張表:對每顆硬碟跑一次 `smartctl -a`
+// 可能要一段時間(尤其是還沒喚醒的傳統硬碟,或根本沒裝 smartctl 導致
+// 逐一逾時),不該讓使用者盯著空白頁面等,基本資訊應該先看得到。單顆
+// 硬碟查詢失敗(見 internal/api/storage_handlers.go 的說明——沒裝
+// smartctl、裝置不支援 SMART 都算)顯示「無法讀取」而不是讓整欄空著,
+// 並把原始錯誤放進 title 屬性,滑鼠移過去可以看到細節。
+async function loadSmartData(el) {
+  let results;
+  try {
+    results = await api.disksSmart();
+  } catch (err) {
+    el.querySelectorAll("[data-smart-cell]").forEach((cell) => {
+      cell.innerHTML = `<span class="pill neutral" title="${esc(err.message)}">${esc(t("storage.smartUnavailable"))}</span>`;
+    });
+    return;
+  }
+  const cellsByPath = new Map();
+  el.querySelectorAll("[data-smart-cell]").forEach((cell) => cellsByPath.set(cell.dataset.smartCell, cell));
+  for (const r of results) {
+    const cell = cellsByPath.get(r.path);
+    if (!cell) continue;
+    if (r.error) {
+      cell.innerHTML = `<span class="pill neutral" title="${esc(r.error)}">${esc(t("storage.smartUnavailable"))}</span>`;
+    } else if (!r.passed) {
+      cell.innerHTML = `<span class="pill danger">${esc(t("storage.smartFailed"))}</span>`;
+    } else {
+      const temp = r.tempCelsius != null ? ` · ${r.tempCelsius}°C` : "";
+      cell.innerHTML = `<span class="pill ok">${esc(t("storage.smartHealthy"))}${esc(temp)}</span>`;
+    }
+  }
 }
 
 // ---------- 檔案 ----------

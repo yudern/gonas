@@ -172,6 +172,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/vpn/peers/{id}", s.requireAuth(s.handleVPNPeerDelete))
 
 	mux.HandleFunc("GET /api/v1/storage/disks", s.requireAuth(s.handleStorageDisks))
+	mux.HandleFunc("GET /api/v1/storage/disks/smart", s.requireAuth(s.handleStorageDisksSmart))
 	mux.HandleFunc("GET /api/v1/storage/array", s.requireAuth(s.handleStorageArrayStatus))
 	mux.HandleFunc("PUT /api/v1/storage/pool", s.requireAuth(s.handleStoragePoolSet))
 	mux.HandleFunc("POST /api/v1/storage/array/start", s.requireAuth(s.handleStorageArrayStart))

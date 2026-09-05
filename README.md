@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 11 完成 — 介面多語系(繁體中文/簡體中文/English)
+## 目前狀態:Phase 12 完成 — 硬碟 SMART 健康狀態/溫度顯示
 
 **Phase 0(專案骨架)**
 
@@ -849,6 +849,50 @@ NAS 能不能拿來實際用」的一項——容器一直重開機的時候,使
 「備份」「自訂安裝」等表單裡填寫的名稱、路徑、說明文字(例如自訂
 安裝一個 App 時自己填的 Description)不會被翻譯,也不應該被翻譯——
 那是使用者自己的資料,不是介面的一部分。
+
+**Phase 12(硬碟 SMART 健康狀態/溫度顯示)—— 按之前列出的優先級清單
+接續處理的下一項**
+
+`internal/storage/smart.go` 的 `CheckSmartHealth`(跑 `smartctl -a
+<device>`、解析整體健康狀態 PASSED/FAILED 跟 `Temperature_Celsius`)
+其實從更早的 phase 就已經寫好、也有單元測試,只是一直沒有接到 HTTP
+API 跟 Web UI 上——使用者在 Storage 頁面完全看不到任何 SMART 資訊。
+這次把既有的邏輯接上去。
+
+- **新 API**:`GET /api/v1/storage/disks/smart`。設計上刻意不是「一顆
+  碟查詢失敗就整支回 500」——`lsblk` 列出的硬碟清單裡,對每一顆碟各自
+  呼叫 `smartctl`(5 秒逾時,沿用 `monitor_handlers.go` 裡
+  `anyDiskSmartFailed` 已經有的逾時模式),查詢失敗的碟把錯誤訊息放進
+  該筆結果的 `error` 欄位、其餘碟照常回傳健康狀態跟溫度,不影響其他
+  碟的資料。只有連「有哪些硬碟」都問不到(`lsblk` 本身失敗)這種讓
+  整支回應都沒有意義的情況,才回傳 500。單元測試涵蓋這兩種情境
+  (`TestHandleStorageDisksSmart_MixedSuccessAndFailure`、
+  `TestHandleStorageDisksSmart_DiskDiscoveryFailure`)。
+- **Web UI**:Storage 頁面的硬碟列表新增一欄 SMART 狀態,頁面先渲染
+  「載入中」再非同步呼叫新 API 逐筆更新——健康就顯示綠色狀態加溫度
+  (例如「健康 · 31°C」)、SMART 檢測失敗顯示紅色的「SMART 檢測未
+  通過」、查不到(通常是這台主機沒裝 `smartctl`,或裝置不支援)顯示
+  中性的「無法讀取」,三種狀態、三種語言的文字都已經接上 Phase 11
+  的 i18n 字典(`storage.smartHealthy`/`smartFailed`/`smartUnavailable`
+  等 key)。
+- **真實驗證,以及誠實說明沙盒的限制**:這台沙盒完全沒有裝
+  `smartctl`,而且套件庫連不到、裝不上(已經實際嘗試過),所以跟
+  mergerFS/Docker/檔案總管那幾個 phase 不一樣,**沒有辦法驗證真實
+  SMART 數值(溫度、健康狀態)的正確性**。但管線本身——API 設計、
+  錯誤處理、UI 呈現——是有真的驗證過的:編出真正的 `gonasd` 執行檔、
+  用這台沙盒真實的 7 個 `/dev/vd*` 區塊裝置(不是假資料)跑起完整的
+  HTTP server、真的登入拿 session cookie、直接打
+  `GET /api/v1/storage/disks/smart`,確認在「主機完全沒裝 smartctl」
+  這個最差情況下 API 依然回 200、每顆碟各自帶著清楚的錯誤訊息而不是
+  整支噴 500;再用 Playwright 開真正的瀏覽器,在三種語言下分別登入、
+  切到 Storage 頁面,確認新的 SMART 欄位正確顯示「無法讀取/无法
+  读取/Unavailable」、沒有殘留錯誤語言的文字、也沒有多出非預期的
+  console 錯誤。真機上還需要補測的是「smartctl 真的裝著、硬碟真的有
+  SMART 資料時,顯示的健康狀態/溫度是否跟 `smartctl -a` 的原始輸出
+  一致」,已經記在 `docs/REAL_HARDWARE_TESTING.md`。
+- 純粹是既有 `internal/storage` 邏輯的接線,沒有動到 SMART 解析本身
+  的程式碼;`gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部
+  維持全綠。
 
 ## 開發
 

@@ -50,6 +50,7 @@ export const api = {
   version: () => request("GET", "/api/v1/version"),
 
   disks: () => request("GET", "/api/v1/storage/disks"),
+  disksSmart: () => request("GET", "/api/v1/storage/disks/smart"),
   arrayStatus: () => request("GET", "/api/v1/storage/array"),
   setPool: (pool) => request("PUT", "/api/v1/storage/pool", pool),
   startArray: () => request("POST", "/api/v1/storage/array/start"),

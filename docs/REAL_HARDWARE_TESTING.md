@@ -107,8 +107,18 @@ Phase 9.2 用 GitHub Releases 的例外網路路徑裝上了真正的 mergerfs
 
 - [ ] `GET /api/v1/storage/disks` 列出的硬碟跟 `lsblk` 實際輸出比對,
       容量、型號、是否為系統碟等欄位是否正確。
-- [ ] SMART 資訊(溫度、健康狀態)跟 `smartctl -a /dev/sdX` 的原始輸出
-      比對是否一致(這台沙盒沒有真實硬碟可以測 SMART)。
+- [x] ✅ `GET /api/v1/storage/disks/smart` 這支 API 本身、以及 Storage
+      頁面新增的 SMART 欄位(Phase 12):對每顆硬碟平行呼叫
+      `smartctl -a <device>`、單顆碟查詢失敗不會拖垮整支 API(用假
+      Runner 模擬「其中一顆碟查不到 SMART」的單元測試,以及對這台
+      沙盒 7 個真實 `/dev/vd*` 區塊裝置——沙盒本身沒裝 `smartctl`、
+      也裝不了(套件庫連不到)——實際打 API 驗證過:回傳 200,每顆
+      碟各自帶著清楚的「查詢失敗」錯誤訊息,不是整支 500)、Web UI
+      三語系下正確顯示「無法讀取/无法读取/Unavailable」都已驗證。
+- [ ] 上面驗證的是「管線本身」(API 設計、錯誤處理、UI 呈現)——真正
+      有意義的 SMART 數值(溫度、健康狀態 PASSED/FAILED)跟
+      `smartctl -a /dev/sdX` 的原始輸出比對是否一致,這台沙盒沒有
+      真實硬碟、也沒辦法裝 `smartctl`,完全沒測過,真機上必須補測。
 - [x] ✅ 用兩顆以上的磁碟設定一個 pool(一顆資料碟 + 一顆同位碟),
       確認 mergerFS 真的掛載成功(`mount | grep mergerfs`)。**已知
       異常**:透過 mergerFS 掛載點建立全新檔案在這台沙盒裡會失敗、
