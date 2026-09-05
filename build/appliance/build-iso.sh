@@ -77,17 +77,48 @@ esac
 BASE_ISO_URL="${GONAS_DEBIAN_ISO_URL:-https://cdimage.debian.org/debian-cd/current/$DEBIAN_ARCH_DIR/iso-cd}"
 BASE_ISO_NAME="debian-$DEBIAN_RELEASE-$DEBIAN_ARCH_DIR-netinst.iso"
 
-echo "==> downloading $BASE_ISO_URL/$BASE_ISO_NAME"
-echo "    (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)"
-wget -q --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"
+# 先抓 SHA256SUMS(每次都重新抓,不快取——這份清單很小,而且要用它來
+# 判斷「快取的 base.iso 還算不算數」,快取 SHA256SUMS 本身會讓這個判斷
+# 失去意義)。
+SHA256SUMS_URL="$BASE_ISO_URL/SHA256SUMS"
+echo "==> fetching $SHA256SUMS_URL"
+if ! wget -q -O "$WORK_DIR/SHA256SUMS" "$SHA256SUMS_URL"; then
+    echo "error: could not download $SHA256SUMS_URL to verify the base ISO's checksum — refusing to continue with an unverified ISO" >&2
+    exit 1
+fi
+EXPECTED_SHA256="$(awk -v name="$BASE_ISO_NAME" '$2 == name || $2 == "*"name {print $1}' "$WORK_DIR/SHA256SUMS")"
+if [ -z "$EXPECTED_SHA256" ]; then
+    echo "error: $BASE_ISO_NAME not found in downloaded SHA256SUMS — refusing to continue with an unverified ISO" >&2
+    exit 1
+fi
 
-# --- 2.5 驗證下載回來的官方 ISO 完整性 ---------------------------------
+# --- 2.5 下載官方 ISO(有本地快取就重用,雜湊對得上才算數)------------
+# 這支腳本在第一次真的拿去跑之前,大概率會被反覆執行很多次(preseed/
+# late-command 邏輯只要哪裡出錯就要重跑整個建置流程再進 QEMU 測一次)
+# ——netinst ISO 有幾百 MB,每次都重新下載對「反覆測試、反覆修正」這種
+# 使用情境很不友善,所以在 repo 外的 $REPO_ROOT/dist/.cache/ 底下留一份
+# 快取。快取是否可以重用完全看雜湊值是否還跟官方最新的 SHA256SUMS
+# 一致——不是看檔名或下載時間,這樣即使 Debian 之後把同一個檔名的
+# netinst ISO 換成新的內容(小版本更新常有這種情況),也不會誤用一份
+# 過期的快取。
+CACHE_DIR="$REPO_ROOT/dist/.cache/debian-iso"
+mkdir -p "$CACHE_DIR"
+CACHED_ISO="$CACHE_DIR/$BASE_ISO_NAME"
+if [ -f "$CACHED_ISO" ] && [ "$(sha256sum "$CACHED_ISO" | awk '{print $1}')" = "$EXPECTED_SHA256" ]; then
+    echo "==> reusing cached $CACHED_ISO (checksum matches current SHA256SUMS)"
+    cp "$CACHED_ISO" "$WORK_DIR/base.iso"
+else
+    echo "==> downloading $BASE_ISO_URL/$BASE_ISO_NAME"
+    echo "    (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)"
+    wget -q --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"
+fi
+
+# --- 2.6 驗證 base.iso 完整性 -------------------------------------------
 # 這一步刻意不是可有可無的——這支腳本後面會把整個目錄樹解開、修改、
-# 重新包裝，如果下載回來的 base.iso 本身就已經損毀或被竄改，後面所有
-# 步驟都是在一個不可信的基礎上動作，卻完全不會有任何錯誤訊息，因為
-# xorriso/後續流程不會去檢查「這份 ISO 本來長怎樣」。做法：抓官方發布
-# 的 SHA256SUMS 清單，比對其中 $BASE_ISO_NAME 那一行的雜湊值跟實際下載
-# 檔案的 sha256sum 是否一致，不一致就直接中止，不繼續往下做。
+# 重新包裝，如果 base.iso(不管是剛下載的還是重用快取的)本身就已經
+# 損毀或被竄改，後面所有步驟都是在一個不可信的基礎上動作，卻完全不會
+# 有任何錯誤訊息，因為 xorriso/後續流程不會去檢查「這份 ISO 本來長
+# 怎樣」。
 #
 # 這只驗證「完整性」（下載過程沒有被截斷/損毀），不是「真實性」（沒有
 # 被中間人竄改成惡意版本）——真正的真實性驗證需要另外抓
@@ -96,29 +127,23 @@ wget -q --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"
 # checksum 比對這一層,並在下面印出訊息提醒使用者如果要更高的信任
 # 層級,可以自行另外做 GPG 簽章驗證(見
 # https://www.debian.org/CD/verify 的官方說明)。
-SHA256SUMS_URL="$BASE_ISO_URL/SHA256SUMS"
-echo "==> verifying downloaded ISO checksum against $SHA256SUMS_URL"
-if wget -q -O "$WORK_DIR/SHA256SUMS" "$SHA256SUMS_URL"; then
-    EXPECTED_SHA256="$(awk -v name="$BASE_ISO_NAME" '$2 == name || $2 == "*"name {print $1}' "$WORK_DIR/SHA256SUMS")"
-    if [ -z "$EXPECTED_SHA256" ]; then
-        echo "error: $BASE_ISO_NAME not found in downloaded SHA256SUMS — refusing to continue with an unverified ISO" >&2
-        exit 1
-    fi
-    ACTUAL_SHA256="$(sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
-    if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
-        echo "error: checksum mismatch for $BASE_ISO_NAME" >&2
-        echo "  expected: $EXPECTED_SHA256" >&2
-        echo "  actual:   $ACTUAL_SHA256" >&2
-        echo "  the download may be corrupt or the mirror may be serving something unexpected — refusing to continue" >&2
-        exit 1
-    fi
-    echo "==> checksum OK ($ACTUAL_SHA256)"
-    echo "    (this confirms the download is intact, not that it is authentic — for full authenticity,"
-    echo "    separately verify SHA256SUMS.sign with gpg against Debian's signing key, see"
-    echo "    https://www.debian.org/CD/verify)"
-else
-    echo "error: could not download $SHA256SUMS_URL to verify the base ISO's checksum — refusing to continue with an unverified ISO" >&2
+ACTUAL_SHA256="$(sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
+if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
+    echo "error: checksum mismatch for $BASE_ISO_NAME" >&2
+    echo "  expected: $EXPECTED_SHA256" >&2
+    echo "  actual:   $ACTUAL_SHA256" >&2
+    echo "  the download may be corrupt or the mirror may be serving something unexpected — refusing to continue" >&2
+    rm -f "$CACHED_ISO" 2>/dev/null || true
     exit 1
+fi
+echo "==> checksum OK ($ACTUAL_SHA256)"
+echo "    (this confirms the download is intact, not that it is authentic — for full authenticity,"
+echo "    separately verify SHA256SUMS.sign with gpg against Debian's signing key, see"
+echo "    https://www.debian.org/CD/verify)"
+# 通過驗證才寫進快取(或更新快取)——避免一份沒通過驗證的檔案被誤存
+# 起來,下次又被當成「快取命中」重用。
+if [ ! -f "$CACHED_ISO" ] || [ "$(sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
+    cp "$WORK_DIR/base.iso" "$CACHED_ISO"
 fi
 
 # --- 3. 解開原始 ISO --------------------------------------------------
@@ -191,6 +216,14 @@ echo "==> recomputing md5sum.txt"
 OUT_DIR="$REPO_ROOT/dist/release"
 mkdir -p "$OUT_DIR"
 OUT_ISO="$OUT_DIR/gonas-$VERSION-$ARCH.iso"
+
+# 重跑這支腳本(同一個 VERSION、同一個 ARCH)是很常見的情況——先清掉
+# 舊的輸出檔案再交給 xorriso,不依賴 xorriso 自己對「輸出路徑已經有
+# 一個檔案」這種情況的處理方式(-outdev 指向一個既有檔案時，某些
+# xorriso 版本/選項組合下可能會嘗試把它當成既有的多重 session ISO
+# 處理，而不是單純覆蓋掉重寫，具體行為沒有在這裡實際測試驗證過)，
+# 確保每次都是從一份全新、乾淨的檔案開始寫。
+rm -f "$OUT_ISO" "$OUT_ISO.sha256"
 
 echo "==> repacking as $OUT_ISO"
 # `-boot_image any replay` 沿用原始 ISO 的開機目錄結構(El Torito/

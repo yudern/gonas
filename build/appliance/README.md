@@ -77,27 +77,43 @@ sudo apt install xorriso wget
 
 ```
 # 在 repo 根目錄
+make iso                # 兩個架構都做(建議用這個)
 make iso-amd64          # 只做 x86_64
 make iso-arm64          # 只做 arm64(樹莓派 4/5、多數 SBC)
-make iso                # 兩個都做
 
 # 或者不透過 Makefile,直接呼叫(等價於上面):
 build/appliance/build-iso.sh amd64 1.2.3
 build/appliance/build-iso.sh arm64 1.2.3
 ```
 
-`VERSION` 沒指定的話會用 `git describe`(這個 repo 目前沒有 `.git`,
-所以預設會是 `dev`)。輸出在 `dist/release/gonas-<version>-<arch>.iso`
-以及對應的 `.sha256`。
+**注意一個容易踩到的坑**:`iso-amd64`/`iso-arm64` 都依賴 `release`
+這個 target,而 `release` 一開始會 `rm -rf dist/release`——如果你是
+分兩次、各自獨立的 `make` 指令執行(例如先 `make iso-amd64`,隔一段
+時間後才另外執行 `make iso-arm64`),第二次執行時 `release` 會把
+第一次產出、放在同一個 `dist/release/` 目錄底下的 amd64 ISO 一併
+清掉。在**同一次** `make iso` 呼叫裡兩個架構都做,`release` 只會真的
+執行一次,不會有這個問題;如果你就是想分開跑,記得先把上一次的 ISO
+搬到別的地方保存,或直接兩個都跑 `make iso`。
+
+`VERSION` 沒指定的話會用 `git describe`(即使一開始這份文件的舊版本
+寫過「這個 repo 沒有 `.git`」,實際上這個專案在 commit 歷史上是有 git
+版本控制的,`git describe` 會拿到真正的版本字串,不會落到 `dev` 這個
+後備值)。輸出在 `dist/release/gonas-<version>-<arch>.iso` 以及對應的
+`.sha256`。下載回來的官方 Debian ISO 會快取在 `dist/.cache/`(以雜湊
+值判斷是否還能重用,不是單純看檔名/時間),重複執行不用每次都重新
+下載幾百 MB;`dist/` 整個目錄已經在 `.gitignore` 裡,快取不會被誤
+commit 進版本控制。
 
 整個流程做的事(細節見 `build-iso.sh` 裡逐段的中文註解):
 
 1. 確認/建置 `dist/release/gonas-<version>-linux-<arch>.tar.gz`(沒有
    就自動跑 `make release`——這一步是純 Go 交叉編譯,在任何機器上都
    不需要網路)。
-2. 從 `https://cdimage.debian.org/...` 下載官方 netinst ISO(需要
-   網路;鏡像位置可用 `GONAS_DEBIAN_ISO_URL`/`GONAS_DEBIAN_RELEASE`
-   環境變數覆寫)。
+2. 抓官方發布的 `SHA256SUMS` 清單,從 `dist/.cache/` 找有沒有雜湊值
+   還對得上的快取檔案可以直接重用;沒有的話從
+   `https://cdimage.debian.org/...` 下載官方 netinst ISO(需要網路;
+   鏡像位置可用 `GONAS_DEBIAN_ISO_URL`/`GONAS_DEBIAN_RELEASE` 環境
+   變數覆寫),下載完比對雜湊值,不一致就直接中止、不繼續往下做。
 3. 用 `xorriso -osirrox` 解開原始 ISO。
 4. 把 gonasd release tarball、`preseed.cfg`、`late-command.sh`、
    `overlay/` 目錄整份塞進解開的目錄樹裡的 `gonas/` 子目錄。
