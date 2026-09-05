@@ -3,7 +3,9 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"text/template"
 )
 
@@ -62,9 +64,22 @@ const (
 )
 
 // RunSnapraid 對指定設定檔執行一個 SnapRAID 子指令,回傳 stdout 供上層記錄。
+//
+// 對 diff 動作的特別處理:實測真正的 snapraid 二進位檔,「diff 有找到
+// 差異」的結果會用 exit code 2 表示,而不是 0(詳見
+// docs/REAL_HARDWARE_TESTING.md 的 storage 章節)。這是 SnapRAID 自己的正
+// 常慣例(exit 0 = 無差異、exit 2 = 有差異、其他 = 真的出錯),不是失敗,
+// 所以這裡把 exit code 2 從錯誤裡挑出來,對呼叫端回傳 nil error;sync /
+// scrub 則沒有這種語意,任何非零結束碼都仍視為真正的錯誤。
 func RunSnapraid(ctx context.Context, r Runner, configPath string, action SnapraidAction) ([]byte, error) {
 	out, err := r.Run(ctx, "snapraid", "-c", configPath, string(action))
 	if err != nil {
+		if action == SnapraidDiff {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+				return out, nil
+			}
+		}
 		return out, fmt.Errorf("snapraid %s (config=%s): %w", action, configPath, err)
 	}
 	return out, nil

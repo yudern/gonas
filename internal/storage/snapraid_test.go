@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -63,5 +66,97 @@ func TestRunSnapraid_PropagatesFailure(t *testing.T) {
 	r := &fakeRunner{err: map[string]error{"snapraid": errBoom}}
 	if _, err := RunSnapraid(context.Background(), r, "/etc/gonas/snapraid-tank.conf", SnapraidSync); err == nil {
 		t.Fatal("expected error to propagate from failed snapraid sync")
+	}
+}
+
+// exitCodeRunner 模擬「執行 snapraid 之後拿到某個結束碼」,但刻意不用假的
+// error 型別去騙 errors.As —— 而是真的執行一個會用指定結束碼結束的子行程
+// (sh -c "exit N"),再用跟 internal/cmdrunner 完全一樣的包法把它包成
+// *exec.ExitError 再包一層 %w。這樣才能確實驗證 RunSnapraid 裡
+// errors.As(err, &exitErr) 這段解包邏輯,而不是只驗證一個湊巧符合介面的假錯誤。
+//
+// 這個 exit code 2 的行為是這次用真正的 snapraid 二進位檔實測到的:
+// diff 找到差異時會用 exit code 2 結束,不是 0(詳見
+// docs/REAL_HARDWARE_TESTING.md)。
+type exitCodeRunner struct {
+	exitCode int // 0 表示成功、不設錯誤
+	calls    []string
+}
+
+func (r *exitCodeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, name)
+	if r.exitCode == 0 {
+		return []byte("ok"), nil
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("exit %d", r.exitCode))
+	out, err := cmd.Output()
+	if err == nil {
+		return out, nil
+	}
+	// 跟 internal/cmdrunner.runCmd 一樣用 %w 包一層,確保
+	// errors.As 需要真的沿著 wrap chain 往下解開才能找到 *exec.ExitError。
+	return out, fmt.Errorf("snapraid %v: %w", args, err)
+}
+
+func (r *exitCodeRunner) RunWithStdin(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return r.Run(ctx, name, args...)
+}
+
+func TestRunSnapraid_DiffExitCode2IsNotAnError(t *testing.T) {
+	r := &exitCodeRunner{exitCode: 2}
+
+	if _, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidDiff); err != nil {
+		t.Fatalf("expected diff exit code 2 (differences found) to NOT be an error, got: %v", err)
+	}
+}
+
+func TestRunSnapraid_DiffExitCode1IsStillAnError(t *testing.T) {
+	r := &exitCodeRunner{exitCode: 1}
+
+	if _, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidDiff); err == nil {
+		t.Fatal("expected diff exit code 1 (real error) to still be reported as an error")
+	}
+}
+
+func TestRunSnapraid_DiffSuccessNoError(t *testing.T) {
+	r := &exitCodeRunner{exitCode: 0}
+
+	if _, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidDiff); err != nil {
+		t.Fatalf("expected exit code 0 (no differences) to not be an error, got: %v", err)
+	}
+}
+
+func TestRunSnapraid_SyncExitCode2IsStillAnError(t *testing.T) {
+	// sync 沒有 diff 那種「exit code 2 = 有差異」的特殊語意,任何非零結束碼
+	// 都必須照舊被當成真正的錯誤,不能被 diff 專用的例外規則誤套用進來。
+	r := &exitCodeRunner{exitCode: 2}
+
+	if _, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidSync); err == nil {
+		t.Fatal("expected sync exit code 2 to still be reported as an error (only diff carves out exit code 2)")
+	}
+}
+
+func TestRunSnapraid_ScrubExitCode2IsStillAnError(t *testing.T) {
+	r := &exitCodeRunner{exitCode: 2}
+
+	if _, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidScrub); err == nil {
+		t.Fatal("expected scrub exit code 2 to still be reported as an error (only diff carves out exit code 2)")
+	}
+}
+
+func TestRunSnapraid_DiffNonExitErrorIsStillWrapped(t *testing.T) {
+	// 確認一般（非 *exec.ExitError)的錯誤還是照舊被包裝回傳,不會被
+	// errors.As 的新分支意外吞掉。
+	r := &fakeRunner{err: map[string]error{"snapraid": errBoom}}
+
+	err := func() error {
+		_, err := RunSnapraid(context.Background(), r, "/tmp/snapraid.conf", SnapraidDiff)
+		return err
+	}()
+	if err == nil {
+		t.Fatal("expected non-exit error to still be reported as an error")
+	}
+	if !errors.Is(err, errBoom) {
+		t.Errorf("expected wrapped error to satisfy errors.Is(err, errBoom), got: %v", err)
 	}
 }

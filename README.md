@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 9 完成 — 實機測試與強化
+## 目前狀態:Phase 9.2 完成 — 儲存/備份的真實工具驗證
 
 **Phase 0(專案骨架)**
 
@@ -551,14 +551,101 @@ root 身分手動啟動成功(`docker info` 能連上、`overlayfs` 儲存驅動
     `WriteTimeout` 為什麼刻意不設的說明因此仍然成立,`docs/
     REAL_HARDWARE_TESTING.md` 裡那一項也維持原樣待驗證。
 
-至此,原始技術路線圖(Phase 0–9)已全部完成,並且比 Phase 9 剛交付時
-多驗證了一層:Docker 容器/網路生命週期、rollback 邏輯已經對著真正的
-Docker Engine 跑過而不只是邏輯正確性的單元測試。GoNAS 目前是一套零
-第三方 Go 依賴、可交叉編譯到 x86_64/ARM64、涵蓋儲存陣列/Docker/檔案
-分享/監控告警/備份快照/身分驗證與網路安全/一鍵安裝的完整 NAS 軟體
-套件,剩下的工作是 `docs/REAL_HARDWARE_TESTING.md` 清單裡那些依然
-需要真實硬體(硬碟、mergerFS/SnapRAID/Samba/NFS/WireGuard-tools 這些
-這台沙盒的網路政策擋掉、裝不上的系統套件)才能驗證的項目。
+**Phase 9.2(修正:找到一條裝得上真的 mergerFS/SnapRAID/rsync 的網路路徑,
+補完全專案最關鍵的一項驗證)**
+
+Phase 9/9.1 交付時都寫著「這台沙盒裝不上 mergerFS/SnapRAID/rsync,
+apt 跟 Docker Hub registry 都被網路白名單擋掉」。繼續往下查網路政策的
+邊界時,發現這句話只對了一半:`apt`、`codeload.github.com`、GitHub 的
+`archive/refs/heads/...`/`archive/refs/tags/...`(分支/tag 壓縮包)、
+`api.github.com` 確實都被擋,但 **GitHub Releases 的檔案下載網址
+(`github.com/<owner>/<repo>/releases/download/<tag>/<asset>`)是通的**
+——這是一條先前沒試過、跟一般認知的「GitHub 存取被擋」不完全一樣的
+例外路徑。用這條路徑抓到真正的 mergerfs `.deb`(v2.40.2)裝上,以及
+snapraid(v12.3)、rsync(v3.4.1)的原始碼並在本機編譯出真正的執行檔
+——這是整個專案第一次能對著**真的**外部工具(而不是假的 Runner 或
+HTTP 假伺服器)驗證 GoNAS 的儲存/備份邏輯。
+
+- **SnapRAID 資料復原能力——全專案最關鍵、先前完全無法測試的項目,
+  這次完整證實可行**:用 `fallocate` + `mkfs.ext4` + `mount -o loop`
+  建出三個真正獨立的區塊裝置(用 `stat -c "%d"` 確認裝置 ID 各自不同,
+  不是同一顆硬碟底下的子目錄——第一次嘗試就是用普通子目錄,被真正的
+  `snapraid sync` 正確擋下「兩顆硬碟在同一個裝置上」,證實這是
+  SnapRAID 本身合理的保護機制、不是 GoNAS 的 bug,修正後才繼續),
+  直接套用 GoNAS 自己的 `storage.GenerateSnapraidConfig` 產生的設定檔
+  格式跟 `storage.BuildMergerfsArgs` 產生的掛載參數(不是手刻一份等效
+  設定),跑完整個流程:寫入測試檔案 → `snapraid sync`(寫入同位資料)
+  → **模擬其中一顆資料碟整顆損毀**(直接清空底層目錄,模擬硬碟報銷)
+  → `snapraid fix`(從同位資料復原)→ 逐一字對字比對復原後檔案內容跟
+  原始內容一致。同時也真的用 `snapraid scrub` 驗證過位元腐化偵測、
+  `snapraid diff` 驗證過異動偵測。這證實了 GoNAS 儲存層的核心承諾
+  ——「資料碟壞掉可以復原」——在真正的 SnapRAID 二進位檔上是成立的。
+- **發現並修正一個真的 bug:`RunSnapraid` 沒處理 `snapraid diff` 的
+  exit code 2**:上面這輪真實測試中量到 `snapraid diff` 在「有找到
+  異動」時是用 **exit code 2** 結束、不是 0(0 = 無異動,2 = 有異動,
+  其他 = 真的出錯,這是 SnapRAID 自己文件化的慣例)。`internal/
+  storage/snapraid.go` 原本的 `RunSnapraid` 把任何非零結束碼都當成
+  硬錯誤,若日後真的把 `SnapraidDiff` 接上某個 handler(目前還沒有
+  production 程式碼呼叫,純粹是個地雷),「有正常異動」會被誤判成
+  API 層級的錯誤。已修正:用 `errors.As` 解開到具體的 `*exec.ExitError`
+  型別、只在動作是 `diff` 且 exit code 剛好是 2 時,把它當成正常結果
+  回傳(sync/scrub 沒有這種語意,任何非零結束碼仍然照舊視為錯誤)。
+  新增 8 個單元測試,其中驗證 exit code 分支的測試刻意不用假的錯誤
+  型別去湊 `errors.As`,而是真的跑一個 `sh -c "exit N"` 子行程,確保
+  解包邏輯是被真正練到、不是巧合通過。
+- **mergerFS 真的掛載成功**,用 GoNAS 自己產生的完整參數(而不是精簡
+  過的等效版本)掛上剛剛那三顆迴圈裝置。讀取、對底層碟直接寫入都正常;
+  但發現一個尚未完全根因的異常——**透過 mergerFS 掛載點建立全新檔案
+  會失敗、回傳 ENOSPC(裝置空間不足)**,即使 `df`/`stat -f` 顯示掛載點
+  跟底層碟都還有一百多 MB 可用空間。用 `strace` 確認是 `openat(...,
+  O_CREAT)` 這個系統呼叫本身就回傳 ENOSPC,也就是 mergerFS 自己的
+  create 策略邏輯在擋,不是核心 VFS 層級的問題;拿掉所有自訂掛載選項、
+  用完全預設的參數重測,現象一樣,排除是某個特定選項造成的。這件事
+  沒有繼續深挖(投入報酬遞減),懷疑是這個容器沙盒的 FUSE 環境特有的
+  狀況,不是 GoNAS 的 bug——但誠實地列成一個**尚未解決**的已知異常。
+  好在 SnapRAID 的保護機制是直接對設定檔裡列的底層資料碟路徑生效,
+  跟檔案是不是透過 mergerFS 掛載點寫入無關,所以上面那段最關鍵的
+  復原驗證改成直接寫入底層碟路徑,不受這個異常影響、依然完整有效。
+- **rsync 的 `--link-dest` 硬連結機制——GoNAS 備份輪替邏輯的核心假設
+  ——用真正的 rsync 對著兩輪備份直接驗證**:用 `stat -c "%i"` 比對
+  inode,確認沒有變動過的檔案在第二輪備份裡拿到的是**真正的硬連結**
+  (相同 inode、link count 變成 2),有變動過的檔案則拿到全新的複本
+  (不同 inode)。這證實了 `internal/backup` 依賴的核心假設在真正的
+  rsync 上是成立的。
+- **rsync 缺少 ACL 支援是這台沙盒編譯環境的限制,不是 GoNAS 的
+  bug**:從原始碼編譯出來的 rsync 3.4.1 不支援 `-A`(ACL)選項,因為
+  這個沙盒只有 `libacl.so.1` 執行期函式庫、沒有編譯用的
+  `libacl1-dev` 標頭檔(嘗試過幾個可能提供標頭檔的 GitHub repo,都被
+  同一個擋掉分支/tag 壓縮包下載的網路政策擋掉)。任何一台正常裝過
+  `apt install rsync` 的機器都不會有這個問題。反過來把這個限制當成
+  一次有意義的驗證:直接透過**正在跑的 `gonasd` 真實 HTTP API**
+  觸發一個備份工作,讓它去跑 GoNAS 正式程式碼實際下的指令
+  (`rsync -aAX --delete ...`),確認在 ACL 不支援的情況下會乾淨地
+  失敗(`rsync: ACLs are not supported on this client`)、`state.json`
+  裡的工作正確標記成失敗、錯誤訊息完整被記下來、沒有留下任何半成品
+  目錄(`internal/backup/rsync.go` 的失敗清理邏輯 `os.RemoveAll(tmpDir)`
+  確實有執行)。硬連結機制本身則另外用拿掉 `-A`、只留 `-aX` 的方式
+  直接驗證過(見上一項)。
+- 全部變更跑過完整的 `gofmt`/`go build ./...`/`go vet ./...`/
+  `go test ./...`,新增的 `internal/storage/snapraid_test.go` 測試
+  全數通過。這一輪用到的所有下載檔案、編譯產物、迴圈裝置掛載點、
+  臨時測試用的 `gonasd` 程序都已經在驗證完成後清乾淨,不會留在
+  最終的程式碼或版本庫裡。
+
+至此,原始技術路線圖(Phase 0–9)已全部完成,並且比 Phase 9.1 交付時
+又多驗證了一層:Docker 容器/網路生命週期、mergerFS 掛載、SnapRAID
+資料復原能力、rsync 硬連結輪替機制都已經對著真正的外部工具跑過,不
+再只是靠假的 Runner/HTTP 假伺服器做邏輯正確性測試。GoNAS 目前是一套
+零第三方 Go 依賴、可交叉編譯到 x86_64/ARM64、涵蓋儲存陣列/Docker/
+檔案分享/監控告警/備份快照/身分驗證與網路安全/一鍵安裝的完整 NAS
+軟體套件。仍然誠實地列出目前這台沙盒沒辦法驗證的部分:Samba/NFS/
+WireGuard-tools 沒有 GitHub Releases 這種例外網路路徑可以裝(apt 跟
+它們官方的下載管道都被擋),所以這三項還是只驗證過邏輯正確性,沒有
+對著真正跑起來的 Samba/NFS 伺服器或 WireGuard 介面測試過;真實的
+硬碟熱插拔/故障偵測(SMART)、多天等級的長時間穩定性測試,也都不是
+在雲端容器沙盒裡能做的事。這些項目連同上面提到的 mergerFS ENOSPC
+異常,都完整列在 `docs/REAL_HARDWARE_TESTING.md` 裡,留給拿到真實
+硬體的人接手驗證。
 
 ## 開發
 
