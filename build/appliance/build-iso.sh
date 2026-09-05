@@ -81,6 +81,46 @@ echo "==> downloading $BASE_ISO_URL/$BASE_ISO_NAME"
 echo "    (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)"
 wget -q --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"
 
+# --- 2.5 驗證下載回來的官方 ISO 完整性 ---------------------------------
+# 這一步刻意不是可有可無的——這支腳本後面會把整個目錄樹解開、修改、
+# 重新包裝，如果下載回來的 base.iso 本身就已經損毀或被竄改，後面所有
+# 步驟都是在一個不可信的基礎上動作，卻完全不會有任何錯誤訊息，因為
+# xorriso/後續流程不會去檢查「這份 ISO 本來長怎樣」。做法：抓官方發布
+# 的 SHA256SUMS 清單，比對其中 $BASE_ISO_NAME 那一行的雜湊值跟實際下載
+# 檔案的 sha256sum 是否一致，不一致就直接中止，不繼續往下做。
+#
+# 這只驗證「完整性」（下載過程沒有被截斷/損毀），不是「真實性」（沒有
+# 被中間人竄改成惡意版本）——真正的真實性驗證需要另外抓
+# SHA256SUMS.sign 用 gpg 驗證簽章，這一步需要事先匯入 Debian 的
+# 簽章金鑰才能做，這支腳本不假設執行環境已經有這把金鑰,所以只做到
+# checksum 比對這一層,並在下面印出訊息提醒使用者如果要更高的信任
+# 層級,可以自行另外做 GPG 簽章驗證(見
+# https://www.debian.org/CD/verify 的官方說明)。
+SHA256SUMS_URL="$BASE_ISO_URL/SHA256SUMS"
+echo "==> verifying downloaded ISO checksum against $SHA256SUMS_URL"
+if wget -q -O "$WORK_DIR/SHA256SUMS" "$SHA256SUMS_URL"; then
+    EXPECTED_SHA256="$(awk -v name="$BASE_ISO_NAME" '$2 == name || $2 == "*"name {print $1}' "$WORK_DIR/SHA256SUMS")"
+    if [ -z "$EXPECTED_SHA256" ]; then
+        echo "error: $BASE_ISO_NAME not found in downloaded SHA256SUMS — refusing to continue with an unverified ISO" >&2
+        exit 1
+    fi
+    ACTUAL_SHA256="$(sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
+    if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
+        echo "error: checksum mismatch for $BASE_ISO_NAME" >&2
+        echo "  expected: $EXPECTED_SHA256" >&2
+        echo "  actual:   $ACTUAL_SHA256" >&2
+        echo "  the download may be corrupt or the mirror may be serving something unexpected — refusing to continue" >&2
+        exit 1
+    fi
+    echo "==> checksum OK ($ACTUAL_SHA256)"
+    echo "    (this confirms the download is intact, not that it is authentic — for full authenticity,"
+    echo "    separately verify SHA256SUMS.sign with gpg against Debian's signing key, see"
+    echo "    https://www.debian.org/CD/verify)"
+else
+    echo "error: could not download $SHA256SUMS_URL to verify the base ISO's checksum — refusing to continue with an unverified ISO" >&2
+    exit 1
+fi
+
 # --- 3. 解開原始 ISO --------------------------------------------------
 EXTRACT_DIR="$WORK_DIR/iso"
 mkdir -p "$EXTRACT_DIR"

@@ -159,9 +159,23 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
    gonas-console.service` 跟 `journalctl -u gonas-console` 找原因。
 3. **瀏覽器能不能連到 Web 介面** —— 在 host 機器(或另一台虛擬機)
    瀏覽器打開 tty1 顯示的網址,應該會看到 GoNAS 的首次設定畫面。
-4. **`gonasd` 是不是真的用 systemd 常駐** —— tty2 登入後
-   `systemctl status gonasd`,應該是 `active (running)`;這一步等於
-   同時驗證了 `install.sh` 在這個全新環境裡有沒有正常執行完。
+4. **`gonasd` 是不是真的用 systemd 常駐、而且開機自動啟動有沒有生效**
+   —— tty2 登入後 `systemctl status gonas`(unit 名稱是 `gonas`,不是
+   `gonasd`),應該是 `active (running)`;另外務必額外確認
+   `systemctl is-enabled gonas`回傳 `enabled` —— 這一項特別重要:
+   `install.sh` 自己判斷「要不要做 systemd 整合」的邏輯是看
+   `/run/systemd/system` 存不存在,而 late-command.sh 執行 install.sh
+   當下(debian-installer 的 in-target chroot 環境)這個目錄通常不
+   存在,所以 install.sh 那時候會直接跳過整段 systemd 整合(包含
+   `enable`)。`late-command.sh` 已經另外補了一步明確
+   `systemctl enable gonas.service`來補上這個缺口,但這一步同樣完全
+   沒有真正驗證過是否在真實的 in-target chroot 環境裡如預期般成功
+   ——如果重開機後 `systemctl is-enabled gonas` 顯示 `disabled`,
+   代表這個補救步驟在你的 Debian 版本裡沒有如預期生效,需要另外
+   排查(先手動跑 `systemctl enable gonas.service` 確認至少能事後
+   補救,再回頭看 late-command.sh 的執行 log,通常在
+   `/var/log/syslog` 或 `journalctl -b -1` 裡找 late_command 相關的
+   輸出)。
 5. **品牌化有沒有生效** —— tty2 登入後檢查 `hostnamectl`(應顯示
    `gonas`)、`cat /etc/motd`、`cat /etc/os-release` 的 `PRETTY_NAME`、
    重開機時 GRUB 選單標題。
@@ -184,6 +198,14 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   補裝,效果跟軟體版安裝路徑完全一樣。
 - 沒有做 Secure Boot 簽章相關處理,規劃上假設目標機器的韌體允許
   一般(非簽章)開機或已關閉 Secure Boot。
+- `build-iso.sh` 會比對下載回來的官方 ISO 跟 Debian 發布的
+  `SHA256SUMS` 是否一致,雜湊不符就直接中止(避免在一份損毀或被
+  竄改的 ISO 上繼續動作卻完全沒有任何錯誤訊息)——但這只驗證
+  「完整性」,沒有做 GPG 簽章驗證(`SHA256SUMS.sign`)這一層
+  「真實性」檢查,因為那需要腳本執行環境事先匯入 Debian 的官方簽章
+  金鑰,這支腳本不假設一定有;如果你的信任層級要求更高,建議自己
+  另外對 `SHA256SUMS`/`SHA256SUMS.sign` 做一次 GPG 驗證,見
+  https://www.debian.org/CD/verify 。
 - `gonasadmin` 這組 Unix 帳號的預設密碼寫死在 `preseed.cfg` 裡
   (`gonas-change-me-now`),純粹是給「緊急 SSH/主控台除錯」用的
   備援管道,跟 GoNAS 自己的 Web 介面帳號系統完全無關(見

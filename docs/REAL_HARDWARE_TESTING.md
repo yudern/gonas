@@ -567,6 +567,11 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       `xorriso`/`qemu-system-x86_64`/`qemu-system-aarch64`。需要一台
       有真正網路連線的機器或 CI 執行 `make iso-amd64`/
       `make iso-arm64`,確認能成功產出 `.iso`/`.sha256` 檔案。
+      `build-iso.sh` 也會下載 Debian 官方的 `SHA256SUMS` 比對下載回來
+      的 ISO 是否完整(雜湊不符就中止,不繼續往下做),但這個檢查
+      本身以及它的失敗路徑(雜湊真的不符、或 `SHA256SUMS` 下載失敗
+      時腳本是否真的乾淨中止、不留下部分處理過的檔案)同樣沒有實際
+      跑過,需要在第一次真正建置時順便確認。
 - [ ] **`preseed.cfg` 能不能被真正的 debian-installer 正確解析、
       自動跑完整個安裝不卡在非預期的問答畫面**:完全沒有驗證過,只做
       過人工覆閱跟對照 Debian 官方 Installation Guide 附錄 B 的語法。
@@ -581,6 +586,25 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       預期(chroot 環境裡呼叫 `systemctl` 有時候會因為沒有真正在跑的
       init 而只更新 unit 檔案的符號連結、不會立刻生效,這是正常的,
       重開機後才會真正生效,但這一點沒有實際確認過)。
+- [ ] **`gonas.service` 開機自動啟動是否真的生效——這是覆閱時額外
+      發現、目前已知最重要的一項未驗證風險**:`install.sh` 自己判斷
+      「要不要做 systemd 整合」的條件是 `[ -d /run/systemd/system ]`,
+      這是為了在真的沒有 systemd 的環境(例如某些容器)優雅跳過,但
+      late-command.sh 透過 in-target 執行 install.sh 的當下,目標
+      系統的 systemd 套件雖然已經裝好,這個 chroot 執行環境本身通常
+      不會有一個真正在跑的 systemd 實例,`/run/systemd/system` 大概率
+      不存在,導致 install.sh 會整段跳過 systemd 整合(包含
+      `systemctl enable`)。如果放著不管,重開機後 gonasd 不會自動
+      啟動,直接違背「開機就是一台 GoNAS」的目標。已經在
+      `late-command.sh` 裡補上一段獨立的 `systemctl enable
+      gonas.service`(理由見該檔案的新註解:enable 對一個簡單
+      `[Install] WantedBy=` unit 而言只是操作檔案系統 symlink,不需要
+      真正在跑的 systemd 執行個體,deb-systemd-helper 在套件安裝腳本
+      chroot 環境裡設定服務開機啟動用的是同一個機制),但這個補救
+      步驟本身**完全沒有驗證過是否在真實環境下真的生效**——第一次
+      在 QEMU 裡開機測試時,`systemctl is-enabled gonas` 是否回傳
+      `enabled` 是最優先要確認的一項,見
+      `build/appliance/README.md`「如何驗證」一節第 4 點。
 - [x] ✅ **`overlay/usr/local/sbin/gonas-console` 腳本本身的邏輯**
       (不透過 ISO 開機,單獨執行這支 shell script 驗證):在這個沙盒
       裡直接執行過兩次——一次 PATH 上完全沒有 `gonasd` 時,正確顯示

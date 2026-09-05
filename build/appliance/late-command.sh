@@ -53,6 +53,45 @@ else
     exit 1
 fi
 
+# --- 1.5. 確保 gonas.service 真的被設成開機啟動 --------------------
+# 這一步是刻意補上的,理由值得說清楚:install.sh 自己的 systemd 整合
+# 邏輯是用 `[ -d /run/systemd/system ]` 判斷「這台機器有沒有一個真正
+# 在跑的 systemd」,這是為了在沒有 systemd 的環境(例如某些容器)下
+# 優雅跳過,不讓整支腳本因為連不上 systemd 而中止。但這裡(late_command
+# 透過 debian-installer 的 in-target 執行)剛好就是這種情況會被誤判的
+# 案例:目標系統的 systemd 套件明明已經裝好了,只是這個 chroot 環境
+# 本身沒有一個真正在跑的 systemd 實例(那是 d-i 自己的臨時環境,不是
+# 裝好的目標系統開機之後的樣子)—— `/run/systemd/system` 因此不存在,
+# install.sh 就會整段跳過,包括 `systemctl enable`,不只是它跳過的
+# `systemctl restart`(這裡沒有真正在跑的 systemd 可以 restart,跳過
+# 是對的)。如果不額外處理,重開機之後 systemd 真的開始跑了,但
+# gonas.service 從來沒被 enable 過,使用者看到的會是「開機了,但
+# gonasd 沒有自動啟動」——直接違背這個 Phase 的目標。
+#
+# 解法:不管 install.sh 剛剛有沒有走到它自己的 systemd 分支,這裡都
+# 明確再對 gonas.service 做一次 `systemctl enable`。這樣做是安全的,
+# 原因是 `systemctl enable` 對一個只有簡單 `[Install] WantedBy=` 的
+# unit 而言,純粹是在檔案系統上建立/移除 symlink,不需要真的連上一個
+# 在跑的 systemd 執行個體(deb-systemd-helper、dpkg 套件安裝腳本在
+# chroot 環境裡設定服務開機啟動,靠的就是同一個機制)——下面對
+# `getty@tty1.service`/`gonas-console.service` 做的 disable/mask/
+# enable 也是同一個道理,這裡只是把同樣的處理方式也套用在
+# gonas.service 上,確保跟 install.sh 本身的行為不衝突、又補上它在
+# 這個特定執行環境下漏掉的一步。
+GONAS_UNIT_SRC="$RELEASE_DIR/gonas.service"
+if [ -f "$GONAS_UNIT_SRC" ] && command -v systemctl >/dev/null 2>&1; then
+    cp "$GONAS_UNIT_SRC" /etc/systemd/system/gonas.service
+    chmod 0644 /etc/systemd/system/gonas.service
+    systemctl daemon-reload 2>/dev/null || true
+    if systemctl enable gonas.service 2>/dev/null; then
+        log "gonas.service enabled for boot (independent of install.sh's own systemd detection)"
+    else
+        log "WARNING: 'systemctl enable gonas.service' failed in this chroot — verify manually after first boot with 'systemctl is-enabled gonas.service'"
+    fi
+else
+    log "WARNING: $GONAS_UNIT_SRC not found or systemctl unavailable — could not confirm gonas.service is enabled for boot"
+fi
+
 # --- 2. tty1 狀態主控台 -------------------------------------------
 OVERLAY_DIR="$GONAS_DIR/overlay"
 if [ -d "$OVERLAY_DIR" ]; then
