@@ -163,17 +163,81 @@ func (s *Server) handleMonitorNotifiersDelete(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// rebuildNotifier 依照目前持久化的 webhook 設定重新組出 AlertEngine 要用
-// 的 Notifier,永遠包含一個 LogNotifier 保底,再加上每個已啟用的
-// webhook —— 新增/刪除通知端點之後都要呼叫這個方法,daemon 剛啟動時
-// 也是靠它從 state.json 裡讀回既有設定。
+func (s *Server) handleMonitorEmailNotifiersList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.Snapshot().EmailNotifiers)
+}
+
+func (s *Server) handleMonitorEmailNotifiersCreate(w http.ResponseWriter, r *http.Request) {
+	var cfg monitor.EmailConfig
+	if !readJSON(w, r, &cfg) {
+		return
+	}
+	cfg.ID = newID()
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	if err := s.store.Update(func(st *state.State) error {
+		st.EmailNotifiers = append(st.EmailNotifiers, cfg)
+		return nil
+	}); err != nil {
+		s.logger.Error("persisting email notifier config failed", "err", err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	s.rebuildNotifier()
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+func (s *Server) handleMonitorEmailNotifiersDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	found := false
+	if err := s.store.Update(func(st *state.State) error {
+		kept := st.EmailNotifiers[:0]
+		for _, n := range st.EmailNotifiers {
+			if n.ID == id {
+				found = true
+				continue
+			}
+			kept = append(kept, n)
+		}
+		st.EmailNotifiers = kept
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errEmailNotifierNotFound)
+		return
+	}
+
+	s.rebuildNotifier()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rebuildNotifier 依照目前持久化的 webhook/email 設定重新組出
+// AlertEngine 要用的 Notifier,永遠包含一個 LogNotifier 保底,再加上
+// 每個已啟用的 webhook 跟 email 管道 —— 新增/刪除任一種通知端點之後
+// 都要呼叫這個方法,daemon 剛啟動時也是靠它從 state.json 裡讀回既有
+// 設定。
 func (s *Server) rebuildNotifier() {
 	notifiers := []monitor.Notifier{monitor.NewLogNotifier(s.logger)}
-	for _, cfg := range s.store.Snapshot().Notifiers {
+	snap := s.store.Snapshot()
+	for _, cfg := range snap.Notifiers {
 		if !cfg.Enabled {
 			continue
 		}
 		notifiers = append(notifiers, monitor.NewWebhookNotifier(cfg, nil))
+	}
+	for _, cfg := range snap.EmailNotifiers {
+		if !cfg.Enabled {
+			continue
+		}
+		notifiers = append(notifiers, monitor.NewEmailNotifier(cfg, nil))
 	}
 	s.alertEngine.SetNotifier(monitor.MultiNotifier{Notifiers: notifiers})
 }

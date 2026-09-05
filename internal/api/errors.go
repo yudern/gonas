@@ -13,6 +13,9 @@ var (
 	errAlertRuleNotFound  = errors.New("no alert rule with that id")
 	errNotifierNotFound   = errors.New("no notifier with that id")
 
+	// Phase 14：email 通知管道共用的 sentinel 錯誤。
+	errEmailNotifierNotFound = errors.New("no email notifier with that id")
+
 	// Phase 6：身分驗證、HTTPS、WireGuard 共用的 sentinel 錯誤。
 	errNotAuthenticated       = errors.New("not authenticated: please log in")
 	errAdminAlreadyConfigured = errors.New("an admin account already exists")

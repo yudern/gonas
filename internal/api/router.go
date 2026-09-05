@@ -216,6 +216,9 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/monitor/notifiers", s.requireAuth(s.handleMonitorNotifiersList))
 	mux.HandleFunc("POST /api/v1/monitor/notifiers", s.requireAdmin(s.handleMonitorNotifiersCreate))
 	mux.HandleFunc("DELETE /api/v1/monitor/notifiers/{id}", s.requireAdmin(s.handleMonitorNotifiersDelete))
+	mux.HandleFunc("GET /api/v1/monitor/email-notifiers", s.requireAuth(s.handleMonitorEmailNotifiersList))
+	mux.HandleFunc("POST /api/v1/monitor/email-notifiers", s.requireAdmin(s.handleMonitorEmailNotifiersCreate))
+	mux.HandleFunc("DELETE /api/v1/monitor/email-notifiers/{id}", s.requireAdmin(s.handleMonitorEmailNotifiersDelete))
 
 	mux.HandleFunc("GET /api/v1/backup/jobs", s.requireAuth(s.handleBackupJobsList))
 	mux.HandleFunc("POST /api/v1/backup/jobs", s.requireAdmin(s.handleBackupJobsCreate))

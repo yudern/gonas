@@ -1288,11 +1288,12 @@ function isBooleanMetric(metric) {
 }
 
 async function renderMonitor(el) {
-  const [system, history, rules, notifiers] = await Promise.all([
+  const [system, history, rules, notifiers, emailNotifiers] = await Promise.all([
     api.monitorSystem().catch(() => null),
     api.monitorHistory().catch(() => []),
     api.alertRules().catch(() => []),
     api.notifiers().catch(() => []),
+    api.emailNotifiers().catch(() => []),
   ]);
 
   el.innerHTML = `
@@ -1357,6 +1358,29 @@ async function renderMonitor(el) {
         <div class="field"><label>${esc(t("monitor.webhookUrl"))}</label><input type="text" name="url" placeholder="https://example.com/hook" required></div>
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
         <div class="btn-row"><button type="submit">${esc(t("monitor.addNotifier"))}</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>${esc(t("monitor.emailNotifiers", { n: emailNotifiers.length }))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.emailNotifiersHint"))}</p>
+      ${emailNotifiers.length ? emailNotifiers.map((n) => renderEmailNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noEmailNotifiers"))}</p>`}
+      <div id="email-notifier-msg"></div>
+      <form class="stacked" id="email-notifier-form" style="margin-top:16px">
+        <div class="field"><label>${esc(t("monitor.notifierName"))}</label><input type="text" name="name" placeholder="${esc(t("monitor.emailNamePlaceholder"))}" required></div>
+        <div class="field"><label>${esc(t("monitor.smtpHost"))}</label><input type="text" name="smtpHost" placeholder="smtp.gmail.com" required></div>
+        <div class="field"><label>${esc(t("monitor.smtpPort"))}</label><input type="number" name="smtpPort" placeholder="587" value="587" required></div>
+        <div class="field"><label>${esc(t("monitor.smtpUsername"))}</label><input type="text" name="username" autocomplete="off"></div>
+        <div class="field"><label>${esc(t("monitor.smtpPassword"))}</label><input type="password" name="password" autocomplete="off"></div>
+        <div class="hint">${esc(t("monitor.smtpPasswordHint"))}</div>
+        <div class="field"><label>${esc(t("monitor.emailFrom"))}</label><input type="text" name="from" placeholder="gonas@example.com" required></div>
+        <div class="field">
+          <label>${esc(t("monitor.emailTo"))}</label>
+          <input type="text" name="to" placeholder="alice@example.com, bob@example.com" required>
+          <div class="hint">${esc(t("monitor.emailToHint"))}</div>
+        </div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
+        <div class="btn-row"><button type="submit">${esc(t("monitor.addEmailNotifier"))}</button></div>
       </form>
     </div>
   `;
@@ -1433,6 +1457,41 @@ async function renderMonitor(el) {
       box.innerHTML = msg("error", err.message);
     }
   });
+
+  el.querySelectorAll("[data-del-email-notifier]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api.deleteEmailNotifier(btn.dataset.delEmailNotifier);
+        await renderMonitor(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+      }
+    });
+  });
+
+  el.querySelector("#email-notifier-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#email-notifier-msg");
+    const to = f.get("to").split(",").map((s) => s.trim()).filter(Boolean);
+    const notifier = {
+      name: f.get("name").trim(),
+      smtpHost: f.get("smtpHost").trim(),
+      smtpPort: Number(f.get("smtpPort")),
+      username: f.get("username").trim(),
+      password: f.get("password"),
+      from: f.get("from").trim(),
+      to,
+      enabled: f.get("enabled") === "on",
+    };
+    try {
+      await api.createEmailNotifier(notifier);
+      box.innerHTML = msg("ok", t("monitor.notifierAdded"));
+      await renderMonitor(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
 }
 
 function formatPercent(v) {
@@ -1476,6 +1535,21 @@ function renderNotifierRow(n) {
         </div>
       </div>
       <button class="secondary" data-del-notifier="${esc(n.id)}">${esc(t("common.delete"))}</button>
+    </div>`;
+}
+
+function renderEmailNotifierRow(n) {
+  const to = Array.isArray(n.to) ? n.to.join(", ") : "";
+  return `
+    <div class="rule-row">
+      <div class="rule-main">
+        <span class="pill ${n.enabled ? "ok" : "neutral"}">${n.enabled ? esc(t("monitor.notifierEnabled")) : esc(t("monitor.notifierDisabled"))}</span>
+        <div>
+          <div class="rule-name">${esc(n.name)}</div>
+          <div class="rule-cond">${esc(n.smtpHost)}:${esc(n.smtpPort)} → ${esc(to)}</div>
+        </div>
+      </div>
+      <button class="secondary" data-del-email-notifier="${esc(n.id)}">${esc(t("common.delete"))}</button>
     </div>`;
 }
 

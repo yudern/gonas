@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 13 完成 — 多管理帳號與管理者/檢視者權限
+## 目前狀態:Phase 14 完成 — 告警的 Email 通知管道
 
 **Phase 0(專案骨架)**
 
@@ -955,6 +955,62 @@ GoNAS 從 Phase 0 開始,Web 管理介面就只能有「唯一」一個登入帳
   測試涵蓋角色驗證中介層本身、帳號建立的唯一性/角色合法性檢查、自刪
   防護、最後一個管理者防護的邏輯,以及舊版 `state.json` 單一帳號欄位
   的升級遷移(含缺少 `Role` 欄位的更舊資料)。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
+
+**Phase 14(告警的 Email 通知管道)—— 按之前列出的優先級清單接續
+處理的下一項**
+
+GoNAS 從 Phase 5 開始,告警觸發/解除時就能寫 log、也能打一個使用者
+自訂的 webhook——但沒辦法直接寄信通知,對很多不想額外接 Slack/
+Discord、只想「陣列出事時收到一封信」的使用者來說是明顯的缺口。
+這次補上一個獨立的 Email 通知管道,跟既有的 webhook 通知並存,規則
+觸發時兩種管道都會各自收到通知,一個掛掉不影響另一個。
+
+- **`internal/monitor/email.go`**:新增 `EmailConfig`(SMTP 主機/連接埠
+  /使用者名稱/密碼/寄件人/收件人清單)跟 `EmailNotifier`,跟既有的
+  `WebhookConfig`/`WebhookNotifier` 是完全平行的設計,一樣實作
+  `Notifier` 介面,一樣有一個不碰網路的 `Validate()` 做靜態欄位檢查。
+  刻意不用任何第三方郵件套件,純用標準函式庫的 `net/smtp`——跟這個
+  專案其他地方(`internal/docker`、`WebhookNotifier`)一致的取捨。
+  `net/smtp` 本身沒有 `context` 支援,這裡用 `net.Dialer.DialContext`
+  自己接手建立連線再交給 `smtp.NewClient`,讓「連線」這一步至少能被
+  `ctx` 真正取消/逾時。支援伺服器有廣播才嘗試的機會性 STARTTLS(大多數
+  郵件服務商如 Gmail、Office 365 都要求先升級成加密連線才准許
+  AUTH),没有廣播的內網中繼則照常用明文完成 AUTH/MAIL/RCPT/DATA。
+  組出的是最小、合法的純文字 RFC 5322 郵件(標頭 + 空行 + 內文),沒有
+  做 HTML 郵件排版——告警通知的內容本來就單純,純文字更不容易被垃圾
+  信過濾器攔截,也不會有 HTML 郵件常見的跑版問題。
+- **一個無法迴避、誠實記錄下來的取捨**:SMTP 密碼沒辦法像登入密碼
+  那樣只存雜湊值——每次寄信都要拿它去跟 SMTP 伺服器做身分驗證,伺服器
+  端沒辦法反推雜湊值回明文,這是 SMTP 這個協定本身的限制。`state.json`
+  裡這組密碼是明文存放,前端表單旁邊有清楚的提示,並建議使用者用郵件
+  服務商提供的「應用程式專用密碼」而不是帳號本身的登入密碼,這樣萬一
+  `state.json` 外洩,损害範圍只限於「能代替使用者寄信」,不會連帶洩漏
+  使用者自己信箱帳號的真正登入密碼。
+- **API 與前端**:新增 `GET/POST /api/v1/monitor/email-notifiers`、
+  `DELETE /api/v1/monitor/email-notifiers/{id}`,跟既有 webhook 通知
+  端點的權限模型一致(讀取 `requireAuth`、新增/刪除 `requireAdmin`,
+  沿用 Phase 13 的角色邊界)。`rebuildNotifier()` 現在會同時把已啟用的
+  webhook 跟 email 設定組進同一個 `MultiNotifier`,一個管道的失敗
+  (webhook 端點掛了、SMTP 連不上)不會擋住另一個管道,也不會擋住保底
+  的 log 記錄。監控頁面新增一張「Email 通知」卡片,跟 webhook 通知卡片
+  並列,三種語言都已翻譯,包含 SMTP 密碼欄位旁的安全性提示文字。
+- **真實驗證**:這台沙盒的網路白名單連不到任何真正的外部郵件服務,
+  沒辦法像 webhook 那樣直接打真正的 Slack/Discord 端點驗證,但用一個
+  跑在 `127.0.0.1`、講真正 SMTP 文字協定的假伺服器(不是繞過網路層、
+  只驗證 Go 函式呼叫參數的 mock)做了完整驗證——包含一支 Go 測試
+  (`internal/monitor/email_test.go`)完整跑過 EHLO/AUTH PLAIN/
+  MAIL FROM/RCPT TO/DATA 的交握並驗證收到的內容,以及對著一個真正在跑
+  的 `gonasd`:建立會立刻觸發的告警規則、指向這個假伺服器的 email
+  通知設定,實際等待 `AlertEngine` 的輪詢真的跑起來、透過真實 TCP
+  連線完成整個 SMTP 交握,確認假伺服器收到的信件標題跟內文正確帶有
+  規則名稱、指標、數值、FIRING 狀態。也驗證了 RoleViewer 對這兩支新
+  端點一樣收到 403、刪除/列出功能正常運作。另外用 Playwright 在三種
+  語言下驗證監控頁面的 Email 通知卡片能正常新增/列出/刪除,文字正確
+  翻譯,沒有殘留錯誤語言或非預期的 console 錯誤。**明確記錄的限制**:
+  對著真正的郵件服務商(尤其是需要 STARTTLS 才能完成 AUTH 的路徑)
+  送信還沒有真的驗證過,列在 `docs/REAL_HARDWARE_TESTING.md` 提醒
+  真機上補測。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
 
 ## 開發

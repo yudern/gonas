@@ -90,6 +90,9 @@ export const api = {
   notifiers: () => request("GET", "/api/v1/monitor/notifiers"),
   createNotifier: (notifier) => request("POST", "/api/v1/monitor/notifiers", notifier),
   deleteNotifier: (id) => request("DELETE", `/api/v1/monitor/notifiers/${encodeURIComponent(id)}`),
+  emailNotifiers: () => request("GET", "/api/v1/monitor/email-notifiers"),
+  createEmailNotifier: (notifier) => request("POST", "/api/v1/monitor/email-notifiers", notifier),
+  deleteEmailNotifier: (id) => request("DELETE", `/api/v1/monitor/email-notifiers/${encodeURIComponent(id)}`),
 
   authStatus: () => request("GET", "/api/v1/auth/status"),
   authSetup: (username, password) => request("POST", "/api/v1/auth/setup", { username, password }),

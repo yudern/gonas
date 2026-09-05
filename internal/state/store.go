@@ -27,17 +27,18 @@ import (
 // (空陣列/nil pool),這樣全新安裝、還沒有 state.json 檔案時可以直接用
 // 零值 State{} 開始運作,不需要特殊的「第一次執行」邏輯。
 type State struct {
-	Pool          *storage.PoolConfig     `json:"pool,omitempty"`
-	Shares        []share.Share           `json:"shares"`
-	Exports       []share.Export          `json:"exports"`
-	Users         []UserRecord            `json:"users"`
-	InstalledApps []InstalledApp          `json:"installedApps"`
-	AlertRules    []monitor.AlertRule     `json:"alertRules"`
-	Notifiers     []monitor.WebhookConfig `json:"notifiers"`
-	Admins        []AdminAccount          `json:"admins"`
-	HTTPS         HTTPSConfig             `json:"https"`
-	WireGuard     *wireguard.Config       `json:"wireGuard,omitempty"`
-	BackupJobs    []backup.Job            `json:"backupJobs"`
+	Pool           *storage.PoolConfig     `json:"pool,omitempty"`
+	Shares         []share.Share           `json:"shares"`
+	Exports        []share.Export          `json:"exports"`
+	Users          []UserRecord            `json:"users"`
+	InstalledApps  []InstalledApp          `json:"installedApps"`
+	AlertRules     []monitor.AlertRule     `json:"alertRules"`
+	Notifiers      []monitor.WebhookConfig `json:"notifiers"`
+	EmailNotifiers []monitor.EmailConfig   `json:"emailNotifiers"`
+	Admins         []AdminAccount          `json:"admins"`
+	HTTPS          HTTPSConfig             `json:"https"`
+	WireGuard      *wireguard.Config       `json:"wireGuard,omitempty"`
+	BackupJobs     []backup.Job            `json:"backupJobs"`
 }
 
 // AdminAccount 是 Web 管理介面的一個登入帳號(跟 share.User 那種系統/
@@ -140,6 +141,9 @@ func (st *State) normalize() {
 	}
 	if st.Notifiers == nil {
 		st.Notifiers = []monitor.WebhookConfig{}
+	}
+	if st.EmailNotifiers == nil {
+		st.EmailNotifiers = []monitor.EmailConfig{}
 	}
 	if st.Admins == nil {
 		st.Admins = []AdminAccount{}
