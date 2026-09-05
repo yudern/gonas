@@ -1294,6 +1294,51 @@ SSH 進機器手動跑 `install.sh`。這個流程本身沒問題,但對一個�
   驗證過整個流程,細節列在 `docs/REAL_HARDWARE_TESTING.md`。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
 
+**Phase 17 後續補測 —— 針對上面明確記錄的限制,再補一輪真實驗證**
+
+按照上面誠實記下的限制清單,逐項再補測一次(細節都在
+`docs/REAL_HARDWARE_TESTING.md` 的「9. gonasd 自我更新」章節):
+
+- **跨架構設定錯誤**:架一份只列出 `linux-arm64` 的 manifest(這台
+  沙盒是 linux-amd64),確認 `handleSystemUpdateApply` 不會誤套用或
+  崩潰——正確回報「manifest has no asset for platform
+  "linux-amd64"」,執行檔跟程序完全沒被動到,失敗後立刻重試也不會被
+  「已經有更新在跑」的鎖卡住。沒有涵蓋到的部分:manifest 正確列出
+  arm64、在真正的 arm64 環境上把它下載回來執行成功的正向情境(這台
+  沙盒沒有 arm64 硬體/QEMU)。
+- **Docker 容器化部署 gonasd 本身**:在沙盒裡啟動一個真正的
+  `dockerd`,把 `gonasd` 包成一個 `FROM scratch`(不需要拉遠端映像層)
+  的容器、以 PID 1 執行,對著容器裡真正跑的 gonasd 完整走一次自我
+  更新流程。`docker inspect` 確認 `RestartCount=0`、容器啟動時間
+  完全沒變,證明 `syscall.Exec` 換掉 PID 1 的程式映像檔這件事,從
+  Docker 引擎角度完全不可見,不算一次容器重啟——這正是這個功能設計
+  時「三種部署方式都要能正常運作」的核心假設之一,現在有真的容器
+  環境驗證過。
+- **手動復原流程**:對著一個真正在跑的 gonasd 完整走一次「套用成功
+  → kill 程序 → 手動 `mv gonasd.previous gonasd` → 重新啟動」,確認
+  版本號正確退回、`state.json`(帳號、設定)完全沒受影響。目前確實
+  還沒有「一鍵復原」的 API/UI,這只是確認手動流程本身是可行的。
+- **大檔案下載**:把一份真實編譯的執行檔補上隨機資料撐到剛好
+  100 MiB(附加資料不影響 ELF 可執行性),算真正的 SHA-256、透過真正
+  的 HTTP 伺服器提供下載,完整跑一次檢查/套用流程——不到 1 秒完成,
+  沒有記憶體暴增或邏輯錯誤。沒有涵蓋到真實、不穩定跨網段連線品質下
+  的行為。
+- **併發/資料競爭掃描**:對整個 repo 跑了一次
+  `go test ./... -race -count=1`,涵蓋這次新增的
+  `selfupdate.Checker`/`Server.applyMu`/`restartRequested` 這些併發
+  狀態——沒有發現任何 data race。
+- **仍然沒辦法在這個沙盒裡驗證的部分**:真正由 systemd 監督(PID 1
+  是 systemd)的安裝方式——這個開發沙盒本身的 PID 1 就不是
+  systemd(`systemctl` 直接回報「System has not been booted with
+  systemd as init system」),沒辦法在不弄壞沙盒本身的前提下臨時
+  「假裝」有一個真正的 systemd 環境,誠實地維持標記成未驗證,而不是
+  做一個看起來測過、實際上沒有真正 systemd 介入的假測試。上面 Docker
+  的驗證已經間接證明「外部監督者感知不到 `syscall.Exec`」這個核心
+  假設在另一種真實監督情境下成立,原理上 systemd 應該一致,但這一項
+  仍然值得在真機上補一次。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠
+  (這輪沒有動到程式碼,只有跑驗證跟補文件)。
+
 ## 開發
 
 需要 Go 1.22 以上(本機驗證於 go1.24.7)。

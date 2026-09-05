@@ -404,51 +404,83 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       完全測不出問題,只有這種「真的啟動一個程序、真的讓它自我更新
       重啟」的驗證才抓得到,修好之後重跑同樣流程確認 `ps`/
       `/proc/<pid>/comm` 顯示的執行檔名稱正確、不是 `.previous`。
-- [ ] 這次的端到端驗證是在同一台機器、同一個 CPU 架構
-      (linux/amd64)上,用兩個版本號不同但架構相同的執行檔做的。
-      沒有驗證跨架構的情境:例如 manifest 裡同時列出
-      `linux-amd64`/`linux-arm64` 兩份資產,在一台 arm64 機器上執行
-      `handleSystemUpdateApply` 是否真的抓到 `linux-arm64` 這一份、
-      而不是不小心抓錯或漏抓——`Manifest.AssetFor` 的查表邏輯本身有
-      單元測試涵蓋,但沒有用真正跨架構、真的能執行的兩份二進位檔
-      驗證過完整流程(這台沙盒沒有 arm64 的真實硬體/QEMU 使用者態
-      模擬環境可以真的執行 arm64 執行檔)。
-- [ ] 沒有在真正由 systemd 監督(`Restart=on-failure` 之類的重啟策略
-      生效中)的安裝方式底下驗證過自我更新——這次的驗證都是直接在
-      終端機執行 `gonasd`(前景/`nohup` 背景皆有測過),`syscall.Exec`
-      理論上因為是同一個 PID 上原地換掉程式映像檔,systemd 應該完全
-      感知不到「程序其實換了一份新的可執行檔內容」這件事、不會觸發
-      任何重啟策略介入,但這個假設值得在一台真正裝了
+- [x] ✅ **跨架構設定錯誤的處理**:架了一個 manifest 只列出
+      `linux-arm64`(這台沙盒是 linux-amd64),確認
+      `POST /api/v1/system/update/apply` 不會誤套用或崩潰——
+      `applyStatus` 正確標記成 `failed`,錯誤訊息明確指出
+      `manifest has no asset for platform "linux-amd64"`,而且執行檔/
+      程序完全沒被動到(PID、版本號都沒變),`GET
+      /api/v1/system/update` 能查到這個失敗原因。額外確認了失敗之後
+      立刻重新呼叫 apply 不會被「已經有更新在背景執行」的鎖卡住
+      (`applyStageFailed` 視為可重試狀態)。**仍然沒有驗證的部分**:
+      這只驗證了「manifest 不包含目前平台」這個設定錯誤的處理,沒有
+      驗證「manifest 正確列出 arm64、在一台真正的 arm64 機器/QEMU
+      使用者態模擬環境上真的把 arm64 執行檔下載回來並成功執行」這個
+      正向情境(這台沙盒沒有 arm64 硬體或 `qemu-user-static`)。
+- [x] ✅ **Docker 容器化部署 gonasd 本身**(不是 GoNAS 管理的那些 App
+      商店容器,而是 gonasd 自己被包進 Docker 容器、以 PID 1 執行):
+      在這台沙盒裡實際啟動了一個真正的 `dockerd`,把一份真實編譯的
+      `gonasd`(`CGO_ENABLED=0`,`FROM scratch` 基礎映像,不需要拉取
+      任何遠端映像層)跑成容器、以 `--network host` 對著容器裡的
+      gonasd 打真正的 REST API,完整走一次檢查/套用流程。結果:
+      `docker inspect` 顯示 `RestartCount=0`、容器啟動時間
+      (`StartedAt`)完全沒變、`docker logs` 裡看得到 gonasd 自己記錄
+      的「重新啟動」訊息,證明 `syscall.Exec` 換掉 PID 1 的程式映像檔
+      這件事,從 Docker 引擎的角度完全不可見——不會觸發任何重啟策略、
+      不算一次容器重啟。`docker cp` 把容器裡的執行檔跟 `.previous`
+      備份都複製出來直接執行確認版本號,兩份都正確。overlayfs 這種
+      常見的容器儲存驅動下,`os.Rename` 的原子置換假設也確認成立。
+      **仍然沒有驗證的部分**:這次用的是預設的 overlayfs 儲存驅動、
+      預設可寫的根檔案系統;沒有驗證「唯讀根檔案系統 + 額外掛載一個
+      可寫層」這種更嚴格的容器安全性設定下(例如
+      `docker run --read-only`),執行檔所在目錄是否還可寫、置換是否
+      還能成功——這種設定下大概率會直接寫入失敗,`DownloadAndVerify`
+      應該會在 `os.MkdirAll`/`os.CreateTemp` 那一步就乾淨地回報錯誤
+      (不會半途損毀任何東西),但這個失敗路徑本身沒有真的驗證過。
+- [ ] **仍然沒有驗證的部分**:沒有在真正由 systemd 監督(PID 1 是
+      systemd、`Restart=on-failure` 之類的重啟策略生效中)的安裝方式
+      底下驗證過自我更新。這次嘗試過在這個沙盒裡跑 `systemctl`,
+      結果是「System has not been booted with systemd as init system
+      (PID 1)」——這個容器化的開發沙盒本身的 PID 1 不是 systemd,
+      沒有辦法在不弄壞沙盒本身的前提下臨時「假裝」有一個真正在跑的
+      systemd 環境,所以這一項**維持誠實地標記為未驗證,而不是硬做一
+      個看起來像但實際上沒有真正 systemd 監督的假測試**。上面 Docker
+      容器化那一項已經間接證明「`syscall.Exec` 對外部監督者(Docker
+      引擎)完全不可見」這個核心假設在另一種真實的監督情境下成立,
+      systemd 的情況原理相同(`syscall.Exec` 不改變 PID、不觸發
+      `exit`/`fork` 事件),但仍然值得在一台真正裝了
       `build/systemd/gonas.service`、`systemctl start gonas` 啟動的
-      機器上實際驗證一次:套用更新的過程中 `systemctl status gonas`
-      顯示的 PID 應該完全不變,`journalctl -u gonas` 的日誌應該連續
-      不中斷(沒有「服務停止→重新啟動」這種 systemd 自己記錄的事件)。
-- [ ] 沒有在 Docker 容器化部署 gonasd 本身(不是指 GoNAS 管理的那些
-      App 商店容器,而是 gonasd 自己被包進一個 Docker 容器執行)的
-      情境下驗證過——這種部署方式下,容器裡 PID 1 通常就是 gonasd
-      自己,`syscall.Exec` 換掉 PID 1 的程式映像檔在 Linux 上是合法
-      操作,但容器執行環境(尤其是唯讀根檔案系統 + 額外掛載可寫層
-      這類常見的容器安全性設定)下,執行檔所在目錄是否真的可寫、
-      `os.Rename` 的原子性假設在該掛載層上是否依然成立,都需要在真正
-      的容器環境驗證,不能想當然爾。
-- [ ] 沒有驗證「套用更新失敗後手動用 `.previous` 備份檔案復原」這個
-      使用者側的操作流程——`ApplyUpdate` 目前只有在自己緊接著的
-      置換步驟失敗時,才會自動嘗試把備份還原回去;如果失敗發生在更
-      早期(例如下載或驗證失敗),`.previous` 備份根本還沒被建立,
-      不需要復原。但如果使用者是在套用成功、新版本啟動之後,才發現
-      新版本本身有問題想手動降級,目前完全沒有一個「一鍵復原」的
-      API 或 UI,只能靠使用者自己 SSH 進機器,手動
-      `mv gonasd.previous gonasd` 再重啟服務——這個手動流程本身沒有
-      被自動化測試覆蓋過,值得在真機上跑一次確認可行,並評估要不要
-      在之後的 Phase 补一個「復原到上一個版本」的 API/UI。
-- [ ] 沒有驗證過下載一份**真的**幾十到接近 200 MiB
-      (`internal/selfupdate.maxDownloadBytes` 的上限)大小的執行檔,
-      在真實(非 loopback)網路環境、可能不穩定的連線品質下,
-      `DownloadAndVerify` 的行為——這台沙盒的驗證用的是幾 KB 到十幾
-      MB 等級的真實 gonasd 執行檔跟 loopback 網路,沒有真的測過大檔案
-      跨網段下載中途網路中斷、`updateHTTPTimeout`(5 分鐘)是否對
-      真實網速環境(尤其是使用者自己架設在較慢頻寬伺服器上的
-      manifest 主機)是合理的數字。
+      機器上補一次:套用更新過程中 `systemctl status gonas` 顯示的
+      PID 應該完全不變,`journalctl -u gonas` 的日誌應該連續不中斷。
+- [x] ✅ **手動復原流程**:對著一個真正在跑的 gonasd 完整走過一次
+      「套用更新成功 → 模擬使用者發現新版本有問題 → 手動 kill 程序 →
+      `mv gonasd.previous gonasd` → 重新啟動」的完整手動復原流程,
+      確認復原後 `GET /api/v1/version` 正確回報回舊版本號,而且
+      `state.json`(管理者帳號、更新來源設定等)完全沒受影響——因為
+      只有執行檔本身被置換,資料目錄從頭到尾沒被動過。這確認了
+      README/`install.sh` 目前記錄的手動降級步驟是可行的。**仍然
+      沒有解決的部分**:目前確實還沒有「一鍵復原」的 API/UI,使用者
+      發現新版本有問題只能照上面這個手動流程做,值得評估要不要在
+      之後的 Phase 補一個「復原到上一個版本」的按鈕。
+- [x] ✅ **大檔案下載**:用一份真實編譯的 gonasd 執行檔、在尾端補上
+      隨機資料撐到剛好 100 MiB(附加在 ELF 有效內容之後的資料不影響
+      可執行性,補完之後 `-version` 依然正常執行),算出真正的
+      SHA-256,透過真正的 HTTP 伺服器提供下載,對一個真正在跑的
+      gonasd 完整走一次檢查/套用流程——下載、校驗、置換、重啟整個
+      流程在 loopback 網路下不到 1 秒完成,確認 `DownloadAndVerify`
+      處理百 MB 級檔案沒有記憶體暴增或邏輯錯誤,`updateHTTPTimeout`
+      (5 分鐘)在這個量級下留有非常寬裕的餘裕。**仍然沒有驗證的
+      部分**:這是 loopback 網路,沒有測過真實、可能不穩定的跨網段
+      連線品質下(例如下載到一半網路中斷、DNS 解析很慢)的行為——
+      程式碼邏輯上 `io.Copy` 遇到連線中斷會回傳 `err`,`DownloadAndVerify`
+      會清掉暫存檔並回傳錯誤,不會留下半下載的檔案,但沒有用真正
+      不穩定的網路環境驗證過這個路徑。
+- [x] ✅ **併發/資料競爭掃描**:對整個 repo(不只是 Phase 17 新增的
+      程式碼)跑了一次 `go test ./... -race -count=1`,涵蓋
+      `internal/selfupdate.Checker`(mutex 保護 `latest`)、
+      `internal/api.Server` 新增的 `applyMu`/`applyStatus`、
+      `restartRequested` channel 這些新的併發狀態——沒有發現任何
+      data race。
 
 ## 完成之後
 
