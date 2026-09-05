@@ -54,6 +54,8 @@ export const api = {
   containers: () => request("GET", "/api/v1/docker/containers"),
   images: () => request("GET", "/api/v1/docker/images"),
   networks: () => request("GET", "/api/v1/docker/networks"),
+  containerLogs: (id, tail) => request("GET", `/api/v1/docker/containers/${encodeURIComponent(id)}/logs${tail ? `?tail=${encodeURIComponent(tail)}` : ""}`),
+  containerExec: (id, cmd) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/exec`, { cmd }),
 
   catalog: () => request("GET", "/api/v1/appstore/catalog"),
   installedApps: () => request("GET", "/api/v1/appstore/apps"),

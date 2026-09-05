@@ -331,12 +331,23 @@ async function renderApps(el) {
       <h2>已安裝(${installed.length})</h2>
       ${installed.length ? installed.map((app) => `
         <div class="app-card">
-          <div>
-            <h3>${esc(app.template.name)}</h3>
-            <p>${esc(app.template.description || "")}</p>
-            <div class="services">${Object.entries(app.result.containerIds || {}).map(([svc, id]) => `${esc(svc)}: ${esc(id.slice(0, 12))}`).join(" · ")}</div>
+          <div class="app-card-main">
+            <div>
+              <h3>${esc(app.template.name)}</h3>
+              <p>${esc(app.template.description || "")}</p>
+            </div>
+            <button class="danger" data-uninstall="${esc(app.template.id)}">解除安裝</button>
           </div>
-          <button class="danger" data-uninstall="${esc(app.template.id)}">解除安裝</button>
+          <div class="services">
+            ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => `
+              <div class="service-row">
+                <span>${esc(svc)}: ${esc(id.slice(0, 12))}</span>
+                <button type="button" data-logs-toggle="${esc(id)}">查看 Log</button>
+                <button type="button" data-exec-toggle="${esc(id)}">執行指令</button>
+              </div>
+              <div class="service-panel" id="panel-${esc(id)}" hidden></div>
+            `).join("")}
+          </div>
         </div>
       `).join("") : `<p class="empty-state">還沒有安裝任何應用程式。</p>`}
     </div>
@@ -382,6 +393,13 @@ async function renderApps(el) {
         el.insertAdjacentHTML("afterbegin", msg("error", err.message));
       }
     });
+  });
+
+  el.querySelectorAll("[data-logs-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => showContainerLogsPanel(el, btn.dataset.logsToggle));
+  });
+  el.querySelectorAll("[data-exec-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => showContainerExecPanel(el, btn.dataset.execToggle));
   });
 
   el.querySelectorAll("[data-toggle-install]").forEach((btn) => {
@@ -450,6 +468,70 @@ async function renderApps(el) {
       }
     });
   }
+}
+
+// showContainerLogsPanel/showContainerExecPanel 把「查看 Log」/「執行指令」
+// 兩個按鈕的內容渲染進同一個 <div class="service-panel"> 裡 —— 每個容器
+// 共用一個面板,再按哪個按鈕就切換面板顯示的內容,而不是同時開兩個面板
+// 佔掉版面。面板本身刻意做成「按需載入」而不是列表一渲染就全部抓一輪 log
+// ——已安裝的服務可能同時有好幾個容器,沒必要每次進到應用程式頁面就對
+// 全部容器各打一次 log API。
+async function showContainerLogsPanel(el, containerID) {
+  const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `<div class="panel-header"><strong>Log(最後 200 行)</strong><button type="button" data-panel-close>關閉</button></div><pre class="log-output">載入中…</pre>`;
+  wirePanelClose(panel);
+  try {
+    const { logs } = await api.containerLogs(containerID, "200");
+    panel.querySelector(".log-output").textContent = logs || "(這個容器目前沒有任何 log 輸出)";
+  } catch (err) {
+    panel.querySelector(".log-output").textContent = "讀取 log 失敗:" + err.message;
+  }
+}
+
+function showContainerExecPanel(el, containerID) {
+  const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="panel-header"><strong>在容器裡執行一次指令</strong><button type="button" data-panel-close>關閉</button></div>
+    <p class="hint">等同 <code>docker exec</code>,指令跑完才會顯示結果,不是持續連線的終端機。用空白分隔參數,例如 <code>cat /etc/os-release</code>。</p>
+    <form class="exec-form">
+      <input type="text" name="cmd" placeholder="ls -la /data" required>
+      <button type="submit">執行</button>
+    </form>
+    <pre class="log-output" hidden></pre>
+  `;
+  wirePanelClose(panel);
+  const form = panel.querySelector(".exec-form");
+  const output = panel.querySelector(".log-output");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const raw = new FormData(form).get("cmd").trim();
+    if (!raw) return;
+    output.hidden = false;
+    output.textContent = "執行中…";
+    try {
+      const result = await api.containerExec(containerID, raw.split(/\s+/));
+      output.textContent = `結束碼:${result.exitCode}\n\n${result.output || "(沒有任何輸出)"}`;
+    } catch (err) {
+      output.textContent = "執行失敗:" + err.message;
+    }
+  });
+}
+
+function wirePanelClose(panel) {
+  panel.querySelector("[data-panel-close]").addEventListener("click", () => {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  });
+}
+
+// cssEscape 讓容器 ID(64 碼十六進位字串,理論上不會有特殊字元,但這裡
+// 保守處理)可以安全地當成 CSS ID selector 使用。
+function cssEscape(id) {
+  return (window.CSS && CSS.escape) ? CSS.escape(id) : id.replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
 // parsePortLines/parseVolumeLines/parseEnvLines 把自訂安裝表單裡的簡易

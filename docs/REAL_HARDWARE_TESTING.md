@@ -1,4 +1,4 @@
-# GoNAS 實機測試清單(Phase 9 / 9.1 / 9.2)
+# GoNAS 實機測試清單(Phase 9 / 9.1 / 9.2 / 9.3)
 
 這份清單存在的理由很直接:GoNAS 從 Phase 0 到 Phase 8 的所有開發跟驗證,
 都是在一個**沒有真實硬碟、沒有裝 mergerFS/SnapRAID/Samba/NFS/WireGuard-
@@ -133,15 +133,16 @@ Phase 9.2 用 GitHub Releases 的例外網路路徑裝上了真正的 mergerfs
 - [ ] 陣列運作中重啟 `gonasd`(不是重開機),確認陣列狀態、pool 設定從
       `state.json` 正確載回,不會要求重新設定一次。
 
-## 4. Docker / 應用程式商店(對應 Phase 2,Phase 9.1 已補上部分真實驗證)
+## 4. Docker / 應用程式商店(對應 Phase 2,Phase 9.1/9.3 已補上部分真實驗證)
 
 Phase 9.1 發現這台沙盒其實有真的 `dockerd` 可以手動啟動,已經用一個
 `FROM scratch` 建置、不需要連網就能取得的最小測試映像檔,對著真正的
 Docker Engine 完整驗證過:單/多服務自訂安裝、容器與專屬網路的建立、
 解除安裝時的清理、ID 碰撞防護、安裝失敗時的 rollback 邏輯(見
-README.md 的 Phase 9.1 段落)。下面標記 ✅ 的項目已經這樣驗證過,
-不需要在真機上重測;沒標記的項目是這台沙盒的網路政策擋掉了對外部
-registry 的存取,依然只能在真機上驗證。
+README.md 的 Phase 9.1 段落)。Phase 9.3 用同樣的手法額外驗證了容器
+log/exec 這兩個新端點。下面標記 ✅ 的項目已經這樣驗證過,不需要在
+真機上重測;沒標記的項目是這台沙盒的網路政策擋掉了對外部 registry
+的存取,依然只能在真機上驗證。
 
 - [x] ✅ `GET /api/v1/docker/ping` 對著真的在跑的 Docker daemon 確認回應
       正常。
@@ -150,6 +151,14 @@ registry 的存取,依然只能在真機上驗證。
 - [x] ✅ 安裝失敗時(例如某個服務的 image 拉不到)的 rollback:已經
       驗證過會把這次呼叫已建立的容器跟網路清乾淨,不留孤兒容器,也
       不會寫進 `state.json`。
+- [x] ✅ **容器 log/exec(Phase 9.3 新增)**:`GET .../containers/{id}/logs`
+      跟 `POST .../containers/{id}/exec` 已經用一個內含長駐程式(印
+      stdout/stderr)跟一支探針程式(印一行訊息、可選擇以失敗結束)的
+      `FROM scratch` 測試映像檔,對著真正的 Docker Engine 完整驗證
+      過:多工串流格式正確解開、`tail`/`timestamps` 參數生效、exec
+      成功/失敗的結束碼正確回傳、容器不存在時回傳有意義的錯誤,並且
+      用 Playwright 對著真正的瀏覽器跑過「查看 Log」「執行指令」兩個
+      按鈕的完整互動。
 - [ ] **仍待真機驗證**:從真正的 registry 拉一個先前沒快取過的映像檔
       安裝一個 App(內建範本或自訂 image 皆可),觀察安裝過程中 Web UI
       有沒有明顯卡住或逾時的跡象 —— 這個端點目前是**同步**等映像檔

@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 9.2 完成 — 儲存/備份的真實工具驗證
+## 目前狀態:Phase 9.3 完成 — 容器 Log/執行指令
 
 **Phase 0(專案骨架)**
 
@@ -646,6 +646,55 @@ WireGuard-tools 沒有 GitHub Releases 這種例外網路路徑可以裝(apt 跟
 在雲端容器沙盒裡能做的事。這些項目連同上面提到的 mergerFS ENOSPC
 異常,都完整列在 `docs/REAL_HARDWARE_TESTING.md` 裡,留給拿到真實
 硬體的人接手驗證。
+
+**Phase 9.3(補上「沒有容器 log/exec」這個具體產品缺口)**
+
+Phase 9.2 之後回頭檢視先前列出的功能缺口清單,「應用程式商店只有唯讀
+功能,沒辦法查看容器 log、沒辦法對容器下指令」是其中最直接影響「這台
+NAS 能不能拿來實際用」的一項——容器一直重開機的時候,使用者除了解除
+安裝重裝一次之外完全無計可施,連錯誤訊息都看不到。這次補上這個缺口:
+
+- **`GET /api/v1/docker/containers/{id}/logs`**:等同 `docker logs`,
+  回傳指定容器的 stdout/stderr(可用 `?tail=` 限制行數,預設整份帶
+  時間戳記)。實作上要處理 Docker Engine API 的一個細節:GoNAS 建立
+  的容器都沒有開 TTY,daemon 回傳的不是純文字,而是一種多工串流格式
+  (每個 frame 前面 8 個 byte 表示串流種類跟長度,見 `internal/docker/
+  stream.go` 的 `demuxStream`),需要自己解開才能拿到乾淨的文字。
+- **`POST /api/v1/docker/containers/{id}/exec`**:等同 `docker exec
+  <container> <cmd...>`,在容器裡執行一次指令、等它跑完,回傳完整輸出
+  跟結束碼。刻意做成一次性執行,不是持續連線的互動式終端機——後者需要
+  雙向 hijack 連線,處理終端機跳脫序列、視窗大小這些複雜度,對「診斷
+  這個容器裡到底裝了什麼、設定檔長怎樣」這種最常見的需求不是必要的,
+  一次性執行版本已經能滿足絕大部分場景,複雜度低很多也更不容易寫錯。
+- **Web UI**:「應用程式」頁面裡每個已安裝服務旁邊新增「查看 Log」跟
+  「執行指令」兩個按鈕,點開會在原地展開一個面板,不需要跳頁或另開視窗。
+- **真實驗證**:這台沙盒的 `dockerd` 手動啟動後(跟 Phase 9.1 一樣的
+  作法),建置一個 `FROM scratch` 的測試映像檔(內含一支會持續印
+  stdout/stderr 的長駐程式,跟一支印一行訊息就結束、可選擇以失敗結束
+  的探針程式,兩者都不需要 shell,直接用 Cmd 陣列呼叫執行檔本身),
+  透過 GoNAS 的自訂安裝 API 把它裝成一個真正的容器,然後:
+  - 直接呼叫 `internal/docker.ContainerLogs`/`ExecInContainer`
+    (不是透過 fake HTTP handler)對著真正的 `dockerd` 驗證,確認多工
+    串流格式真的被正確解開、stdout/stderr 內容都拿得到、exec 的成功/
+    失敗結束碼都正確回傳。
+  - 透過真正在跑的 `gonasd` 打 HTTP API(`curl` 帶 session cookie),
+    確認 `tail`/`timestamps` 參數生效、exec 的成功/失敗/空指令/容器
+    不存在四種情況分別回傳正確的內容與 HTTP 狀態碼(200/200/400/500)。
+  - 用 Playwright 開真正的瀏覽器,登入 → 進應用程式頁面 → 點「查看
+    Log」看到剛剛建立容器的真實 log 內容 → 點「執行指令」執行
+    `/probe` 看到真實輸出跟結束碼 0,瀏覽器主控台除了登入前預期會有
+    的 401(`/auth/me` 探測是否已登入,既有行為)之外沒有任何錯誤。
+- 新增的 `internal/docker`(`stream_test.go`/`logs_test.go`/
+  `exec_test.go`)跟 `internal/api`(`docker_handlers_test.go`)測試
+  全數通過,`gofmt`/`go build`/`go vet`/`go test ./...` 全綠。這次
+  用到的測試映像檔、容器、手動啟動的 `dockerd` 都已經在驗證完成後
+  清乾淨。
+
+還沒做的:互動式終端機(需要雙向 hijack 連線)、log 即時串流(目前是
+「按一次抓一次快照」,不是像 `docker logs -f` 那樣持續推送)——這兩項
+複雜度明顯高一截,先評估目前這個一次性版本夠不夠用,不夠再考慮要不要
+做。原本列出的其他缺口(單一管理者、通知只有 webhook、無憑證自動
+續期、無自我更新機制、簡化版排程器)依然存在,留待之後視優先順序處理。
 
 ## 開發
 

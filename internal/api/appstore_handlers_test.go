@@ -1,6 +1,8 @@
 package api
 
 import (
+	"io"
+	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -8,16 +10,22 @@ import (
 	"github.com/bng147/gonas/internal/state"
 )
 
-// newTestServer 建立一個只帶 store 的最小 Server,夠用來測
-// resolveInstallTemplate 這種只碰 s.store 的純邏輯,不需要真的啟動
-// HTTP、Docker client 或監控輪詢這些跟這裡要測的行為無關的東西。
+// newTestServer 建立一個只帶 store 跟一個吃掉所有輸出的 logger 的最小
+// Server,夠用來測 resolveInstallTemplate 這種只碰 s.store 的純邏輯,或是
+// 需要 s.logger 不為 nil(呼叫 s.logger.Error(...))但不需要真的啟動
+// HTTP、監控輪詢這些跟測試行為無關的東西的 handler。個別測試需要
+// s.docker 的話自己指定,這裡故意不預設,讓「忘記設定就打真的 Docker
+// daemon」這種錯誤在測試時清楚地失敗,而不是安靜地連到一個看起來正常的假物件。
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
 		t.Fatalf("opening test store: %v", err)
 	}
-	return &Server{store: store}
+	return &Server{
+		store:  store,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
 }
 
 func minimalTemplate(id string) appstore.AppTemplate {

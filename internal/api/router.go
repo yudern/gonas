@@ -181,6 +181,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))
 	mux.HandleFunc("GET /api/v1/docker/images", s.requireAuth(s.handleDockerImages))
 	mux.HandleFunc("GET /api/v1/docker/networks", s.requireAuth(s.handleDockerNetworks))
+	mux.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.requireAuth(s.handleContainerLogs))
+	mux.HandleFunc("POST /api/v1/docker/containers/{id}/exec", s.requireAuth(s.handleContainerExec))
 
 	mux.HandleFunc("GET /api/v1/appstore/catalog", s.requireAuth(s.handleAppstoreCatalog))
 	mux.HandleFunc("GET /api/v1/appstore/apps", s.requireAuth(s.handleAppstoreListInstalled))
