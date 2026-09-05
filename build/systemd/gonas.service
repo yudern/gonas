@@ -29,5 +29,36 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 
+# Phase 9 補上的幾項:這些都只鎖「GoNAS 本身跟它會 fork/exec 出去的
+# mergerfs/snapraid/smbd/rsync/wg 等子行程,反正都不需要用到」的能力,
+# 不動到掛載/裝置存取這些核心功能,所以不需要真機也能確定不會弄壞
+# 陣列/分享功能:
+#   - LimitNOFILE:調高同時開啟的檔案數上限。一台 NAS 底下可能同時有
+#     大量 Samba/NFS 連線各自開著檔案,systemd 的預設值(通常是 1024)
+#     對這種用途來說偏低,調高不會有任何副作用。
+#   - ProtectKernelLogs:擋存取核心 log ring buffer(dmesg 那份),
+#     GoNAS 沒有任何功能需要讀核心 log。
+#   - ProtectClock:擋修改系統時間/RTC,GoNAS 完全不需要動到時鐘。
+#   - LockPersonality:擋切換執行環境(exec domain),沒有任何正常
+#     操作需要這個系統呼叫。
+#   - RestrictSUIDSGID:擋建立新的 setuid/setgid 檔案,GoNAS 本身跟它
+#     呼叫的外部工具都不需要建立這種檔案,關掉能少一種提權管道。
+#
+# 刻意先不加的(留給 docs/REAL_HARDWARE_TESTING.md 的實機測試清單):
+# ProtectSystem=、PrivateDevices=、ProtectKernelModules=、
+# SystemCallFilter=、RestrictNamespaces= 這幾項會限制掛載檔案系統、
+# 存取裝置節點(包含 mergerFS 用的 /dev/fuse)、系統呼叫白名單這些
+# GoNAS 核心功能高度依賴的能力 —— systemd 的沙盒設定是套在整個
+# process tree 上,gonasd 執行 mergerfs/snapraid 等子行程時也會繼承
+# 同一組限制,錯誤的白名單/黑名單設定會讓陣列掛載或校驗行為以難以
+# 預期的方式失敗,而這台開發沙盒沒有真實硬碟/mergerFS/SnapRAID 可以
+# 實際驗證「加了這條會不會壞」,與其憑空猜測不如明確留白、等有真機
+# 可以測的時候再一項一項加上去驗證。
+LimitNOFILE=1048576
+ProtectKernelLogs=true
+ProtectClock=true
+LockPersonality=true
+RestrictSUIDSGID=true
+
 [Install]
 WantedBy=multi-user.target

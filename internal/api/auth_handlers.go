@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,7 +139,33 @@ type loginRequest struct {
 	TOTPCode string `json:"totpCode,omitempty"`
 }
 
+// clientIP 從 r.RemoteAddr 取出不含連接埠的來源位址,當作登入節流的
+// key。RemoteAddr 一般是 "host:port" 的形式,但也可能是沒有埠號的裸
+// 位址(例如某些測試/代理情境),SplitHostPort 失敗時就直接把整個
+// RemoteAddr 當 key 用 —— 節流的目的是「同一個來源打太多次就擋一下」,
+// 不是要做精確的身分識別,退化成用整串 RemoteAddr 當 key 一樣能達到
+// 這個目的,只是萬一背後真的接了會變換來源埠的代理,節流的粒度會變成
+// 「整個代理」而不是「代理後面的個別使用者」——這在 GoNAS 典型的區網
+// 部署情境下不是問題。
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if allowed, wait := s.loginLimiter.Allow(ip); !allowed {
+		// Retry-After 用整數秒,無條件進位 —— 寧可讓使用者多等一點點,
+		// 也不要因為無條件捨去讓前端算出「已經可以重試了」但伺服器這邊
+		// 其實還沒解鎖,導致又白白吃一次 429。
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+1)))
+		writeError(w, http.StatusTooManyRequests, errTooManyLoginAttempts)
+		return
+	}
+
 	var req loginRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -153,6 +181,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// 存在(雖然 GoNAS 只有一個管理者帳號,這裡養成的習慣在之後真的
 	// 支援多帳號時也不用改)。
 	if req.Username != admin.Username {
+		s.loginLimiter.RecordFailure(ip)
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -163,6 +192,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		s.loginLimiter.RecordFailure(ip)
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -174,11 +204,13 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !valid {
+			s.loginLimiter.RecordFailure(ip)
 			writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
 			return
 		}
 	}
 
+	s.loginLimiter.RecordSuccess(ip)
 	s.loginSession(w, r, admin.Username)
 }
 

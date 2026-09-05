@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -18,6 +19,25 @@ import (
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
 	"github.com/bng147/gonas/internal/version"
+)
+
+// maxRequestBodyBytes 是任何一支 API 端點願意讀取的請求 body 上限。
+// GoNAS 的請求全部是小型 JSON(設定值、表單欄位),1 MiB 已經非常寬裕
+// ——真正大量的資料(檔案本身、Docker 映像層)從來不會透過這層 JSON API
+// 傳輸,而是分別交給 Samba/NFS/Docker Engine 直接處理。設這個上限主要
+// 是擋掉「忘記設 Content-Length、body 送個沒完」或惡意送超大 body 想
+// 撐爆記憶體的請求,不是為了限制正常使用情境。
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
+
+// loginRateLimitMaxFailures / loginRateLimitLockout 是登入節流的門檻:
+// 同一個來源 IP 連續 5 次登入失敗(帳號、密碼、TOTP 驗證碼算同一組
+// 「登入失敗」,不細分)之後鎖定 5 分鐘。5 次/5 分鐘對真人打錯密碼
+// 的容錯空間足夠(打錯一兩次很常見),但足以讓「每秒嘗試數十次」等級的
+// 暴力破解在有意義的時間內幾乎不可能撞出密碼,細節見
+// internal/security.LoginLimiter 的套件註解。
+const (
+	loginRateLimitMaxFailures = 5
+	loginRateLimitLockout     = 5 * time.Minute
 )
 
 // monitorPollInterval 是系統資源取樣的週期。10 秒對一台 NAS 的監控用途
@@ -54,6 +74,11 @@ type Server struct {
 	// 是可以接受的代價,換來不用另外設計 session 的持久化/加密儲存。
 	sessions *security.SessionManager
 
+	// loginLimiter 節流 /api/v1/auth/login 的失敗嘗試次數,擋暴力猜密碼
+	// 攻擊,見 internal/security.LoginLimiter 的套件註解與這個檔案裡
+	// loginRateLimit* 常數的說明。
+	loginLimiter *security.LoginLimiter
+
 	// array 是目前載入的儲存陣列。啟動時如果 store 裡已經有 pool 設定,
 	// 會在這裡建立對應的 *storage.Array(但不會自動 Start —— 掛載陣列
 	// 是使用者的明確動作,不該在 daemon 重啟時靜默發生)。
@@ -87,6 +112,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		store:            store,
 		dataDir:          dataDir,
 		sessions:         security.NewSessionManager(sessionTTL),
+		loginLimiter:     security.NewLoginLimiter(loginRateLimitMaxFailures, loginRateLimitLockout),
 		backupSchedulers: make(map[string]*backup.JobScheduler),
 	}
 
@@ -187,7 +213,15 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 
 	mux.Handle("/", webUIHandler())
 
-	return s, withLogging(logger, mux), nil
+	// 中介層順序由外而內: withLogging(最外層,不管中間發生什麼都要記錄
+	// 這筆請求) -> withSecurityHeaders(連錯誤回應、panic 復原後的 500
+	// 都該帶上這些標頭) -> withRecover(包在最裡層、直接包住 mux,任何
+	// handler 裡的 panic 都在這裡被攔下來,轉成一個乾淨的 500 回應,
+	// 而不是讓整個 daemon 因為一個請求的未預期錯誤而崩潰 —— 見
+	// withRecover 的函式註解)。
+	handler := withLogging(logger, withSecurityHeaders(withRecover(logger, mux)))
+
+	return s, handler, nil
 }
 
 // HTTPSConfig 回傳目前的 HTTPS 設定，讓 cmd/gonasd/main.go 在啟動時決定
@@ -254,8 +288,13 @@ func writeError(w http.ResponseWriter, status int, err error) {
 }
 
 // readJSON 把請求 body 解析進 dst,失敗時回傳一個已經寫好 400 的錯誤,
-// 呼叫端只需要判斷 ok 就好。
+// 呼叫端只需要判斷 ok 就好。用 http.MaxBytesReader 包住 body 是為了擋掉
+// 異常肥大(或忘記帶 Content-Length、body 送個沒完)的請求撐爆記憶體,
+// 見 maxRequestBodyBytes 常數的說明 —— 超過上限時 Decode 會回傳一個
+// 「http: request body too large」的錯誤,一樣落在下面這個 400 分支,
+// 呼叫端不需要特別處理。
 func readJSON(w http.ResponseWriter, r *http.Request, dst any) (ok bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return false
@@ -263,7 +302,10 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) (ok bool) {
 	return true
 }
 
-// withLogging 是一個最小的存取記錄中介層。
+// withLogging 是一個最小的存取記錄中介層。放在中介層鏈最外層,這樣
+// 不管請求最後是正常回應、handler 主動回傳的錯誤,還是被 withRecover
+// 攔下來的 panic,都會被記到同一行 log 裡,方便事後從 log 追一支請求
+// 的完整生命週期,不用比對好幾層不同中介層各自留下的紀錄。
 func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -274,5 +316,74 @@ func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
 			"remote", r.RemoteAddr,
 			"durationMs", time.Since(start).Milliseconds(),
 		)
+	})
+}
+
+// withSecurityHeaders 幫每一個回應加上幾個標準的瀏覽器安全標頭。GoNAS
+// 的內嵌 Web UI 全部是同源請求(fetch 打的都是相對路徑、沒有外部 CDN
+// 依賴、也沒有內嵌的 <script>/<style> 或行內 style 屬性 —— 見
+// internal/api/webui/static 下的前端程式碼),所以可以直接用比較嚴格
+// 的 `default-src 'self'` 而不用另外開白名單:
+//
+//   - X-Content-Type-Options: nosniff ——擋掉瀏覽器「猜測」回應內容型別
+//     這個行為本身可能被拿來做的 MIME 混淆攻擊。
+//   - X-Frame-Options: DENY ——GoNAS 的管理介面不應該被嵌進別的網站的
+//     <iframe> 裡(防 clickjacking)。
+//   - Referrer-Policy: no-referrer ——網址本身可能帶有內部路由資訊,
+//     沒有理由外洩給任何第三方(反正也沒有外部連結)。
+//   - Content-Security-Policy: default-src 'self' ——多一層瀏覽器端的
+//     防護,就算未來哪個頁面不小心被注入了外部腳本/圖片,瀏覽器也會
+//     直接擋下不執行/不載入。額外加一條 style-src 'self' 'unsafe-inline'
+//     ——前端(internal/api/webui/static/app.js)大量用行內
+//     `style="..."` 屬性做版面微調跟顏色(進度條寬度、狀態燈號顏色等
+//     動態值),嚴格的 default-src 會連這些行內樣式都一併擋掉,把整個
+//     介面的版面弄壞(這是實際用 Playwright 對著真的在跑的 gonasd
+//     測出來的,不是憑空猜的 —— 見 Phase 9 的驗證紀錄)。行內樣式
+//     跟行內腳本是完全不同等級的風險:CSS 沒有辦法拿來執行任意
+//     JavaScript,真正需要擋的「注入腳本」這個攻擊面(script-src)
+//     還是繼續套用 default-src 'self' 的嚴格限制,沒有放寬。
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRecover 攔截 next 底下任何 handler 的 panic,轉成一個 500 回應,
+// 而不是讓 panic 往上炸穿 net/http 的 goroutine-per-request 模型 ——
+// Go 的 http.Server 本來就會幫每個請求各自 recover 一次 panic(不會讓
+// 一個請求的 panic 弄垮整個 process),但那個內建行為只會直接關閉連線、
+// 在 stderr 印一段不太好讀的 stack trace,呼叫端拿到的是一個突然斷掉
+// 的連線而不是有意義的錯誤回應,而且不會進到 GoNAS 自己的 structured
+// log 裡。這裡自己包一層,好處是:(1) 呼叫端(不管是 curl 還是前端的
+// fetch)都會拿到一個正常的 JSON 錯誤回應,不是連線中斷;(2) panic 內容
+// 跟 stack trace 會透過 logger 記下來,跟其他請求記錄用同一套格式,
+// 方便事後除錯;(3) 這台 daemon 本身除了這個請求以外的其他所有功能
+// (已經在跑的排程器、其他請求)完全不受影響,不需要重啟 gonasd。
+func withRecover(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Error("panic recovered while handling request",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"remote", r.RemoteAddr,
+					"panic", rec,
+					"stack", string(debug.Stack()),
+				)
+				// handler 可能在 panic 之前已經寫出部分回應(例如
+				// writeJSON 已經呼叫過 WriteHeader),這裡再呼叫一次
+				// WriteHeader 只會在 stderr 留一行「superfluous
+				// WriteHeader call」的無害警告,不會影響其他請求,
+				// 換來的是「大多數情況下呼叫端能拿到一個結構化的 500
+				// 錯誤」這個更重要的保證。
+				writeError(w, http.StatusInternalServerError, errInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
 	})
 }

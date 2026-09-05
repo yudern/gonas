@@ -440,9 +440,68 @@ btrfs/ZFS 快照(GoNAS 刻意不綁定特定檔案系統)。
   乾淨狀態(移除所有測試裝上去的檔案跟暫時建立的 `/run/systemd/system`
   目錄)。
 
-尚未實作(依路線圖排序,接下來的 Phase):
+**Phase 9(實機測試與強化)**
 
-1. 實機測試與強化
+這台開發沙盒從頭到尾沒有真實硬碟、沒有裝 mergerFS/SnapRAID/Samba/NFS/
+WireGuard-tools/rsync,systemd 也不是真正的 PID 1 —— 所以「實機測試」
+這部分沒辦法在這裡真的做,改成兩件事:(1) 寫一份具體、可執行的實機
+測試清單,讓拿到真實硬體的人知道要測什麼、預期看到什麼結果;(2) 把
+這台沙盒裡**能夠**確實驗證、對正式環境有實質幫助的強化項目做掉。
+
+- `docs/REAL_HARDWARE_TESTING.md`:完整的實機測試清單,涵蓋安裝
+  (systemd 真的 enable/start 成功的路徑)、systemd 進階沙盒加固
+  (`ProtectSystem=strict`/`PrivateDevices=`/`SystemCallFilter=` 這類
+  會影響掛載/裝置存取、沒有真硬碟沒辦法驗證安不安全的選項)、儲存
+  (含「模擬硬碟損壞、驗證 SnapRAID 真的能修復」這個全專案最關鍵、
+  沙盒完全無法測試的項目)、Docker/應用程式商店(含大型映像檔安裝
+  會不會逾時)、檔案分享、安全性、備份、長時間穩定性等 8 大類別。
+- **panic 復原中介層**(`withRecover`,`internal/api/router.go`):任何
+  一支 handler 裡未預期的 panic,現在會被攔下來轉成一個乾淨的 500
+  JSON 回應並記進 log,而不是讓那個請求的連線直接斷掉、且錯誤資訊
+  只印在 stderr 裡難以追查。用一個刻意觸發 nil map 寫入 panic 的臨時
+  測試實際驗證過會被正確攔截,測完即刪除(不留在最終程式碼裡)。
+- **登入嘗試節流**(`internal/security/ratelimit.go`,`LoginLimiter`):
+  同一個來源 IP 連續 5 次登入失敗(帳號、密碼、TOTP 驗證碼都算)後
+  鎖定 5 分鐘,擋掉對管理者密碼的暴力猜測 —— 先前 Phase 6 做完整套
+  身分驗證/2FA/HTTPS,但登入端點本身可以無限次重試這件事一直沒補上。
+  5 個單元測試涵蓋門檻判斷、鎖定到期後重置、成功登入清除失敗計數、
+  不同 key 互不干擾;並對著真的在跑的 `gonasd` 實測連續打錯密碼確認
+  第 6 次收到 429 跟正確的 `Retry-After`,鎖定期間連正確密碼都會被拒。
+- **請求 body 大小限制**:`readJSON` 現在用 `http.MaxBytesReader` 把
+  所有 API 端點的請求 body 限制在 1 MiB,擋掉忘記帶
+  Content-Length/惡意送超大 body 撐爆記憶體的請求 —— 已用一個 3 MiB
+  的請求實測確認會被乾淨地拒絕(400),正常大小的請求不受影響。
+- **HTTP 安全標頭中介層**(`withSecurityHeaders`):`X-Content-Type-
+  Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy:
+  no-referrer`、`Content-Security-Policy: default-src 'self'; style-src
+  'self' 'unsafe-inline'`。CSP 的 `style-src` 部分刻意放寬成允許行內
+  樣式 —— 第一版用嚴格的 `default-src 'self'` 時,直接用 Playwright
+  對著真的在跑的介面測出整個版面被 CSP 擋壞(前端大量使用行內
+  `style="..."` 屬性做動態顏色/版面調整),改成只放寬 style-src、
+  script-src 繼續維持嚴格限制之後重新測過全部主要頁面,畫面正常、
+  瀏覽器主控台沒有 CSP 相關錯誤。
+- **HTTP server 逾時設定**(`cmd/gonasd/main.go`):加上 `ReadTimeout`
+  跟 `IdleTimeout` 防 slowloris 類的慢速連線攻擊;刻意**沒有**加
+  `WriteTimeout` ——`POST /api/v1/appstore/apps` 會同步等 Docker 映像檔
+  拉取完成才回應,在沒有真實 Docker 環境可以驗證「大型映像檔會不會
+  被寫入逾時掐斷」之前貿然設一個數字,風險比不設更大,已明確列進
+  `docs/REAL_HARDWARE_TESTING.md` 的待驗證清單。
+- **systemd unit 加固**(`build/systemd/gonas.service`):補上
+  `LimitNOFILE`(調高檔案描述符上限,NAS 常見情境)、
+  `ProtectKernelLogs`、`ProtectClock`、`LockPersonality`、
+  `RestrictSUIDSGID` 這幾項不影響掛載/裝置存取、可以確定安全的選項,
+  用 `systemd-analyze verify` 驗證過語法正確;`ProtectSystem=strict`/
+  `PrivateDevices=`/`SystemCallFilter=` 這類有掛載/裝置存取風險的選項
+  刻意留白,原因與逐項驗證步驟寫在 unit file 注解跟
+  `docs/REAL_HARDWARE_TESTING.md` 裡。
+- 全部變更跑過完整的 `gofmt`/`go build`/`go vet`/`go test ./...`,新增
+  的 `internal/security/ratelimit_test.go` 全數通過。
+
+至此,原始技術路線圖(Phase 0–9)已全部完成。GoNAS 目前是一套零第三方
+Go 依賴、可交叉編譯到 x86_64/ARM64、涵蓋儲存陣列/Docker/檔案分享/監控
+告警/備份快照/身分驗證與網路安全/一鍵安裝的完整 NAS 軟體套件,剩下
+的工作是 `docs/REAL_HARDWARE_TESTING.md` 清單裡那些只有真實硬體才能
+驗證的項目。
 
 ## 開發
 

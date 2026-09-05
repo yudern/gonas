@@ -70,6 +70,26 @@ func main() {
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout 涵蓋整個請求(標頭 + body)讀取的時間上限,擋
+		// slowloris 這類「故意用極慢的速度一點一點送資料撐住連線」的
+		// 攻擊。GoNAS 的請求 body 全部是小型 JSON(見
+		// internal/api.maxRequestBodyBytes),20 秒對正常區網使用者已經
+		// 非常寬裕。
+		//
+		// 刻意不設 WriteTimeout:net/http 的 WriteTimeout 是從「讀完
+		// 請求標頭」那一刻開始算的整段回應時間,不是「單次寫入」的
+		// timeout —— 而 POST /api/v1/appstore/apps 會同步等 Docker
+		// 把映像檔拉完才回應(見 internal/api/appstore_handlers.go),
+		// 第一次安裝一個沒快取過的大型映像檔在慢速網路下可能要好幾
+		// 分鐘。設一個「看起來合理」的 WriteTimeout(例如 30 秒)在這台
+		// 開發沙盒裡完全測不出問題(沒有真的 Docker daemon 可以拉映像
+		// 檔驗證),但在真正裝了 Docker、拉真實映像檔的機器上會讓這支
+		// 端點在映像檔還沒拉完時就被伺服器自己掐斷連線 —— 這種「測試
+		// 環境看不出來、只有在實機上跑長時間操作才會炸」的坑,與其現在
+		// 猜一個數字冒這個風險,不如先不設,留到 Phase 9 的實機測試
+		// 清單裡明確列成待驗證項目(見 docs/REAL_HARDWARE_TESTING.md)。
+		ReadTimeout: 20 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

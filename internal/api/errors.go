@@ -29,4 +29,8 @@ var (
 	errPeerAllowedIPsEmpty    = errors.New("at least one allowed IP/CIDR is required")
 
 	errBackupJobNotFound = errors.New("no backup job with that id")
+
+	// Phase 9：登入節流、panic 復原共用的 sentinel 錯誤。
+	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")
+	errInternalServerError  = errors.New("internal server error")
 )
