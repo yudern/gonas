@@ -292,6 +292,25 @@ a { color: var(--accent); }
 .sidebar-footer { display: flex; flex-direction: column; gap: 8px; }
 .logout-btn { width: 100%; font-size: 12.5px; padding: 7px 12px; }
 
+/* 目前登入帳號的使用者名稱/角色小字——Phase 13 多帳號之後，讓使用者
+   一眼就能確認「我現在是用哪個帳號登入的」，尤其在同一台裝置上多個
+   帳號輪流使用的情境下(例如家人共用同一台電腦，各自用自己的帳號)。 */
+.sidebar-user {
+  font-size: 11.5px;
+  color: var(--sidebar-text);
+  opacity: 0.75;
+  padding: 0 2px;
+  overflow-wrap: break-word;
+}
+.sidebar-user .role-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: var(--sidebar-active);
+}
+
 /* 語言選單。刻意放在側邊欄最下面、跟登出按鈕放在一起——這是一個「设定
    一次、很少再動」的選項，不需要佔用導覽列的視覺重量。 */
 .lang-switcher {

@@ -34,13 +34,13 @@ type State struct {
 	InstalledApps []InstalledApp          `json:"installedApps"`
 	AlertRules    []monitor.AlertRule     `json:"alertRules"`
 	Notifiers     []monitor.WebhookConfig `json:"notifiers"`
-	Admin         *AdminAccount           `json:"admin,omitempty"`
+	Admins        []AdminAccount          `json:"admins"`
 	HTTPS         HTTPSConfig             `json:"https"`
 	WireGuard     *wireguard.Config       `json:"wireGuard,omitempty"`
 	BackupJobs    []backup.Job            `json:"backupJobs"`
 }
 
-// AdminAccount 是 Web 管理介面唯一的登入帳號(跟 share.User 那種系統/
+// AdminAccount 是 Web 管理介面的一個登入帳號(跟 share.User 那種系統/
 // Samba 帳號是完全不同的概念,一個是「誰能打開 GoNAS 的管理介面」,
 // 一個是「誰能透過 SMB/NFS 存取檔案」)。PasswordHash 一律是
 // internal/security.HashPassword 產生的編碼字串,永遠不存明文密碼;
@@ -48,11 +48,38 @@ type State struct {
 // 要等使用者實際輸入一次驗證碼確認過(呼叫 /auth/totp/enable)才會
 // 變成 true —— 避免使用者複製密鑰到驗證器 App 之後,萬一沒設定成功
 // 就把自己鎖在登入頁面外面。
+//
+// Phase 13 之前,Web 管理介面只允許存在「唯一」一個管理帳號
+// (State.Admin 曾經是 *AdminAccount 單一指標)。Phase 13 把它換成
+// Admins 陣列,讓同一台 NAS 可以有多組各自獨立的登入(帳密、TOTP 都
+// 互不相干),並且加上 Role 區分權限:RoleAdmin 可以做任何事,
+// RoleViewer 只能讀(GET),不能新增/修改/刪除任何設定或資料 ——
+// 詳見 internal/api 的 requireAdmin 中介層。
 type AdminAccount struct {
 	Username     string `json:"username"`
 	PasswordHash string `json:"passwordHash"`
 	TOTPSecret   string `json:"totpSecret,omitempty"`
 	TOTPEnabled  bool   `json:"totpEnabled"`
+	Role         string `json:"role"`
+}
+
+// 目前僅有的兩種帳號權限。RoleAdmin 是完全權限(建立/修改/刪除任何
+// 東西,包含管理其他帳號);RoleViewer 是唯讀權限,只能查看現有設定跟
+// 資料,不能做任何寫入動作(連自己的密碼/TOTP 都可以改——那是「管理
+// 自己的帳號」,不算「管理 NAS 設定」,見 internal/api 對 auth 端點的
+// 例外處理)。刻意只做兩級,不做更細的、逐頁面/逐功能的權限矩陣——
+// 對一個家用/小型辦公室 NAS,「誰有完整權限」跟「誰只能看」這兩級已經
+// 涵蓋絕大多數實際情境,更細的權限模型只會增加使用者設定帳號時要理解
+// 的複雜度,換不到對應的實際價值。
+const (
+	RoleAdmin  = "admin"
+	RoleViewer = "viewer"
+)
+
+// IsValidRole 檢查一個角色字串是否是上面兩個常數之一 —— 建立/驗證帳號
+// 時共用,避免打錯字或之後不小心塞進第三種沒有對應中介層邏輯的角色值。
+func IsValidRole(role string) bool {
+	return role == RoleAdmin || role == RoleViewer
 }
 
 // HTTPSConfig 是 Web 管理介面的 TLS 設定。Enabled 只是「使用者想要
@@ -114,6 +141,17 @@ func (st *State) normalize() {
 	if st.Notifiers == nil {
 		st.Notifiers = []monitor.WebhookConfig{}
 	}
+	if st.Admins == nil {
+		st.Admins = []AdminAccount{}
+	}
+	// 舊版(Phase 13 之前)建立的帳號沒有 Role 欄位,JSON 解析後會是
+	// 空字串——一律當成 RoleAdmin 補上,保留它們原本「唯一管理者、
+	// 什麼都能做」的權限,不會因為升級就意外被降級成唯讀。
+	for i := range st.Admins {
+		if st.Admins[i].Role == "" {
+			st.Admins[i].Role = RoleAdmin
+		}
+	}
 	// WireGuard 本身是 nilable(還沒設定介面前完全不該有這個欄位),但
 	// 一旦存在,裡面的 Peers 切片一樣要套用同一條「絕不序列化成 null」
 	// 的規則 —— 不然新增第一個 peer 之前,GET /vpn/peers 就會重演一次
@@ -143,6 +181,24 @@ func Open(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &s.data); err != nil {
 		return nil, fmt.Errorf("parsing state file %s: %w", path, err)
 	}
+
+	// Phase 13 把單一 Admin *AdminAccount 換成 Admins []AdminAccount。
+	// 舊版 state.json 裡是 `"admin": {...}` 這個單數欄位,現在的 State
+	// 結構已經不認得這個 key 了,json.Unmarshal 會直接忽略它,如果不
+	// 另外處理,舊使用者升級後帳號會憑空消失、被迫走一次「還沒有管理者
+	// 帳號」的初始設定流程——這裡額外解析一次舊欄位,搬進新的 Admins
+	// 陣列裡,讓既有的帳密/TOTP 設定在升級後繼續可用。
+	var legacy struct {
+		Admin *AdminAccount `json:"admin"`
+	}
+	if err := json.Unmarshal(data, &legacy); err == nil && legacy.Admin != nil && len(s.data.Admins) == 0 {
+		migrated := *legacy.Admin
+		if migrated.Role == "" {
+			migrated.Role = RoleAdmin
+		}
+		s.data.Admins = append(s.data.Admins, migrated)
+	}
+
 	s.data.normalize()
 	return s, nil
 }

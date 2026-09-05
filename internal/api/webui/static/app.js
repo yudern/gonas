@@ -127,6 +127,20 @@ function showApp() {
   api.version().then((v) => {
     document.getElementById("sidebar-version").textContent = `gonasd ${v.version} (${v.goos}/${v.goarch})`;
   }).catch(() => {});
+  api.me().then(updateSidebarUser).catch(() => {});
+}
+
+// updateSidebarUser 更新側邊欄最下面「目前登入身分」的小字。獨立成一個
+// 函式而不是散在 showApp/renderSecurity 裡各自組字串,是因為 Phase 13
+// 多帳號之後,兩個地方都需要顯示同一份資訊(登入當下、之後每次打開
+// 安全頁面刷新一次)——renderSecurity 本來就要呼叫 api.me() 取得
+// changePasswordHint 需要的 username,順手也更新這裡,不用多打一次 API。
+function updateSidebarUser(me) {
+  const box = document.getElementById("sidebar-user");
+  if (!box || !me || !me.username) return;
+  const roleLabel = me.role === "admin" ? t("auth.roleAdmin") : t("auth.roleViewer");
+  box.innerHTML = `${esc(me.username)}<span class="role-badge">${esc(roleLabel)}</span>`;
+  box.hidden = false;
 }
 
 function showLoginGate() {
@@ -1526,11 +1540,15 @@ function drawSparklineChart(canvas, series) {
 // ---------- 安全 ----------
 
 async function renderSecurity(el) {
-  const [me, https, vpnStatus, peers] = await Promise.all([
-    api.me().catch(() => ({ username: "", totpEnabled: false })),
+  const me = await api.me().catch(() => ({ username: "", totpEnabled: false, role: "" }));
+  updateSidebarUser(me);
+  const isAdmin = me.role === "admin";
+
+  const [https, vpnStatus, peers, accounts] = await Promise.all([
     api.httpsSettings().catch(() => ({ enabled: false })),
     api.vpnStatus().catch(() => ({ configured: false })),
     api.vpnPeers().catch(() => []),
+    isAdmin ? api.authAccounts().catch(() => []) : Promise.resolve([]),
   ]);
 
   el.innerHTML = `
@@ -1552,6 +1570,41 @@ async function renderSecurity(el) {
     <div class="card" id="totp-card">
       ${renderTOTPSection(me.totpEnabled)}
     </div>
+
+    ${isAdmin ? `
+    <div class="card">
+      <h2>${esc(t("security.accounts", { n: accounts.length }))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.accountsHint"))}</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>${esc(t("security.colUsername"))}</th><th>${esc(t("security.colRole"))}</th><th>${esc(t("security.colTOTP"))}</th><th></th></tr></thead>
+          <tbody>
+            ${accounts.length ? accounts.map((a) => `
+              <tr>
+                <td>${esc(a.username)}${a.username === me.username ? ` <span class="pill neutral">${esc(t("security.youLabel"))}</span>` : ""}</td>
+                <td>${esc(a.role === "admin" ? t("auth.roleAdmin") : t("auth.roleViewer"))}</td>
+                <td>${a.totpEnabled ? `<span class="pill ok">${esc(t("security.totpEnabledPill"))}</span>` : `<span class="pill neutral">${esc(t("security.totpDisabledPill"))}</span>`}</td>
+                <td>${a.username === me.username ? "" : `<button class="secondary" data-del-account="${esc(a.username)}">${esc(t("common.delete"))}</button>`}</td>
+              </tr>
+            `).join("") : `<tr><td colspan="4" class="empty-state">${esc(t("security.noAccounts"))}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div id="account-msg"></div>
+      <form class="stacked" id="account-form" style="margin-top:16px">
+        <div class="field"><label>${esc(t("security.newAccountUsername"))}</label><input type="text" name="username" required></div>
+        <div class="field"><label>${esc(t("security.newAccountPassword"))}</label><input type="password" name="password" minlength="8" required></div>
+        <div class="field">
+          <label>${esc(t("security.newAccountRole"))}</label>
+          <select name="role">
+            <option value="viewer">${esc(t("auth.roleViewer"))}</option>
+            <option value="admin">${esc(t("auth.roleAdmin"))}</option>
+          </select>
+        </div>
+        <div class="btn-row"><button type="submit">${esc(t("security.createAccount"))}</button></div>
+      </form>
+    </div>
+    ` : ""}
 
     <div class="card">
       <h2>${esc(t("security.https"))}</h2>
@@ -1580,8 +1633,42 @@ async function renderSecurity(el) {
 
   attachPasswordFormHandlers(el);
   attachTOTPHandlers(el);
+  if (isAdmin) attachAccountsHandlers(el);
   attachHTTPSFormHandlers(el);
   attachVPNHandlers(el);
+}
+
+// attachAccountsHandlers 只在 renderSecurity 判斷目前登入帳號是
+// RoleAdmin 時才會被呼叫——RoleViewer 的帳號連這個區塊的 HTML 都不會
+// 被渲染出來(見上面的 isAdmin 判斷),這裡不需要再重複判斷一次。
+function attachAccountsHandlers(el) {
+  el.querySelectorAll("[data-del-account]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.dataset.delAccount;
+      if (!confirm(t("security.deleteAccountConfirm", { name: username }))) return;
+      try {
+        await api.deleteAuthAccount(username);
+        await renderSecurity(el);
+      } catch (err) {
+        el.querySelector("#account-msg").innerHTML = msg("error", err.message);
+      }
+    });
+  });
+
+  const form = el.querySelector("#account-form");
+  if (!form) return;
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#account-msg");
+    try {
+      await api.createAuthAccount({ username: f.get("username").trim(), password: f.get("password"), role: f.get("role") });
+      box.innerHTML = msg("ok", t("security.accountCreated"));
+      await renderSecurity(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
 }
 
 function attachPasswordFormHandlers(el) {

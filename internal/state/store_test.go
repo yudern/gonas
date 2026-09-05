@@ -205,12 +205,15 @@ func TestNormalize_WireGuardPeersNestedNilSlice(t *testing.T) {
 }
 
 func TestState_MarshalsWithNoAdminOrWireGuardByDefault(t *testing.T) {
-	// Admin 跟 WireGuard 都是 *T 搭配 omitempty:全新安裝、使用者還沒
-	// 建立管理者帳號或設定 VPN 介面之前,這兩個欄位根本不該出現在
-	// state.json 或任何 API 回應裡(而不是出現、但值是 null)——
-	// omitempty 對 nil pointer 的行為本來就是整個省略欄位,這裡明確
-	// 測出來,確保未來重構沒有不小心把它們從 pointer 改成非 pointer
-	// 而讓這個保證消失。
+	// WireGuard 是 *T 搭配 omitempty:全新安裝、使用者還沒設定 VPN 介面
+	// 之前,這個欄位根本不該出現在 state.json 或任何 API 回應裡(而不是
+	// 出現、但值是 null)——omitempty 對 nil pointer 的行為本來就是整個
+	// 省略欄位,這裡明確測出來,確保未來重構沒有不小心把它從 pointer
+	// 改成非 pointer 而讓這個保證消失。
+	//
+	// Admins 從 Phase 13 起是 []AdminAccount(不是單一 *AdminAccount),
+	// 跟其他清單欄位(Shares/Exports/...)一樣一律存在、只是全新安裝時
+	// 是空陣列——這裡改成驗證「空陣列」而不是「完全沒有這個欄位」。
 	path := filepath.Join(t.TempDir(), "state.json")
 	s, err := Open(path)
 	if err != nil {
@@ -220,13 +223,65 @@ func TestState_MarshalsWithNoAdminOrWireGuardByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling snapshot: %v", err)
 	}
-	if strings.Contains(string(encoded), `"admin"`) {
-		t.Errorf(`expected no "admin" field before an admin account is created, got: %s`, encoded)
+	if !strings.Contains(string(encoded), `"admins":[]`) {
+		t.Errorf(`expected an empty "admins" array before any account is created, got: %s`, encoded)
 	}
 	if strings.Contains(string(encoded), `"wireGuard"`) {
 		t.Errorf(`expected no "wireGuard" field before a VPN interface is configured, got: %s`, encoded)
 	}
 	if !strings.Contains(string(encoded), `"https":{`) {
 		t.Errorf(`expected an "https" object (non-pointer struct) to always be present, got: %s`, encoded)
+	}
+}
+
+// TestOpen_MigratesLegacySingleAdminField 涵蓋 Phase 13 的向後相容邏輯:
+// 舊版 state.json 用單數的 `"admin": {...}` 欄位存唯一的管理者帳號,新版
+// 結構已經不認得這個欄位名稱了。這裡確保升級後既有帳號(帳密、TOTP)
+// 會被搬進新的 Admins 陣列,而不是在使用者升級 gonasd 之後憑空消失、
+// 被迫走一次「還沒有管理者帳號」的初始設定流程。
+func TestOpen_MigratesLegacySingleAdminField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	raw := `{"admin":{"username":"legacyadmin","passwordHash":"hash-abc","totpSecret":"secret-xyz","totpEnabled":true}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("writing seed state file: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	admins := s.Snapshot().Admins
+	if len(admins) != 1 {
+		t.Fatalf("expected the legacy admin account to be migrated into Admins, got %d entries: %+v", len(admins), admins)
+	}
+	got := admins[0]
+	if got.Username != "legacyadmin" || got.PasswordHash != "hash-abc" || got.TOTPSecret != "secret-xyz" || !got.TOTPEnabled {
+		t.Errorf("expected migrated account to preserve all fields, got %+v", got)
+	}
+	if got.Role != RoleAdmin {
+		t.Errorf("expected migrated legacy account to get RoleAdmin, got %q", got.Role)
+	}
+}
+
+// TestOpen_LegacyAdminMissingRole_DefaultsToRoleAdmin 涵蓋另一種舊版
+// state.json:已經是 Phase 13 之後的 `"admins": [...]` 陣列格式,但裡面
+// 的帳號是更早、還沒有 Role 欄位的版本寫入的(JSON 解析後 Role 會是空
+// 字串)——一律當成 RoleAdmin 補上,不能讓既有帳號因為升級就意外被降級
+// 成唯讀,見 normalize() 的註解。
+func TestOpen_LegacyAdminMissingRole_DefaultsToRoleAdmin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	raw := `{"admins":[{"username":"noroleyet","passwordHash":"hash-abc"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("writing seed state file: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	admins := s.Snapshot().Admins
+	if len(admins) != 1 || admins[0].Role != RoleAdmin {
+		t.Errorf("expected the roleless account to default to RoleAdmin, got %+v", admins)
 	}
 }

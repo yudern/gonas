@@ -44,4 +44,12 @@ var (
 	errMissingPath     = errors.New("the \"path\" query parameter is required")
 	errMissingFromOrTo = errors.New("both \"from\" and \"to\" are required")
 	errNoUploadedFile  = errors.New("no file was found in the upload request")
+
+	// Phase 13：多管理帳號/角色權限共用的 sentinel 錯誤。
+	errInsufficientPermission = errors.New("this account does not have permission to perform this action: an admin-role account is required")
+	errInvalidRole            = errors.New("role must be either \"admin\" or \"viewer\"")
+	errAdminUsernameTaken     = errors.New("an account with that username already exists")
+	errAdminAccountNotFound   = errors.New("no account with that username")
+	errCannotDeleteOwnAccount = errors.New("you cannot delete your own account while logged in as it: log in as a different admin account first")
+	errCannotDeleteLastAdmin  = errors.New("cannot delete the last remaining admin-role account: at least one must always exist")
 )

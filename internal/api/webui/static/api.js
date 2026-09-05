@@ -100,6 +100,9 @@ export const api = {
   totpSetup: () => request("POST", "/api/v1/auth/totp/setup"),
   totpEnable: (code) => request("POST", "/api/v1/auth/totp/enable", { code }),
   totpDisable: (password) => request("POST", "/api/v1/auth/totp/disable", { password }),
+  authAccounts: () => request("GET", "/api/v1/auth/accounts"),
+  createAuthAccount: (account) => request("POST", "/api/v1/auth/accounts", account),
+  deleteAuthAccount: (username) => request("DELETE", `/api/v1/auth/accounts/${encodeURIComponent(username)}`),
 
   httpsSettings: () => request("GET", "/api/v1/security/https"),
   setHTTPSSettings: (settings) => request("PUT", "/api/v1/security/https", settings),

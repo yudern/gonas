@@ -49,6 +49,7 @@ const dict = {
       passwordMin: "密碼(至少 8 個字元)", confirmPassword: "確認密碼",
       setupBtn: "建立管理者帳號",
       passwordMismatch: "兩次輸入的密碼不一致。",
+      roleAdmin: "管理者", roleViewer: "檢視者(唯讀)",
     },
     dashboard: {
       title: "儀表板",
@@ -246,6 +247,14 @@ const dict = {
       vpnAddClient: "新增用戶端並產生設定檔",
       vpnClientAdded: "已新增用戶端「{name}」,下面是它的設定檔內容 —— 只會顯示這一次,請立刻複製或匯入用戶端裝置。",
       vpnDeleteConfirm: "確定要刪除這個用戶端嗎?刪除後該裝置會立刻無法再連線,且無法復原。",
+      accounts: "帳號管理({n})",
+      accountsHint: "管理誰可以登入這個 Web 管理介面。「管理者」可以做任何事;「檢視者」只能查看現有設定跟資料,不能新增/修改/刪除任何東西(包含自己的密碼、兩步驟驗證除外——那算「管理自己的帳號」,不算「管理 NAS」)。這裡看到的帳號跟「使用者」頁面的 SMB/NFS 帳號是完全不同的兩件事。",
+      colUsername: "使用者名稱", colRole: "權限", colTOTP: "兩步驟驗證", youLabel: "(你)",
+      noAccounts: "還沒有其他帳號。",
+      newAccountUsername: "使用者名稱", newAccountPassword: "密碼(至少 8 個字元)", newAccountRole: "權限",
+      createAccount: "新增帳號", accountCreated: "帳號已建立。",
+      deleteAccountConfirm: "確定要刪除帳號「{name}」嗎?這個動作無法復原,該帳號名下所有 session 會立刻失效。",
+      accountsAdminOnlyHint: "只有「管理者」權限的帳號能看到、管理這個區塊。",
     },
     backup: {
       title: "備份",
@@ -290,6 +299,7 @@ const dict = {
       passwordMin: "密码(至少 8 个字符)", confirmPassword: "确认密码",
       setupBtn: "创建管理员账号",
       passwordMismatch: "两次输入的密码不一致。",
+      roleAdmin: "管理员", roleViewer: "查看者(只读)",
     },
     dashboard: {
       title: "仪表盘",
@@ -487,6 +497,14 @@ const dict = {
       vpnAddClient: "新建客户端并生成配置文件",
       vpnClientAdded: "已新建客户端「{name}」,下面是它的配置文件内容 —— 只会显示这一次,请立刻复制或导入客户端设备。",
       vpnDeleteConfirm: "确定要删除这个客户端吗?删除后该设备会立刻无法再连接,且无法恢复。",
+      accounts: "账号管理({n})",
+      accountsHint: "管理谁可以登录这个 Web 管理界面。「管理员」可以做任何事;「查看者」只能查看现有设置和数据,不能新增/修改/删除任何东西(自己的密码、两步验证除外——那属于「管理自己的账号」,不算「管理 NAS」)。这里看到的账号跟「用户」页面的 SMB/NFS 账号是完全不同的两件事。",
+      colUsername: "用户名", colRole: "权限", colTOTP: "两步验证", youLabel: "(你)",
+      noAccounts: "还没有其他账号。",
+      newAccountUsername: "用户名", newAccountPassword: "密码(至少 8 个字符)", newAccountRole: "权限",
+      createAccount: "新建账号", accountCreated: "账号已创建。",
+      deleteAccountConfirm: "确定要删除账号「{name}」吗?这个操作无法恢复,该账号名下所有会话会立刻失效。",
+      accountsAdminOnlyHint: "只有「管理员」权限的账号能看到、管理这个区块。",
     },
     backup: {
       title: "备份",
@@ -531,6 +549,7 @@ const dict = {
       passwordMin: "Password (at least 8 characters)", confirmPassword: "Confirm password",
       setupBtn: "Create administrator account",
       passwordMismatch: "The two passwords you entered do not match.",
+      roleAdmin: "Admin", roleViewer: "Viewer (read-only)",
     },
     dashboard: {
       title: "Dashboard",
@@ -728,6 +747,14 @@ const dict = {
       vpnAddClient: "Add Client and Generate Config",
       vpnClientAdded: "Added client “{name}” — its configuration is shown below. It's only shown this once, so copy or import it into the client device right away.",
       vpnDeleteConfirm: "Delete this client? The device will immediately lose its connection and this cannot be undone.",
+      accounts: "Account Management ({n})",
+      accountsHint: "Manage who can log into this web admin interface. An Admin account can do anything; a Viewer account can only look at existing settings and data — it can't create, change, or delete anything (except its own password and two-factor setup, which counts as managing your own account, not managing the NAS). These accounts are a completely different thing from the SMB/NFS accounts on the Users page.",
+      colUsername: "Username", colRole: "Role", colTOTP: "Two-Factor", youLabel: "(you)",
+      noAccounts: "No other accounts yet.",
+      newAccountUsername: "Username", newAccountPassword: "Password (at least 8 characters)", newAccountRole: "Role",
+      createAccount: "Create Account", accountCreated: "Account created.",
+      deleteAccountConfirm: "Delete the account “{name}”? This cannot be undone, and any of its sessions will be invalidated immediately.",
+      accountsAdminOnlyHint: "Only Admin-role accounts can see and manage this section.",
     },
     backup: {
       title: "Backup",
@@ -816,6 +843,21 @@ const errorMap = {
   "filemanager: file is too large to preview or edit as text": { "zh-Hant": "檔案太大,沒辦法用文字方式預覽或編輯。", "zh-Hans": "文件太大,没办法用文本方式预览或编辑。", "en": "This file is too large to preview or edit as text." },
   "filemanager: file does not look like a UTF-8 text file": { "zh-Hant": "這個檔案看起來不是 UTF-8 文字檔。", "zh-Hans": "这个文件看起来不是 UTF-8 文本文件。", "en": "This file doesn't look like a UTF-8 text file." },
   "exec command must not be empty": { "zh-Hant": "指令不能是空的。", "zh-Hans": "命令不能为空。", "en": "The command must not be empty." },
+  "this account does not have permission to perform this action: an admin-role account is required": {
+    "zh-Hant": "這個帳號沒有權限執行這個動作,需要「管理者」權限的帳號。", "zh-Hans": "这个账号没有权限执行这个操作,需要「管理员」权限的账号。",
+    "en": "This account doesn't have permission to do that — an admin-role account is required.",
+  },
+  "role must be either \"admin\" or \"viewer\"": { "zh-Hant": "權限只能是「管理者」或「檢視者」。", "zh-Hans": "权限只能是「管理员」或「查看者」。", "en": "Role must be either “admin” or “viewer”." },
+  "an account with that username already exists": { "zh-Hant": "已經有這個使用者名稱的帳號存在。", "zh-Hans": "已经有这个用户名的账号存在。", "en": "An account with that username already exists." },
+  "no account with that username": { "zh-Hant": "找不到這個使用者名稱的帳號。", "zh-Hans": "找不到这个用户名的账号。", "en": "No account with that username." },
+  "you cannot delete your own account while logged in as it: log in as a different admin account first": {
+    "zh-Hant": "不能刪除自己目前登入的帳號,請先用另一個管理者帳號登入。", "zh-Hans": "不能删除自己当前登录的账号,请先用另一个管理员账号登录。",
+    "en": "You can't delete your own account while logged in as it — log in as a different admin account first.",
+  },
+  "cannot delete the last remaining admin-role account: at least one must always exist": {
+    "zh-Hant": "不能刪除最後一個「管理者」帳號,系統必須至少保留一個。", "zh-Hans": "不能删除最后一个「管理员」账号,系统必须至少保留一个。",
+    "en": "You can't delete the last remaining admin-role account — at least one must always exist.",
+  },
 };
 
 // noticeMap —— 跟 errorMap 同樣的道理,但這裡收的不是「錯誤」,而是後端
