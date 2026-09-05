@@ -72,9 +72,16 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		// ReadTimeout 涵蓋整個請求(標頭 + body)讀取的時間上限,擋
 		// slowloris 這類「故意用極慢的速度一點一點送資料撐住連線」的
-		// 攻擊。GoNAS 的請求 body 全部是小型 JSON(見
+		// 攻擊。GoNAS 絕大多數的請求 body 都是小型 JSON(見
 		// internal/api.maxRequestBodyBytes),20 秒對正常區網使用者已經
 		// 非常寬裕。
+		//
+		// 例外是 POST /api/v1/files/upload:檔案上傳的 body 大小取決於
+		// 使用者要傳多大的檔案,20 秒對傳一顆幾 GB 的影片檔毫無意義。
+		// 這支端點自己呼叫 http.NewResponseController(w).SetReadDeadline
+		// 把「這一個請求」的讀取逾時整個關掉(Go 1.20 起的功能,見
+		// internal/api/files_handlers.go 的 handleFilesUpload 說明),
+		// 不需要為了這一支端點放寬全站的 slowloris 防護。
 		//
 		// 刻意不設 WriteTimeout:net/http 的 WriteTimeout 是從「讀完
 		// 請求標頭」那一刻開始算的整段回應時間,不是「單次寫入」的

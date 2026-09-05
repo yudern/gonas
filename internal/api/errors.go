@@ -38,4 +38,10 @@ var (
 	// Phase 9：登入節流、panic 復原共用的 sentinel 錯誤。
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")
 	errInternalServerError  = errors.New("internal server error")
+
+	// Phase 10：檔案管理員共用的 sentinel 錯誤。
+	errArrayNotStarted = errors.New("the storage array has been configured but is not started yet: POST /api/v1/storage/array/start first")
+	errMissingPath     = errors.New("the \"path\" query parameter is required")
+	errMissingFromOrTo = errors.New("both \"from\" and \"to\" are required")
+	errNoUploadedFile  = errors.New("no file was found in the upload request")
 )

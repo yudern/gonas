@@ -212,6 +212,25 @@ button:disabled { opacity: 0.55; cursor: default; }
 .service-panel .exec-form input { flex: 1; }
 .log-output { margin: 0; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; background: var(--sidebar-bg); color: var(--sidebar-text); padding: 8px; border-radius: 6px; }
 
+/* ---------- 檔案管理員 ---------- */
+p.hint { color: var(--text-faint); font-size: 12.5px; }
+.files-toolbar { margin-bottom: 10px; }
+.files-toolbar input[type="text"] { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; }
+.breadcrumb { font-size: 13px; margin-bottom: 10px; color: var(--text-dim); }
+.breadcrumb a { color: var(--accent); text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { margin: 0 6px; color: var(--text-faint); }
+.files-drop-zone { border: 2px dashed transparent; border-radius: 8px; transition: border-color .15s, background .15s; }
+.files-drop-zone.drag-over { border-color: var(--accent); background: var(--accent-soft); }
+.file-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.file-table th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-faint); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.file-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.file-table tr:last-child td { border-bottom: none; }
+.file-name { color: var(--text); text-decoration: none; font-weight: 500; }
+.file-name.is-dir { color: var(--accent); font-weight: 600; }
+.file-name:hover { text-decoration: underline; }
+.file-editor { width: 100%; min-height: 320px; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical; }
+
 .install-form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); display: none; }
 .install-form.open { display: grid; gap: 10px; }
 

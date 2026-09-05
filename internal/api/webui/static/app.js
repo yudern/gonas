@@ -9,6 +9,7 @@ const authGateContent = document.getElementById("auth-gate-content");
 const routes = {
   dashboard: renderDashboard,
   storage: renderStorage,
+  files: renderFiles,
   apps: renderApps,
   shares: renderShares,
   users: renderUsers,
@@ -312,6 +313,444 @@ function formatBytes(n) {
   let v = n;
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+// ---------- 檔案 ----------
+//
+// 檔案管理員讓使用者直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，
+// 不需要另外掛載 SMB/NFS 或安裝任何用戶端軟體。畫面狀態(目前瀏覽到
+// 哪個目錄、勾選了哪些項目)刻意放在模組層級的 filesState,而不是每次
+// 重新 render 就重置——使用者切去別頁再切回來，理應還停留在原本瀏覽的
+// 目錄，這才是符合直覺的行為。
+
+const filesState = {
+  path: "",
+  selected: new Set(),
+  searching: false,
+};
+
+function joinPath(dir, name) {
+  return dir ? `${dir}/${name}` : name;
+}
+
+function dirname(p) {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? "" : p.slice(0, i);
+}
+
+function basename(p) {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? p : p.slice(i + 1);
+}
+
+async function renderFiles(el) {
+  const status = await api.filesStatus().catch((e) => ({ available: false, reason: e.message }));
+
+  el.innerHTML = `
+    <h1>檔案</h1>
+    <p class="page-subtitle">直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，不需要另外掛載 SMB/NFS 或安裝用戶端軟體。</p>
+    <div id="files-root"></div>
+  `;
+  const root = el.querySelector("#files-root");
+
+  if (!status.available) {
+    root.innerHTML = `
+      ${msg("warn", "檔案管理員目前無法使用:" + (status.reason || ""))}
+      <p class="hint">請先到「儲存」頁面設定陣列的儲存池，並確認陣列已經啟動。</p>
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="card">
+      <div id="files-toolbar" class="files-toolbar"></div>
+      <div id="files-breadcrumb" class="breadcrumb"></div>
+      <div id="files-msg"></div>
+      <div id="files-drop-zone" class="files-drop-zone">
+        <table class="file-table">
+          <thead><tr><th></th><th>名稱</th><th>大小</th><th>修改時間</th><th></th></tr></thead>
+          <tbody id="files-tbody"></tbody>
+        </table>
+      </div>
+      <div id="files-panel"></div>
+    </div>
+    <div class="card">
+      <h2>回收桶</h2>
+      <p class="hint">刪除的檔案會先進回收桶，可以復原；「永久刪除」或清空回收桶之後就真的沒辦法復原了。</p>
+      <div id="trash-msg"></div>
+      <div id="trash-list"></div>
+      <div class="btn-row"><button class="secondary" id="trash-empty-btn">清空回收桶</button></div>
+    </div>
+  `;
+
+  wireFilesToolbar(root);
+  wireFilesDropZone(root);
+  await loadFilesList(root);
+  await loadTrash(root);
+
+  root.querySelector("#trash-empty-btn").addEventListener("click", async () => {
+    if (!confirm("確定要清空回收桶嗎?裡面的東西會被永久刪除，沒辦法復原。")) return;
+    try {
+      await api.filesTrashEmpty();
+      await loadTrash(root);
+    } catch (err) {
+      root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function wireFilesToolbar(root) {
+  const toolbar = root.querySelector("#files-toolbar");
+  toolbar.innerHTML = `
+    <div class="btn-row">
+      <button type="button" id="files-upload-btn">上傳檔案</button>
+      <input type="file" id="files-upload-input" multiple hidden>
+      <button type="button" class="secondary" id="files-mkdir-btn">新增資料夾</button>
+      <button type="button" class="secondary" id="files-move-btn">搬移選取項目</button>
+      <button type="button" class="secondary" id="files-copy-btn">複製選取項目</button>
+      <button type="button" class="secondary" id="files-download-btn">下載選取項目</button>
+      <button type="button" class="danger" id="files-delete-btn">刪除選取項目</button>
+    </div>
+    <form class="btn-row" id="files-search-form" style="margin-top:8px">
+      <input type="text" id="files-search-input" placeholder="搜尋目前目錄底下的檔名…" style="flex:1;min-width:200px">
+      <button type="submit" class="secondary">搜尋</button>
+      <button type="button" class="secondary" id="files-search-clear" hidden>清除搜尋</button>
+    </form>
+  `;
+
+  const fileInput = toolbar.querySelector("#files-upload-input");
+  toolbar.querySelector("#files-upload-btn").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    if (fileInput.files.length) await uploadFiles(root, fileInput.files);
+    fileInput.value = "";
+  });
+
+  toolbar.querySelector("#files-mkdir-btn").addEventListener("click", async () => {
+    const name = prompt("新資料夾名稱:");
+    if (!name) return;
+    try {
+      await api.filesMkdir(joinPath(filesState.path, name));
+      await loadFilesList(root);
+    } catch (err) {
+      showFilesMsg(root, "error", err.message);
+    }
+  });
+
+  toolbar.querySelector("#files-move-btn").addEventListener("click", () => moveOrCopySelected(root, "move"));
+  toolbar.querySelector("#files-copy-btn").addEventListener("click", () => moveOrCopySelected(root, "copy"));
+  toolbar.querySelector("#files-download-btn").addEventListener("click", () => downloadSelected(root));
+  toolbar.querySelector("#files-delete-btn").addEventListener("click", () => deleteSelected(root));
+
+  toolbar.querySelector("#files-search-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const q = toolbar.querySelector("#files-search-input").value.trim();
+    if (!q) return;
+    filesState.searching = true;
+    toolbar.querySelector("#files-search-clear").hidden = false;
+    try {
+      const result = await api.filesSearch(filesState.path, q);
+      renderFileRows(root, result.entries, { flatPaths: true, truncated: result.truncated });
+    } catch (err) {
+      showFilesMsg(root, "error", err.message);
+    }
+  });
+  toolbar.querySelector("#files-search-clear").addEventListener("click", async () => {
+    filesState.searching = false;
+    toolbar.querySelector("#files-search-input").value = "";
+    toolbar.querySelector("#files-search-clear").hidden = true;
+    await loadFilesList(root);
+  });
+}
+
+function wireFilesDropZone(root) {
+  const zone = root.querySelector("#files-drop-zone");
+  ["dragenter", "dragover"].forEach((evt) => {
+    zone.addEventListener(evt, (ev) => {
+      ev.preventDefault();
+      zone.classList.add("drag-over");
+    });
+  });
+  ["dragleave", "drop"].forEach((evt) => {
+    zone.addEventListener(evt, (ev) => {
+      ev.preventDefault();
+      zone.classList.remove("drag-over");
+    });
+  });
+  zone.addEventListener("drop", async (ev) => {
+    const files = ev.dataTransfer && ev.dataTransfer.files;
+    if (files && files.length) await uploadFiles(root, files);
+  });
+}
+
+function showFilesMsg(root, kind, text) {
+  root.querySelector("#files-msg").innerHTML = msg(kind, text);
+}
+
+async function loadFilesList(root) {
+  filesState.selected.clear();
+  root.querySelector("#files-msg").innerHTML = "";
+  renderBreadcrumb(root);
+  try {
+    const entries = await api.filesList(filesState.path);
+    entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    renderFileRows(root, entries, { flatPaths: false });
+  } catch (err) {
+    showFilesMsg(root, "error", err.message);
+    root.querySelector("#files-tbody").innerHTML = "";
+  }
+}
+
+function renderBreadcrumb(root) {
+  const parts = filesState.path ? filesState.path.split("/") : [];
+  let acc = "";
+  const crumbs = [`<a href="#" data-goto="">根目錄</a>`];
+  for (const part of parts) {
+    acc = joinPath(acc, part);
+    crumbs.push(`<a href="#" data-goto="${esc(acc)}">${esc(part)}</a>`);
+  }
+  const bc = root.querySelector("#files-breadcrumb");
+  bc.innerHTML = crumbs.join(`<span class="sep">/</span>`);
+  bc.querySelectorAll("[data-goto]").forEach((a) => {
+    a.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      filesState.path = a.dataset.goto;
+      filesState.searching = false;
+      root.querySelector("#files-search-clear").hidden = true;
+      root.querySelector("#files-search-input").value = "";
+      root.querySelector("#files-panel").innerHTML = "";
+      await loadFilesList(root);
+    });
+  });
+}
+
+function renderFileRows(root, entries, { flatPaths, truncated }) {
+  const tbody = root.querySelector("#files-tbody");
+  if (!entries.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${flatPaths ? "沒有找到符合的檔案。" : "這個資料夾是空的。"}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = entries.map((e) => `
+    <tr data-path="${esc(e.path)}" data-isdir="${e.isDir}">
+      <td><input type="checkbox" data-select="${esc(e.path)}"></td>
+      <td>
+        <a href="#" class="file-name ${e.isDir ? "is-dir" : ""}" data-open="${esc(e.path)}">${esc(flatPaths ? e.path : e.name)}${e.isDir ? "/" : ""}</a>
+      </td>
+      <td>${e.isDir ? "—" : formatBytes(e.size)}</td>
+      <td>${esc(formatDateTime(e.modTime))}</td>
+      <td class="btn-row" style="margin:0">
+        ${e.isDir ? "" : `<a class="secondary" href="${api.filesDownloadURL(e.path)}">下載</a>`}
+        <button type="button" class="secondary" data-rename="${esc(e.path)}" data-isdir="${e.isDir}">重新命名</button>
+      </td>
+    </tr>
+  `).join("") + (truncated ? `<tr><td colspan="5" class="empty-state">結果太多，只顯示前面一部分——請縮小搜尋範圍。</td></tr>` : "");
+
+  tbody.querySelectorAll("[data-select]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) filesState.selected.add(cb.dataset.select);
+      else filesState.selected.delete(cb.dataset.select);
+    });
+  });
+
+  tbody.querySelectorAll("[data-open]").forEach((a) => {
+    a.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const row = a.closest("tr");
+      const path = a.dataset.open;
+      if (row.dataset.isdir === "true") {
+        filesState.path = path;
+        filesState.searching = false;
+        root.querySelector("#files-search-clear").hidden = true;
+        root.querySelector("#files-search-input").value = "";
+        await loadFilesList(root);
+      } else {
+        await openFilePreview(root, path);
+      }
+    });
+  });
+
+  tbody.querySelectorAll("[data-rename]").forEach((btn) => {
+    btn.addEventListener("click", () => renameItem(root, btn.dataset.rename));
+  });
+}
+
+async function openFilePreview(root, path) {
+  const panel = root.querySelector("#files-panel");
+  panel.innerHTML = `<div class="service-panel"><p class="loading">載入中…</p></div>`;
+  try {
+    const { content } = await api.filesReadText(path);
+    panel.innerHTML = `
+      <div class="service-panel">
+        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>關閉</button></div>
+        <textarea class="file-editor">${esc(content)}</textarea>
+        <div class="btn-row" style="margin-top:8px">
+          <button type="button" data-save-text>儲存</button>
+          <a class="secondary" href="${api.filesDownloadURL(path)}">下載原始檔案</a>
+        </div>
+        <div id="file-editor-msg"></div>
+      </div>
+    `;
+    panel.querySelector("[data-panel-close]").addEventListener("click", () => { panel.innerHTML = ""; });
+    panel.querySelector("[data-save-text]").addEventListener("click", async () => {
+      const newContent = panel.querySelector(".file-editor").value;
+      try {
+        await api.filesWriteText(path, newContent);
+        panel.querySelector("#file-editor-msg").innerHTML = msg("ok", "已儲存。");
+      } catch (err) {
+        panel.querySelector("#file-editor-msg").innerHTML = msg("error", err.message);
+      }
+    });
+  } catch (err) {
+    panel.innerHTML = `
+      <div class="service-panel">
+        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>關閉</button></div>
+        <p class="hint">這個檔案沒辦法在瀏覽器裡預覽(${esc(err.message)})，請直接下載。</p>
+        <div class="btn-row"><a href="${api.filesDownloadURL(path)}">下載檔案</a></div>
+      </div>
+    `;
+    panel.querySelector("[data-panel-close]").addEventListener("click", () => { panel.innerHTML = ""; });
+  }
+}
+
+async function renameItem(root, path) {
+  const oldName = basename(path);
+  const newName = prompt("新名稱:", oldName);
+  if (!newName || newName === oldName) return;
+  try {
+    await api.filesMove(path, joinPath(dirname(path), newName));
+    await loadFilesList(root);
+  } catch (err) {
+    showFilesMsg(root, "error", err.message);
+  }
+}
+
+async function moveOrCopySelected(root, kind) {
+  if (filesState.selected.size === 0) {
+    showFilesMsg(root, "warn", "請先勾選要處理的項目。");
+    return;
+  }
+  const dest = prompt(`要${kind === "move" ? "搬移" : "複製"}到哪個資料夾?(相對於根目錄的路徑，留空代表根目錄)`, filesState.path);
+  if (dest === null) return;
+  const op = kind === "move" ? api.filesMove : api.filesCopy;
+  const errors = [];
+  for (const path of filesState.selected) {
+    try {
+      await op(path, joinPath(dest, basename(path)));
+    } catch (err) {
+      errors.push(`${basename(path)}: ${err.message}`);
+    }
+  }
+  if (errors.length) showFilesMsg(root, "error", errors.join("；"));
+  else showFilesMsg(root, "ok", `${kind === "move" ? "搬移" : "複製"}完成。`);
+  await loadFilesList(root);
+}
+
+function downloadSelected(root) {
+  if (filesState.selected.size === 0) {
+    showFilesMsg(root, "warn", "請先勾選要下載的項目。");
+    return;
+  }
+  const rows = root.querySelectorAll("#files-tbody tr[data-path]");
+  const isDir = new Map();
+  rows.forEach((r) => isDir.set(r.dataset.path, r.dataset.isdir === "true"));
+
+  let delay = 0;
+  for (const path of filesState.selected) {
+    const url = isDir.get(path) ? api.filesDownloadZipURL(path) : api.filesDownloadURL(path);
+    setTimeout(() => {
+      const a = document.createElement("a");
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, delay);
+    delay += 400; // 瀏覽器對「一次觸發好幾個下載」通常有防護，錯開觸發時間比較不會被擋。
+  }
+}
+
+async function deleteSelected(root) {
+  if (filesState.selected.size === 0) {
+    showFilesMsg(root, "warn", "請先勾選要刪除的項目。");
+    return;
+  }
+  if (!confirm(`確定要刪除選取的 ${filesState.selected.size} 個項目嗎?會先進回收桶，可以之後復原。`)) return;
+  const errors = [];
+  for (const path of filesState.selected) {
+    try {
+      await api.filesDelete(path, false);
+    } catch (err) {
+      errors.push(`${basename(path)}: ${err.message}`);
+    }
+  }
+  if (errors.length) showFilesMsg(root, "error", errors.join("；"));
+  else showFilesMsg(root, "ok", "已刪除，可以在下面的回收桶復原。");
+  await loadFilesList(root);
+  await loadTrash(root);
+}
+
+async function uploadFiles(root, fileList) {
+  const formData = new FormData();
+  for (const f of fileList) formData.append("file", f);
+
+  showFilesMsg(root, "ok", `上傳中… 0%`);
+  try {
+    await api.filesUpload(filesState.path, formData, (fraction) => {
+      showFilesMsg(root, "ok", `上傳中… ${Math.round(fraction * 100)}%`);
+    });
+    showFilesMsg(root, "ok", "上傳完成。");
+    await loadFilesList(root);
+  } catch (err) {
+    showFilesMsg(root, "error", "上傳失敗:" + err.message);
+  }
+}
+
+async function loadTrash(root) {
+  const list = root.querySelector("#trash-list");
+  try {
+    const trash = await api.filesTrashList();
+    if (!trash.length) {
+      list.innerHTML = `<p class="empty-state">回收桶是空的。</p>`;
+      return;
+    }
+    list.innerHTML = trash.map((t) => `
+      <div class="rule-row" data-trash-id="${esc(t.id)}">
+        <div class="rule-main">
+          <div>
+            <div class="rule-name">${esc(t.name)}${t.isDir ? "/" : ""}</div>
+            <div class="rule-cond">原始位置:${esc(t.originalPath)} · 刪除於 ${esc(formatDateTime(t.deletedAt))}${t.isDir ? "" : " · " + esc(formatBytes(t.size))}</div>
+          </div>
+        </div>
+        <div class="btn-row" style="margin:0">
+          <button type="button" class="secondary" data-restore="${esc(t.id)}">復原</button>
+          <button type="button" class="danger" data-purge="${esc(t.id)}">永久刪除</button>
+        </div>
+      </div>
+    `).join("");
+
+    list.querySelectorAll("[data-restore]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await api.filesTrashRestore(btn.dataset.restore);
+          await loadTrash(root);
+          await loadFilesList(root);
+        } catch (err) {
+          root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+        }
+      });
+    });
+    list.querySelectorAll("[data-purge]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("確定要永久刪除這個項目嗎?沒辦法復原。")) return;
+        try {
+          await api.filesTrashDeleteItem(btn.dataset.purge);
+          await loadTrash(root);
+        } catch (err) {
+          root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+        }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = msg("error", err.message);
+  }
 }
 
 // ---------- 應用程式 ----------

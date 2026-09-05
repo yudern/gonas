@@ -213,6 +213,23 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/backup/jobs/{id}/run", s.requireAuth(s.handleBackupJobsRun))
 	mux.HandleFunc("GET /api/v1/backup/jobs/{id}/snapshots", s.requireAuth(s.handleBackupJobsSnapshots))
 
+	mux.HandleFunc("GET /api/v1/files/status", s.requireAuth(s.handleFilesStatus))
+	mux.HandleFunc("GET /api/v1/files/list", s.requireAuth(s.handleFilesList))
+	mux.HandleFunc("POST /api/v1/files/mkdir", s.requireAuth(s.handleFilesMkdir))
+	mux.HandleFunc("POST /api/v1/files/move", s.requireAuth(s.handleFilesMove))
+	mux.HandleFunc("POST /api/v1/files/copy", s.requireAuth(s.handleFilesCopy))
+	mux.HandleFunc("DELETE /api/v1/files/item", s.requireAuth(s.handleFilesDelete))
+	mux.HandleFunc("GET /api/v1/files/download", s.requireAuth(s.handleFilesDownload))
+	mux.HandleFunc("GET /api/v1/files/download-zip", s.requireAuth(s.handleFilesDownloadZip))
+	mux.HandleFunc("GET /api/v1/files/search", s.requireAuth(s.handleFilesSearch))
+	mux.HandleFunc("GET /api/v1/files/text", s.requireAuth(s.handleFilesReadText))
+	mux.HandleFunc("PUT /api/v1/files/text", s.requireAuth(s.handleFilesWriteText))
+	mux.HandleFunc("POST /api/v1/files/upload", s.requireAuth(s.handleFilesUpload))
+	mux.HandleFunc("GET /api/v1/files/trash", s.requireAuth(s.handleFilesTrashList))
+	mux.HandleFunc("POST /api/v1/files/trash/{id}/restore", s.requireAuth(s.handleFilesTrashRestore))
+	mux.HandleFunc("DELETE /api/v1/files/trash/{id}", s.requireAuth(s.handleFilesTrashDeleteItem))
+	mux.HandleFunc("POST /api/v1/files/trash/empty", s.requireAuth(s.handleFilesTrashEmpty))
+
 	mux.Handle("/", webUIHandler())
 
 	// 中介層順序由外而內: withLogging(最外層,不管中間發生什麼都要記錄
@@ -251,6 +268,27 @@ func (s *Server) Close() {
 	for _, sched := range schedulers {
 		sched.Stop()
 	}
+}
+
+// fileManagerRoot 回傳目前檔案管理員該用的根目錄(陣列的 mergerFS
+// 掛載點),或是一個說明原因的錯誤——還沒設定 pool、或設定了但陣列還
+// 沒啟動,都是使用者操作順序上的合理狀態，不是伺服器錯誤,所以用
+// sentinel 錯誤讓呼叫端對應到 409 Conflict，而不是 500。
+//
+// 檔案管理員刻意只服務「目前這個陣列的掛載點」這一個根目錄,不是每個
+// Samba 分享各自一個根——GoNAS 目前的架構本來就只支援單一個 pool
+// (state.State.Pool 是單一指標,不是陣列),分享路徑照慣例都是掛載點
+// 底下的子目錄，用掛載點當根已經涵蓋得到所有分享，同時避免「這個根
+// 目錄到底對應哪個分享」的額外心智負擔。
+func (s *Server) fileManagerRoot() (string, error) {
+	pool := s.store.Snapshot().Pool
+	if pool == nil || s.array == nil {
+		return "", errNoPoolConfigured
+	}
+	if s.array.Status().State != storage.StateStarted {
+		return "", errArrayNotStarted
+	}
+	return pool.MountPoint, nil
 }
 
 type healthResponse struct {

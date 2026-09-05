@@ -109,4 +109,50 @@ export const api = {
   deleteBackupJob: (id) => request("DELETE", `/api/v1/backup/jobs/${encodeURIComponent(id)}`),
   runBackupJob: (id) => request("POST", `/api/v1/backup/jobs/${encodeURIComponent(id)}/run`),
   backupJobSnapshots: (id) => request("GET", `/api/v1/backup/jobs/${encodeURIComponent(id)}/snapshots`),
+
+  filesStatus: () => request("GET", "/api/v1/files/status"),
+  filesList: (path) => request("GET", `/api/v1/files/list?path=${encodeURIComponent(path)}`),
+  filesMkdir: (path) => request("POST", "/api/v1/files/mkdir", { path }),
+  filesMove: (from, to) => request("POST", "/api/v1/files/move", { from, to }),
+  filesCopy: (from, to) => request("POST", "/api/v1/files/copy", { from, to }),
+  filesDelete: (path, permanent) => request("DELETE", `/api/v1/files/item?path=${encodeURIComponent(path)}${permanent ? "&permanent=true" : ""}`),
+  filesDownloadURL: (path) => `/api/v1/files/download?path=${encodeURIComponent(path)}`,
+  filesDownloadZipURL: (path) => `/api/v1/files/download-zip?path=${encodeURIComponent(path)}`,
+  filesSearch: (path, q) => request("GET", `/api/v1/files/search?path=${encodeURIComponent(path)}&q=${encodeURIComponent(q)}`),
+  filesReadText: (path) => request("GET", `/api/v1/files/text?path=${encodeURIComponent(path)}`),
+  filesWriteText: (path, content) => request("PUT", `/api/v1/files/text?path=${encodeURIComponent(path)}`, { content }),
+  filesUpload: (dirPath, formData, onProgress) => uploadWithProgress(`/api/v1/files/upload?path=${encodeURIComponent(dirPath)}`, formData, onProgress),
+  filesTrashList: () => request("GET", "/api/v1/files/trash"),
+  filesTrashRestore: (id) => request("POST", `/api/v1/files/trash/${encodeURIComponent(id)}/restore`),
+  filesTrashDeleteItem: (id) => request("DELETE", `/api/v1/files/trash/${encodeURIComponent(id)}`),
+  filesTrashEmpty: () => request("POST", "/api/v1/files/trash/empty"),
 };
+
+// uploadWithProgress 用 XMLHttpRequest 而不是 fetch 送出上傳請求——這是
+// 目前瀏覽器原生 API 裡唯一能拿到「已經傳了多少 byte」進度事件的方式
+// (fetch 的 body 上傳目前還沒有標準化的進度回呼),對「上傳一個幾百 MB
+// 的檔案」這種可能要等好一段時間的操作，讓使用者看得到進度條而不是
+// 對著一個沒有任何回饋的畫面乾等，是基本的可用性要求。
+function uploadWithProgress(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    if (onProgress) {
+      xhr.upload.addEventListener("progress", (ev) => {
+        if (ev.lengthComputable) onProgress(ev.loaded / ev.total);
+      });
+    }
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* 非 JSON 回應忽略 */ }
+      if (xhr.status === 401 && onUnauthorized) onUnauthorized();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+      } else {
+        reject(new Error((data && data.error) ? data.error : `${xhr.status} ${xhr.statusText}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("網路錯誤，上傳失敗"));
+    xhr.send(formData);
+  });
+}
