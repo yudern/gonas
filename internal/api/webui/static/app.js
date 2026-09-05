@@ -1,7 +1,10 @@
-import { api } from "/api.js";
+import { api, setUnauthorizedHandler } from "/api.js";
 
 const content = document.getElementById("content");
 const navLinks = document.querySelectorAll(".nav-list a");
+const shell = document.getElementById("shell");
+const authGate = document.getElementById("auth-gate");
+const authGateContent = document.getElementById("auth-gate-content");
 
 const routes = {
   dashboard: renderDashboard,
@@ -10,6 +13,7 @@ const routes = {
   shares: renderShares,
   users: renderUsers,
   monitor: renderMonitor,
+  security: renderSecurity,
 };
 
 // 跟後端 internal/api.monitorPollInterval 一致，純粹用來在頁面文字上
@@ -42,12 +46,117 @@ async function router() {
 }
 
 window.addEventListener("hashchange", router);
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", boot);
+
+// ---------- 登入/初始設定 ----------
+//
+// GoNAS 的登入狀態是「整個 Web UI 能不能用」的前提,所以不能像其他頁面
+// 一樣走 routes{} 那套 hash router —— 在使用者通過驗證之前,連 sidebar
+// 都不該顯示(裡面全是需要登入才能呼叫的功能入口)。boot() 是頁面載入時
+// 唯一的進入點,決定顯示登入畫面、初始設定畫面,還是真正的管理介面。
+
+let showingApp = false;
+
+async function boot() {
+  setUnauthorizedHandler(showLoginGate);
+
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    try { await api.authLogout(); } catch { /* 就算 logout 呼叫本身失敗,也還是要讓使用者回到登入畫面 */ }
+    showLoginGate();
+  });
+
+  let status;
+  try {
+    status = await api.authStatus();
+  } catch (err) {
+    authGate.hidden = false;
+    authGateContent.innerHTML = msg("error", "無法連線到 gonasd:" + err.message);
+    return;
+  }
+
+  if (status.setupRequired) {
+    showSetupGate();
+    return;
+  }
+
+  try {
+    await api.me();
+    showApp();
+  } catch {
+    showLoginGate();
+  }
+}
+
+function showApp() {
+  showingApp = true;
+  authGate.hidden = true;
+  shell.hidden = false;
   router();
   api.version().then((v) => {
     document.getElementById("sidebar-version").textContent = `gonasd ${v.version} (${v.goos}/${v.goarch})`;
   }).catch(() => {});
-});
+}
+
+function showLoginGate() {
+  if (!showingApp && authGate.hidden === false && authGateContent.querySelector("#login-form")) return; // 已經顯示登入表單,不要蓋掉使用者正在打的字
+  showingApp = false;
+  shell.hidden = true;
+  authGate.hidden = false;
+  authGateContent.innerHTML = `
+    <h1>登入</h1>
+    <p class="page-subtitle">請輸入管理者帳號密碼。已啟用兩步驟驗證的話,一併填入目前的驗證碼。</p>
+    <div id="login-msg"></div>
+    <form class="stacked" id="login-form">
+      <div class="field"><label>使用者名稱</label><input type="text" name="username" autocomplete="username" required></div>
+      <div class="field"><label>密碼</label><input type="password" name="password" autocomplete="current-password" required></div>
+      <div class="field"><label>兩步驟驗證碼(如已啟用)</label><input type="text" name="totpCode" inputmode="numeric" pattern="[0-9]*" placeholder="123456" autocomplete="one-time-code"></div>
+      <div class="btn-row"><button type="submit">登入</button></div>
+    </form>
+  `;
+  authGateContent.querySelector("#login-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = authGateContent.querySelector("#login-msg");
+    try {
+      await api.authLogin(f.get("username").trim(), f.get("password"), f.get("totpCode").trim());
+      showApp();
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function showSetupGate() {
+  showingApp = false;
+  shell.hidden = true;
+  authGate.hidden = false;
+  authGateContent.innerHTML = `
+    <h1>初始設定</h1>
+    <p class="page-subtitle">第一次執行 GoNAS,請先建立唯一的管理者帳號。</p>
+    <div id="setup-msg"></div>
+    <form class="stacked" id="setup-form">
+      <div class="field"><label>使用者名稱</label><input type="text" name="username" autocomplete="username" required></div>
+      <div class="field"><label>密碼(至少 8 個字元)</label><input type="password" name="password" minlength="8" autocomplete="new-password" required></div>
+      <div class="field"><label>確認密碼</label><input type="password" name="confirm" minlength="8" autocomplete="new-password" required></div>
+      <div class="btn-row"><button type="submit">建立管理者帳號</button></div>
+    </form>
+  `;
+  authGateContent.querySelector("#setup-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = authGateContent.querySelector("#setup-msg");
+    if (f.get("password") !== f.get("confirm")) {
+      box.innerHTML = msg("error", "兩次輸入的密碼不一致。");
+      return;
+    }
+    try {
+      await api.authSetup(f.get("username").trim(), f.get("password"));
+      showApp();
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
 
 // ---------- 儀表板 ----------
 
@@ -731,4 +840,286 @@ function drawSparklineChart(canvas, series) {
     ctx.arc(lastX, lastY, 2.75, 0, Math.PI * 2);
     ctx.fill();
   });
+}
+
+// ---------- 安全 ----------
+
+async function renderSecurity(el) {
+  const [me, https, vpnStatus, peers] = await Promise.all([
+    api.me().catch(() => ({ username: "", totpEnabled: false })),
+    api.httpsSettings().catch(() => ({ enabled: false })),
+    api.vpnStatus().catch(() => ({ configured: false })),
+    api.vpnPeers().catch(() => []),
+  ]);
+
+  el.innerHTML = `
+    <h1>安全</h1>
+    <p class="page-subtitle">管理登入密碼、兩步驟驗證、Web 介面的 HTTPS,以及 WireGuard VPN 遠端連線。</p>
+
+    <div class="card">
+      <h2>修改密碼</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">目前登入身分:<strong>${esc(me.username)}</strong>。修改成功後,其他裝置上已登入的 session 會全部失效。</p>
+      <div id="password-msg"></div>
+      <form class="stacked" id="password-form">
+        <div class="field"><label>目前密碼</label><input type="password" name="oldPassword" autocomplete="current-password" required></div>
+        <div class="field"><label>新密碼(至少 8 個字元)</label><input type="password" name="newPassword" minlength="8" autocomplete="new-password" required></div>
+        <div class="field"><label>確認新密碼</label><input type="password" name="confirmPassword" minlength="8" autocomplete="new-password" required></div>
+        <div class="btn-row"><button type="submit">更新密碼</button></div>
+      </form>
+    </div>
+
+    <div class="card" id="totp-card">
+      ${renderTOTPSection(me.totpEnabled)}
+    </div>
+
+    <div class="card">
+      <h2>HTTPS</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
+        目前狀態:<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? "已啟用" : "未啟用"}</span>
+        ${https.certPath ? ` · 憑證檔案 <code>${esc(https.certPath)}</code>` : ""}
+      </p>
+      ${https.restartRequiredNotice ? msg("warn", https.restartRequiredNotice) : ""}
+      <div id="https-msg"></div>
+      <form class="stacked" id="https-form">
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> 啟用 HTTPS</label></div>
+        <div class="field">
+          <label>憑證主機名稱/IP(每行一個,留空預設 localhost/127.0.0.1)</label>
+          <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10"></textarea>
+          <div class="hint">自簽憑證,瀏覽器第一次連線會顯示不受信任的警告,需要手動選擇繼續/信任。</div>
+        </div>
+        <div class="btn-row"><button type="submit">儲存 HTTPS 設定</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>WireGuard VPN</h2>
+      ${renderVPNSection(vpnStatus, peers)}
+    </div>
+  `;
+
+  attachPasswordFormHandlers(el);
+  attachTOTPHandlers(el);
+  attachHTTPSFormHandlers(el);
+  attachVPNHandlers(el);
+}
+
+function attachPasswordFormHandlers(el) {
+  el.querySelector("#password-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#password-msg");
+    if (f.get("newPassword") !== f.get("confirmPassword")) {
+      box.innerHTML = msg("error", "兩次輸入的新密碼不一致。");
+      return;
+    }
+    try {
+      await api.changePassword(f.get("oldPassword"), f.get("newPassword"));
+      box.innerHTML = msg("ok", "密碼已更新。");
+      ev.target.reset();
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function renderTOTPSection(enabled) {
+  if (enabled) {
+    return `
+      <h2>兩步驟驗證(TOTP)</h2>
+      <p style="margin:0 0 12px"><span class="pill ok">已啟用</span></p>
+      <div id="totp-msg"></div>
+      <form class="stacked" id="totp-disable-form">
+        <div class="field"><label>目前密碼(停用前需要重新確認)</label><input type="password" name="password" autocomplete="current-password" required></div>
+        <div class="btn-row"><button type="submit" class="danger">停用兩步驟驗證</button></div>
+      </form>
+    `;
+  }
+  return `
+    <h2>兩步驟驗證(TOTP)</h2>
+    <p style="margin:0 0 12px"><span class="pill neutral">未啟用</span></p>
+    <div id="totp-msg"></div>
+    <div id="totp-setup-area">
+      <button class="secondary" id="totp-begin-setup">設定兩步驟驗證</button>
+    </div>
+  `;
+}
+
+function attachTOTPHandlers(el) {
+  const beginBtn = el.querySelector("#totp-begin-setup");
+  if (beginBtn) {
+    beginBtn.addEventListener("click", async () => {
+      const box = el.querySelector("#totp-msg");
+      try {
+        const { secret, provisioningUri } = await api.totpSetup();
+        el.querySelector("#totp-setup-area").innerHTML = `
+          <p style="color:var(--text-dim);font-size:12.5px">用驗證器 App(Google Authenticator、Authy 等)手動輸入下面的密鑰,或直接貼上 Provisioning URI(部分 App 支援用文字加入帳號,GoNAS 沒有內建 QR code 產生器)。</p>
+          <p><code style="word-break:break-all">${esc(secret)}</code></p>
+          <p style="font-size:11.5px;color:var(--text-faint);word-break:break-all">${esc(provisioningUri)}</p>
+          <form class="stacked" id="totp-enable-form">
+            <div class="field"><label>輸入目前的驗證碼以完成設定</label><input type="text" name="code" inputmode="numeric" pattern="[0-9]*" placeholder="123456" required></div>
+            <div class="btn-row"><button type="submit">啟用兩步驟驗證</button></div>
+          </form>
+        `;
+        el.querySelector("#totp-enable-form").addEventListener("submit", async (ev) => {
+          ev.preventDefault();
+          const f = new FormData(ev.target);
+          try {
+            await api.totpEnable(f.get("code").trim());
+            box.innerHTML = msg("ok", "兩步驟驗證已啟用。");
+            await renderSecurity(el);
+          } catch (err) {
+            box.innerHTML = msg("error", err.message);
+          }
+        });
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  const disableForm = el.querySelector("#totp-disable-form");
+  if (disableForm) {
+    disableForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const box = el.querySelector("#totp-msg");
+      try {
+        await api.totpDisable(f.get("password"));
+        box.innerHTML = msg("ok", "兩步驟驗證已停用。");
+        await renderSecurity(el);
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+}
+
+function attachHTTPSFormHandlers(el) {
+  el.querySelector("#https-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#https-msg");
+    try {
+      await api.setHTTPSSettings({ enabled: f.get("enabled") === "on", hosts: linesOf(f.get("hosts")) });
+      box.innerHTML = msg("ok", "HTTPS 設定已儲存,請重新啟動 gonasd 讓設定生效。");
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function renderVPNSection(status, peers) {
+  const statusBlock = status.configured ? `
+    <p style="margin:0 0 12px">
+      <span class="pill ${status.running ? "ok" : "neutral"}">${status.running ? "介面運作中" : "介面未啟用"}</span>
+      · 監聽埠 <code>${esc(status.listenPort)}</code>
+      · 位址 <code>${esc((status.address || []).join(", "))}</code>
+      ${status.publicKey ? ` · 公鑰 <code style="word-break:break-all">${esc(status.publicKey)}</code>` : ""}
+    </p>
+    ${status.warning ? msg("warn", status.warning) : ""}
+  ` : `<p class="empty-state">還沒有設定 WireGuard 介面。</p>`;
+
+  return `
+    ${statusBlock}
+    <div id="vpn-iface-msg"></div>
+    <form class="stacked" id="vpn-iface-form">
+      <div class="field"><label>介面位址(CIDR,每行一個)</label><textarea name="address" rows="1" placeholder="10.10.0.1/24">${esc((status.address || []).join("\n"))}</textarea></div>
+      <div class="field"><label>監聽埠</label><input type="number" name="listenPort" value="${status.listenPort || 51820}"></div>
+      <div class="btn-row"><button type="submit">${status.configured ? "更新介面設定" : "建立 WireGuard 介面"}</button></div>
+    </form>
+
+    ${status.configured ? `
+      <h2 style="margin-top:24px" id="vpn-peer-count">用戶端(${peers.length})</h2>
+      <div id="vpn-peers-list">${renderPeerRows(peers)}</div>
+      <div id="vpn-peer-msg"></div>
+      <form class="stacked" id="vpn-peer-form" style="margin-top:16px">
+        <div class="field"><label>裝置名稱</label><input type="text" name="name" placeholder="我的手機" required></div>
+        <div class="field"><label>分配的位址(CIDR,通常是介面網段裡的一個 /32)</label><input type="text" name="allowedIPs" placeholder="10.10.0.2/32" required></div>
+        <div class="field"><label>GoNAS 對外位址(選填,寫進產生的用戶端設定檔)</label><input type="text" name="endpoint" placeholder="mynas.example.com:51820"></div>
+        <div class="btn-row"><button type="submit">新增用戶端並產生設定檔</button></div>
+      </form>
+      <div id="vpn-client-config"></div>
+    ` : ""}
+  `;
+}
+
+function renderPeerRows(peers) {
+  if (!peers.length) return `<p class="empty-state">還沒有加入任何用戶端裝置。</p>`;
+  return peers.map((p) => `
+    <div class="rule-row">
+      <div class="rule-main">
+        <div>
+          <div class="rule-name">${esc(p.name)}</div>
+          <div class="rule-cond">${esc((p.allowedIPs || []).join(", "))} · <span style="word-break:break-all">${esc(p.publicKey)}</span></div>
+        </div>
+      </div>
+      <button class="secondary" data-del-peer="${esc(p.id)}">刪除</button>
+    </div>
+  `).join("");
+}
+
+function attachVPNHandlers(el) {
+  el.querySelector("#vpn-iface-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#vpn-iface-msg");
+    try {
+      await api.setVPNInterface({ address: linesOf(f.get("address")), listenPort: Number(f.get("listenPort")) || undefined });
+      box.innerHTML = msg("ok", "介面設定已儲存。實際套用/停用連線請透過 SSH 手動執行 wg-quick,或等待之後版本補上一鍵套用。");
+      await renderSecurity(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+
+  const peerForm = el.querySelector("#vpn-peer-form");
+  if (peerForm) {
+    peerForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const box = el.querySelector("#vpn-peer-msg");
+      try {
+        const res = await api.addVPNPeer({
+          name: f.get("name").trim(),
+          allowedIPs: linesOf(f.get("allowedIPs")),
+          endpoint: f.get("endpoint").trim(),
+        });
+        box.innerHTML = msg("ok", `已新增用戶端「${esc(res.peer.name)}」,下面是它的設定檔內容 —— 只會顯示這一次,請立刻複製或匯入用戶端裝置。`);
+        el.querySelector("#vpn-client-config").innerHTML = `<pre class="client-config">${esc(res.clientConfig)}</pre>`;
+        // 只重畫 peer 清單那一小塊,不整頁重繪 renderSecurity —— 不然剛顯示
+        // 出來、只出現這一次的 clientConfig 內容會立刻被蓋掉,使用者連
+        // 複製都來不及。
+        await refreshPeerList(el);
+        ev.target.reset();
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  attachPeerDeleteHandlers(el);
+}
+
+function attachPeerDeleteHandlers(el) {
+  el.querySelectorAll("[data-del-peer]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("確定要刪除這個用戶端嗎?刪除後該裝置會立刻無法再連線,且無法復原。")) return;
+      try {
+        await api.deleteVPNPeer(btn.dataset.delPeer);
+        await refreshPeerList(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+      }
+    });
+  });
+}
+
+// refreshPeerList 只重新抓取 peer 清單並換掉清單區塊的 HTML,保留頁面其他
+// 部分(尤其是新增用戶端後顯示出來、只出現這一次的 clientConfig 內容)
+// 不被動到。
+async function refreshPeerList(el) {
+  const peers = await api.vpnPeers().catch(() => []);
+  el.querySelector("#vpn-peer-count").textContent = `用戶端(${peers.length})`;
+  el.querySelector("#vpn-peers-list").innerHTML = renderPeerRows(peers);
+  attachPeerDeleteHandlers(el);
 }

@@ -7,7 +7,16 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div class="shell">
+<div class="auth-gate" id="auth-gate" hidden>
+  <div class="auth-card">
+    <div class="brand auth-brand">
+      <span class="brand-mark">◇</span>
+      <span class="brand-name">GoNAS</span>
+    </div>
+    <div id="auth-gate-content"><p class="loading">載入中…</p></div>
+  </div>
+</div>
+<div class="shell" id="shell" hidden>
   <nav class="sidebar">
     <div class="brand">
       <span class="brand-mark">◇</span>
@@ -20,8 +29,12 @@
       <li><a href="#/shares" data-route="shares">共享</a></li>
       <li><a href="#/users" data-route="users">使用者</a></li>
       <li><a href="#/monitor" data-route="monitor">監控</a></li>
+      <li><a href="#/security" data-route="security">安全</a></li>
     </ul>
-    <div class="sidebar-footer" id="sidebar-version">gonasd</div>
+    <div class="sidebar-footer">
+      <button class="secondary logout-btn" id="logout-btn" type="button">登出</button>
+      <div id="sidebar-version">gonasd</div>
+    </div>
   </nav>
   <main class="content" id="content">
     <p class="loading">載入中…</p>

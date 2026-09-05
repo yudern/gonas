@@ -63,6 +63,13 @@ body {
   display: flex;
   min-height: 100vh;
 }
+/* [hidden] 在瀏覽器的 user-agent 樣式表裡是 `display:none`,但優先權比
+   author stylesheet 的一般規則低 —— 只要頁面自己也有一條套用到同一個
+   元素的 `display` 宣告(這裡的 `.shell { display:flex }`),就會蓋掉
+   `[hidden]` 讓元素「明明有 hidden 屬性,畫面上卻還是顯示著」。這是登入
+   閘門(app.js 的 boot()/showApp())能不能正常擋住整個管理介面的關鍵,
+   所以這裡明確補一條特異度更高的規則,確保 hidden 永遠贏。 */
+.shell[hidden] { display: none; }
 
 .sidebar {
   width: 208px;
@@ -225,3 +232,46 @@ a { color: var(--accent); }
 .rule-row .rule-main { display: flex; align-items: center; gap: 10px; }
 .rule-row .rule-name { font-weight: 600; font-size: 13.5px; }
 .rule-row .rule-cond { font-size: 12px; color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ---------- 登入 / 初始設定 ---------- */
+
+.auth-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+/* 跟上面 .shell[hidden] 同一個原因、同一個修法:沒有這條,登入完成後
+   `authGate.hidden = true` 只是設了屬性,畫面上這層登入卡片會一直蓋在
+   儀表板上面,使用者會以為登入卡住了。 */
+.auth-gate[hidden] { display: none; }
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px 28px;
+}
+.auth-brand { justify-content: center; padding: 0 0 22px; font-size: 17px; }
+.auth-card h1 { text-align: center; }
+.auth-card .page-subtitle { text-align: center; margin-bottom: 22px; }
+.auth-card form.stacked { max-width: none; }
+
+/* ---------- 安全頁 ---------- */
+
+.sidebar-footer { display: flex; flex-direction: column; gap: 8px; }
+.logout-btn { width: 100%; font-size: 12.5px; padding: 7px 12px; }
+
+.client-config {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}

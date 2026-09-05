@@ -19,6 +19,7 @@ import (
 	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/storage"
+	"github.com/bng147/gonas/internal/wireguard"
 )
 
 // State 是整份持久化狀態的結構。每個欄位的零值都必須是「合理的初始狀態」
@@ -32,6 +33,34 @@ type State struct {
 	InstalledApps []InstalledApp          `json:"installedApps"`
 	AlertRules    []monitor.AlertRule     `json:"alertRules"`
 	Notifiers     []monitor.WebhookConfig `json:"notifiers"`
+	Admin         *AdminAccount           `json:"admin,omitempty"`
+	HTTPS         HTTPSConfig             `json:"https"`
+	WireGuard     *wireguard.Config       `json:"wireGuard,omitempty"`
+}
+
+// AdminAccount 是 Web 管理介面唯一的登入帳號(跟 share.User 那種系統/
+// Samba 帳號是完全不同的概念,一個是「誰能打開 GoNAS 的管理介面」,
+// 一個是「誰能透過 SMB/NFS 存取檔案」)。PasswordHash 一律是
+// internal/security.HashPassword 產生的編碼字串,永遠不存明文密碼;
+// TOTPSecret 在使用者呼叫 /auth/totp/setup 時就會寫入,但 TOTPEnabled
+// 要等使用者實際輸入一次驗證碼確認過(呼叫 /auth/totp/enable)才會
+// 變成 true —— 避免使用者複製密鑰到驗證器 App 之後,萬一沒設定成功
+// 就把自己鎖在登入頁面外面。
+type AdminAccount struct {
+	Username     string `json:"username"`
+	PasswordHash string `json:"passwordHash"`
+	TOTPSecret   string `json:"totpSecret,omitempty"`
+	TOTPEnabled  bool   `json:"totpEnabled"`
+}
+
+// HTTPSConfig 是 Web 管理介面的 TLS 設定。Enabled 只是「使用者想要
+// HTTPS」的意圖記錄 —— 實際切換 gonasd 監聽 HTTP 或 HTTPS 只在程序啟動
+// 時讀取一次(見 cmd/gonasd/main.go),改這個設定之後需要重啟 daemon
+// 才會生效,API 回應會提醒這件事,詳見 internal/api 的說明。
+type HTTPSConfig struct {
+	Enabled  bool   `json:"enabled"`
+	CertPath string `json:"certPath,omitempty"`
+	KeyPath  string `json:"keyPath,omitempty"`
 }
 
 // UserRecord 是 Web UI 顯示用的使用者中繼資料。真正的帳號存在系統的
@@ -82,6 +111,13 @@ func (st *State) normalize() {
 	}
 	if st.Notifiers == nil {
 		st.Notifiers = []monitor.WebhookConfig{}
+	}
+	// WireGuard 本身是 nilable(還沒設定介面前完全不該有這個欄位),但
+	// 一旦存在,裡面的 Peers 切片一樣要套用同一條「絕不序列化成 null」
+	// 的規則 —— 不然新增第一個 peer 之前,GET /vpn/peers 就會重演一次
+	// Apps 頁面當初那個 nil slice bug。
+	if st.WireGuard != nil && st.WireGuard.Peers == nil {
+		st.WireGuard.Peers = []wireguard.PeerConfig{}
 	}
 }
 

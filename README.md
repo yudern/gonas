@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 5 完成 — 監控與告警
+## 目前狀態:Phase 6 完成 — 網路與安全
 
 **Phase 0(專案骨架)**
 
@@ -207,12 +207,120 @@
   截圖確認監控頁完整渲染(統計卡、走勢圖、規則列表含真實的「監控中」
   燈號、通知管道列表)、瀏覽器主控台沒有任何 JS 錯誤。
 
+**Phase 6(網路與安全,`internal/security` + `internal/wireguard` + `internal/api`/`internal/state` 擴充 + 內嵌前端)**
+
+在這之前(Phase 0–5)GoNAS 完全沒有身分驗證 —— 任何連得到 `gonasd` 的人都能改
+儲存池、裝 App、建使用者、改共享。Phase 6 補上「Web 管理介面本身的門鎖」跟
+「不用開防火牆洞就能從外面連回家」這兩塊,跟其他 Phase 一樣維持零第三方
+依賴,密碼雜湊、TOTP、TLS 憑證、WireGuard 金鑰全部手刻在標準函式庫上。
+
+- `internal/security`:
+  - `HashPassword`/`VerifyPassword`:PBKDF2-HMAC-SHA256(210,000 次疊代、
+    16 bytes 隨機 salt、`$` 分隔的自描述編碼字串),沒有用
+    `golang.org/x/crypto/bcrypt`(module proxy 被擋,見一貫的「已知取捨」)
+    ——PBKDF2 是少數 NIST 認可、標準函式庫的 `crypto/hmac`+`crypto/sha256`
+    就能正確實作的密碼雜湊演算法。正確性對照 RFC 7914 的 PBKDF2 測試向量
+    (用 Python `hashlib` 獨立算過一次)逐位元組核對。
+  - `GenerateSecret`/`GenerateCode`/`ValidateCode`/`ProvisioningURI`:
+    RFC 6238 TOTP,手刻 HOTP 動態截斷(RFC 4226)在 `crypto/hmac`+
+    `crypto/sha1` 上,正確性對照 RFC 6238 附錄 B 官方測試向量(這是除了
+    真的拿其他實作互測之外最強的驗證方式)。`ValidateCode` 容忍前後各
+    一個時間窗口的時鐘飄移,沒有這個容忍度使用者手機時鐘慢個幾秒就永遠
+    登不進去。
+  - `SessionManager`:純記憶體、goroutine-safe 的登入 session(不是
+    SMB/NFS 那種檔案存取憑證),daemon 重啟後全部使用者需要重新登入是
+    刻意接受的代價,換來不用設計 session 的持久化/加密儲存。
+  - `GenerateSelfSignedCert`/`EnsureCertFiles`:ECDSA P-256 自簽憑證(比
+    RSA 快很多,對一份使用者自己手動信任的憑證來說安全性已經足夠),
+    `EnsureCertFiles` 是 idempotent 的,已經有憑證就不重簽,避免每次啟動
+    瀏覽器都跳「憑證變了」的警告。正確性用真正的 `openssl x509 -text`
+    對 GoNAS 自己產生的憑證解析過,確認 SAN、演算法都對。
+  - 27 個單元測試(密碼 11 個、TOTP 10 個、session 9 個、憑證 6 個,數字
+    有重疊是因為部分測試涵蓋多個情境)。
+- `internal/wireguard`:
+  - `GenerateKeyPair`/`PublicKeyFromPrivate`:WireGuard 的金鑰就是原始的
+    X25519 金鑰,Go 1.20 起標準函式庫的 `crypto/ecdh` 內建 X25519 曲線,
+    不需要 `golang.org/x/crypto/curve25519` 也能產生格式完全相容
+    (標準 base64 編碼的 32 bytes)的金鑰。
+  - `GenerateConfig`:`text/template` 產生標準的 wg-quick `.conf` 格式,
+    涵蓋 `[Interface]`/多個 `[Peer]` 區塊、選填欄位(PresharedKey/
+    Endpoint/PersistentKeepalive)只在有值時才輸出。
+  - `Up`/`Down`/`Status`:透過既有的 `cmdrunner.Runner` 抽象呼叫
+    `wg-quick`/`wg`,這台開發機沒裝 wireguard-tools,所以套用/查詢這半部
+    靠假的 Runner 驗證指令組裝正確,實機上有沒有裝 `wg-quick` 交給
+    `internal/api` 做優雅降級(查不到狀態只回警告,不擋 API 本身)。
+  - 20 個單元測試(金鑰 5 個、設定檔產生/驗證 9 個、指令組裝 6 個)。
+- `internal/state`:新增 `Admin`(`*AdminAccount`,`omitempty` —— 還沒建立
+  管理者帳號前完全不出現在 `state.json` 或任何 API 回應裡)、`HTTPS`
+  (非 pointer,永遠存在,預設 `{"enabled":false}`)、`WireGuard`
+  (`*wireguard.Config`,`omitempty`)三個欄位。`WireGuard.Peers` 這個
+  巢狀切片一樣納入既有的 `normalize()` 防護(nil slice → JSON `null` 的
+  bug 類別,見 Phase 4/5 的教訓),新增迴歸測試涵蓋這個巢狀情境,以及
+  「沒有 admin/WireGuard 時這兩個欄位完全不該出現」的斷言。
+- `internal/api` 新增:
+  - `GET /api/v1/auth/status`(公開,回傳是不是要走初始設定)、
+    `POST /api/v1/auth/setup`(公開,只有完全沒有帳號時才成功 ——
+    這道檢查是身分驗證有沒有意義的安全邊界)、`POST /api/v1/auth/login`
+    (公開,帳密錯誤一律回同一句「帳號或密碼錯誤」,不區分是哪個錯,
+    避免使用者名稱枚舉)、`POST /api/v1/auth/logout`、`GET /api/v1/auth/me`、
+    `POST /api/v1/auth/password`(換密碼後撤銷該帳號名下所有 session、
+    立刻重新核發一個給目前這個請求)、`POST /api/v1/auth/totp/{setup,enable,disable}`
+    (setup 先存密鑰但不啟用,要 enable 帶一次驗證碼才會真的生效,避免
+    設定失敗把自己鎖在外面;disable 需要重新輸入密碼)
+  - `GET/PUT /api/v1/security/https`(開啟時如果憑證檔案還不存在就順手
+    產生,回應附上「需要重啟 gonasd 才會生效」的提醒——實際監聽 HTTP
+    還是 HTTPS 只在程序啟動時決定一次)
+  - `GET /api/v1/vpn/status`、`PUT /api/v1/vpn/interface`(第一次呼叫才
+    產生介面金鑰對,之後只更新位址/埠號、不悄悄輪替私鑰 —— 换私鑰會讓
+    所有已核發的用戶端設定檔全部失效)、`GET/POST /api/v1/vpn/peers`、
+    `DELETE /api/v1/vpn/peers/{id}`(新增 peer 時伺服器產生一組全新金鑰對,
+    只把公鑰存進 state,私鑰連同完整的 wg-quick 用戶端設定檔一起在
+    這次 API 回應裡回傳一次就不再保留 —— 這跟 SSH 私鑰、一次性 API token
+    是同一種設計,萬一 `state.json` 外洩,受影響的只有伺服器自己這一端,
+    不會連帶洩漏所有已核發用戶端的身分)
+  - `requireAuth` 中介層包住除了健康檢查/版本資訊跟登入流程本身(status/
+    setup/login)以外的所有端點,哪支端點公開、哪支需要登入,從
+    `router.go` 的路由註冊就能一眼看完
+  - `cmd/gonasd/main.go`:啟動時讀一次 `state.json` 的 HTTPS 設定決定
+    `ListenAndServe` 還是 `ListenAndServeTLS`;如果設定說要 HTTPS 但憑證
+    檔案不見了(手動刪除、`GONAS_DATA_DIR` 換了位置),寧可退回 HTTP 讓
+    daemon 正常啟動、留一條路讓使用者登入後重新開啟 HTTPS,也不要讓
+    daemon 直接啟動失敗
+- 內嵌前端新增登入閘門(`app.js` 的 `boot()`/`showApp()`/`showLoginGate()`/
+  `showSetupGate()`):在使用者通過驗證之前完全不顯示 sidebar,`api.js`
+  統一攔截任何 API 呼叫的 401 並跳回登入畫面(session 過期不需要每個
+  頁面各自處理);新增「安全」頁面:修改密碼、TOTP 設定/啟用/停用(含
+  手動輸入密鑰跟 Provisioning URI 兩種方式)、HTTPS 開關與憑證主機名稱
+  設定、WireGuard 介面建立與用戶端管理(新增用戶端時顯示一次性的完整
+  `.conf` 內容,只重繪 peer 清單那一小塊、不整頁重繪蓋掉這份內容)。
+- 端到端驗證時抓到一個真的會讓整個登入機制看起來「卡住」的 CSS bug:
+  瀏覽器 user-agent 樣式表的 `[hidden] { display: none }` 優先權比
+  author stylesheet 的一般規則低,`style.css` 裡 `.shell { display:flex }`
+  跟 `.auth-gate { display:flex }` 這兩條規則會蓋掉 `[hidden]`,結果
+  `element.hidden = true` 這個 JS 呼叫完全生效(屬性確實被移除/加上),
+  但畫面上該隱藏的登入卡片還是疊在儀表板上面 —— 用 Playwright 截圖加上
+  `page.evaluate` 直接讀 DOM 的 `hidden` 屬性狀態,才確認「JS 邏輯是對的,
+  CSS 特異度贏了」這個真正原因。已補上 `.shell[hidden]`/`.auth-gate[hidden]`
+  兩條特異度更高的規則明確蓋回 `display:none`,修完後重新截圖驗證整套
+  設定→登入→安全頁→TOTP 設定→登出流程都正確渲染。
+- 已對這台機器完整跑過一輪端到端驗證(透過 `gonasd` 自己的 HTTP API,
+  搭配即時算出來的 RFC 6238 驗證碼,不是靠假資料):初始設定建立管理者
+  帳號 → 未登入呼叫受保護端點確認 401 → 登出後確認 session 立刻失效 →
+  密碼打錯確認 401 → 開啟 TOTP、用真正算出來的驗證碼完成 enable →
+  不帶驗證碼登入確認擋下來、帶正確驗證碼登入成功 → 停用 TOTP 需要重新
+  輸入密碼 → 開啟 HTTPS、用 `openssl x509 -text` 驗證產生的憑證 →
+  **重啟 daemon**,確認真的用 HTTPS 監聽(`curl -k https://...` 成功,
+  純 HTTP 打不通)→ 建立 WireGuard 介面 → 新增一個用戶端,確認回應的
+  `.conf` 內容裡 `AllowedIPs`/`Endpoint`/公鑰都正確、伺服器端只存了公鑰 →
+  刪除該用戶端確認清單清空、重複刪除回 404 → 用 Playwright 對著真的在
+  跑的 `gonasd` 完整截圖初始設定畫面、登入後的儀表板、安全頁面(含 TOTP
+  設定中的畫面)、登出後的登入畫面,瀏覽器主控台沒有任何 JS 錯誤。
+
 尚未實作(依路線圖排序,接下來的 Phase):
 
-1. 網路與安全 — WireGuard、HTTPS、2FA
-2. 備份與快照
-3. 安裝與封裝 — `install.sh`
-4. 實機測試與強化
+1. 備份與快照
+2. 安裝與封裝 — `install.sh`
+3. 實機測試與強化
 
 ## 開發
 

@@ -169,3 +169,64 @@ func TestOpen_LoadsPreExistingNullSlices_NormalizesThem(t *testing.T) {
 		t.Errorf("expected no null fields after loading a state.json with explicit nulls, got: %s", encoded)
 	}
 }
+
+// TestNormalize_WireGuardPeersNestedNilSlice 涵蓋一個巢狀情況:WireGuard
+// 本身是 nilable(還沒設定介面前完全不該出現),但一旦存在,它裡面的
+// Peers 切片一樣要遵守同一條「絕不序列化成 null」的規則。這是新增
+// WireGuard 支援時,照著 Phase 4 那次真實 bug 的教訓,主動補上的迴歸
+// 測試 —— 不用等到真的有人在瀏覽器上打開空的 peer 清單頁面才發現。
+func TestNormalize_WireGuardPeersNestedNilSlice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	raw := `{"wireGuard":{"interface":{"privateKey":"x","address":["10.0.0.1/24"],"listenPort":51820},"peers":null}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("writing seed state file: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	snap := s.Snapshot()
+	if snap.WireGuard == nil {
+		t.Fatalf("expected WireGuard config to be loaded, got nil")
+	}
+	if snap.WireGuard.Peers == nil {
+		t.Fatalf("expected WireGuard.Peers to be normalized to an empty slice, got nil")
+	}
+
+	encoded, err := json.Marshal(snap.WireGuard)
+	if err != nil {
+		t.Fatalf("marshaling wireGuard config: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"peers":[]`) {
+		t.Errorf(`expected marshaled wireGuard config to contain "peers":[], got: %s`, encoded)
+	}
+}
+
+func TestState_MarshalsWithNoAdminOrWireGuardByDefault(t *testing.T) {
+	// Admin 跟 WireGuard 都是 *T 搭配 omitempty:全新安裝、使用者還沒
+	// 建立管理者帳號或設定 VPN 介面之前,這兩個欄位根本不該出現在
+	// state.json 或任何 API 回應裡(而不是出現、但值是 null)——
+	// omitempty 對 nil pointer 的行為本來就是整個省略欄位,這裡明確
+	// 測出來,確保未來重構沒有不小心把它們從 pointer 改成非 pointer
+	// 而讓這個保證消失。
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	encoded, err := json.Marshal(s.Snapshot())
+	if err != nil {
+		t.Fatalf("marshaling snapshot: %v", err)
+	}
+	if strings.Contains(string(encoded), `"admin"`) {
+		t.Errorf(`expected no "admin" field before an admin account is created, got: %s`, encoded)
+	}
+	if strings.Contains(string(encoded), `"wireGuard"`) {
+		t.Errorf(`expected no "wireGuard" field before a VPN interface is configured, got: %s`, encoded)
+	}
+	if !strings.Contains(string(encoded), `"https":{`) {
+		t.Errorf(`expected an "https" object (non-pointer struct) to always be present, got: %s`, encoded)
+	}
+}
