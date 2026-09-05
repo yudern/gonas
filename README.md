@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 16 完成 — HTTPS 自簽憑證的自動續期
+## 目前狀態:Phase 17 完成 — gonasd 自我更新機制
 
 **Phase 0(專案骨架)**
 
@@ -1176,6 +1176,122 @@ Go module proxy,裝不了。這次補上一個完全自己寫、零第三方依�
   維持 Phase 4 就有的既有設計,需要重啟 gonasd 才會生效,這次刻意
   不改動這個決定,只讓「已經開著的 HTTPS,憑證續期」這一件事不需要
   重啟。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
+
+**Phase 17(gonasd 自我更新機制)—— 按之前列出的優先級清單接續處理的
+最後一項(cron 排程、HTTPS 憑證續期、自我更新——三項都已完成)**
+
+Phase 16 之前,升級 gonasd 只有一條路:重新下載 release tarball、
+SSH 進機器手動跑 `install.sh`。這個流程本身沒問題,但對一個「裝了就
+丟著長期跑」的家用 NAS 來說並不友善——使用者得自己記得要去檢查有沒有
+新版本。這次補上一個完全選擇性加入(opt-in)的自我更新機制,讓 gonasd
+能自己檢查、下載、驗證、套用新版本,同時把風險控制得跟這個專案一貫
+的保守作風一致:自我更新本質上是「用網路上下載回來的東西取代自己
+正在執行的程式」,一個壞掉的更新如果讓 gonasd 起不來,使用者要面對的
+不是「重開一個 App」,而是「NAS 的管理介面整個打不開」。
+
+- **`internal/selfupdate`(新套件)**:全部只用標準函式庫
+  (`net/http`、`crypto/sha256`、`encoding/json`、`syscall`),沒有第三方
+  依賴。
+  - **隱私優先的更新來源**:更新描述檔(Manifest)網址
+    (`state.State.Update.ManifestURL`)預設是空字串,使用者不設定就
+    完全不會有任何自我更新相關的網路請求發出——GoNAS 不內建任何
+    預設的更新伺服器,不會在使用者不知情的情況下「打電話回家」,
+    跟這個專案 webhook/email 通知管道一貫的「只用使用者自己設定的
+    端點」原則一致。Manifest 是使用者自己架設/信任的一份靜態 JSON
+    (`{"version": "...", "notes": "...", "assets": {"linux-amd64":
+    {"url": "...", "sha256": "..."}, "linux-arm64": {...}}}`),資產鍵值
+    跟 `internal/version.Info` 的 `GoOS`/`GoArch`、既有 release tarball
+    命名慣例保持一致。
+  - **檢查/套用分離**:`FetchManifest`/`IsNewer` 只讀不寫,可以放心讓
+    背景 goroutine 定期跑;真正動到磁碟上執行檔的 `DownloadAndVerify`/
+    `ApplyUpdate` 一律要管理者在 Web UI 明確按下按鈕才會觸發,沒有
+    任何自動套用的路徑。
+  - **版本比較**:`internal/version.Version` 是 `git describe` 的輸出,
+    不是嚴格的 semver——`ParseVersion` 用正規表示式只取開頭的
+    `MAJOR.MINOR.PATCH` 數字前綴,忽略 `-N-gHASH`/`-dirty` 這類後綴。
+    直接從原始碼建置、沒打過 tag 的 `"dev"` 版本刻意設計成
+    **永遠不會**被告知有新版本可用(`IsNewer` 對無法解析的版本字串
+    保守回傳 `false`)——避免對開發環境的使用者造成誤導性的更新提示。
+  - **下載驗證**:一邊下載一邊計算 SHA-256,跟 Manifest 裡記錄的
+    checksum 比對,只驗證「下載內容有沒有跟 Manifest 記錄的一致」
+    (防止傳輸過程損毀、伺服器回應被竄改),**不是**、也不宣稱是
+    「更新來源本身值得信任」的證明——真正的信任邊界是「管理者選擇把
+    GoNAS 指向這個網址」這個動作本身,這點在套件註解裡誠實寫明,
+    跟這個專案一貫「一個已登入的 RoleAdmin 帳號本來就對這台 NAS 有
+    近乎完整的控制權(Docker、檔案管理員)」的既有威脅模型一致。
+  - **同檔案系統原子置換**:下載的暫存檔案刻意寫在執行檔所在的同一個
+    目錄,確保 `ApplyUpdate` 最後的 `os.Rename` 一定是同檔案系統內的
+    原子操作,不會退化成「複製+刪除」這種中途失敗會留下半個檔案的
+    路徑——跟 `internal/security` 憑證檔案、`internal/state` 狀態檔案
+    一貫的原子寫入手法相同。
+  - **備份保底**:`ApplyUpdate` 置換執行檔之前,會先盡力把目前的
+    執行檔備份成 `<路徑>.previous`(失敗不擋更新,只是少一個復原點);
+    如果新檔案置換失敗,會嘗試把備份還原回去,確保 gonasd 不會在
+    任何時間點變成「兩邊都沒有可執行檔案」的狀態。
+  - **`syscall.Exec` 換程式映像檔重啟**:選這個而不是「結束後靠
+    systemd/Docker 的重啟策略拉起新程序」,是因為 GoNAS 同時支援
+    systemd 服務、Docker 容器、直接在終端機執行三種部署方式(見下面
+    「部署」一節)——如果依賴特定監督者的重啟行為,「直接執行」這種
+    部署方式下更新完就會停在那裡沒人拉起新程序。`syscall.Exec` 在
+    同一個 PID 上直接換掉程式映像檔,三種部署方式都能正常運作,
+    也順便讓監聽中的 port 因為 Go `net.Listener` 預設是 close-on-exec
+    而在 `exec()` 當下自動釋放,新程序重新綁定同一個 port 不會有
+    「address already in use」的競爭。
+- **真實踩到的坑(`/proc/self/exe` 跟著 rename 走)**:第一版實作在
+  `cmd/gonasd/main.go` 收到「該重啟了」的訊號之後,自己重新呼叫一次
+  `os.Executable()` 去找執行檔路徑——這在單元測試裡完全測不出問題
+  (測試用注入的假路徑),但用一個真正在跑的 `gonasd` 程序實機驗證時
+  立刻復現:Linux 上 `os.Executable()` 是讀 `/proc/self/exe` 這個
+  magic symlink,它跟蹤的是「目前這個程序對應的 inode」,而不是一個
+  固定的路徑字串——`ApplyUpdate` 已經把「目前正在跑的這個執行檔」
+  (也就是舊版本的那個 inode)重新命名成 `gonasd.previous` 了,所以
+  重啟時再呼叫一次 `os.Executable()`,讀到的是改名後的
+  `.previous` 路徑,`syscall.Exec` 因此又把**舊版本**的內容重新載入
+  一次,`ps`/`/proc/<pid>/comm` 也確實顯示程序的執行檔名稱變成了
+  `gonasd.previous`。修法是在 `ApplyUpdate` 置換之前(`runApplyUpdate`
+  一開始就呼叫 `os.Executable()`)先把路徑記下來,透過重啟訊號
+  (`Server.RestartRequested()`,型別從單純的 `chan struct{}` 改成
+  `chan string`)原封不動地帶給 `main.go`,不要事後在同一個程序裡
+  重新查詢。修好之後重跑一次同樣的真實驗證流程,`ps`/`comm` 確認是
+  同一個 PID、執行檔名稱正確顯示成 `gonasd`(不是 `.previous`),
+  `GET /api/v1/version` 也正確回報新版本號。
+- **API 與前端**:新增 `GET /api/v1/system/update`(`requireAuth`,
+  查詢目前版本/更新來源設定/背景檢查結果——RoleViewer 也看得到「是不是
+  最新版本」這個資訊)、`PUT /api/v1/system/update/settings`、
+  `POST /api/v1/system/update/check`、
+  `POST /api/v1/system/update/apply`(後三支都是 `requireAdmin`)。
+  `apply` 立刻回 202、背景執行整個下載/驗證/套用/重啟流程,跟
+  `handleBackupJobsRun` 是同一套「不讓 HTTP 請求同步等待」的模式。
+  Dashboard 頁面新增「系統更新」卡片:目前版本、有沒有設定更新來源、
+  最近一次檢查結果(有新版本的話顯示版本號跟發布說明),管理者才看得到
+  設定更新來源網址/立即檢查/套用更新的操作;套用更新前有明確的確認
+  對話框(這是整個 Web UI 裡數一數二危險的按鈕),按下去之後前端會
+  定期戳健康檢查端點,gonasd 重啟完成後自動重新整理頁面,不需要使用者
+  自己按重新整理。三種語言都已翻譯。
+- **真實驗證**:`internal/selfupdate` 的單元測試用
+  `net/http/httptest.Server` 服務真正用 `crypto/sha256` 算出來的
+  checksum(不是憑空編的字串)驗證 `FetchManifest`/`DownloadAndVerify`,
+  用 `t.TempDir()` 底下的真實檔案驗證 `ApplyUpdate` 的置換/備份/復原
+  邏輯。`internal/api` 新增測試涵蓋四支端點的權限/狀態機/背景套用流程
+  (同樣用 `httptest.Server` + 真實檔案,不 mock)。除了單元測試,也對
+  兩個真正編譯出來、注入不同版本號(`v1.0.0-test`/`v9.9.9-test`)的
+  `gonasd` 執行檔,加上一個服務真實 manifest.json 跟真實二進位檔的本機
+  HTTP 伺服器,完整走了一次「啟動舊版本 gonasd → 透過真正的 HTTP API
+  設定更新來源 → 呼叫真正的檢查端點確認偵測到新版本 → 呼叫真正的套用
+  端點 → 確認同一個 PID 的程序重啟完成、回報新版本號」的端到端流程
+  (這個流程正是上面「`/proc/self/exe` 跟著 rename 走」那個坑被實際
+  抓到的地方——單元測試因為用了注入的假路徑而測不出來,只有這種
+  「真的啟動一個程序、真的讓它重啟」的驗證才抓得到)。也用 Playwright
+  在三種語言下驗證 Dashboard「系統更新」卡片的顯示、設定表單、錯誤
+  訊息(含掃描英文語系底下有沒有殘留中文字元)。**明確記錄的限制**:
+  這次的端到端驗證是在同一台機器、同一個 CPU 架構(linux/amd64)上
+  用兩個不同版本號的執行檔做的,沒有驗證跨架構(例如 amd64 機器上的
+  manifest 指向一份 arm64 執行檔、下載後因為架構不合完全跑不起來)
+  這種使用者設定錯誤的情境——`Manifest.AssetFor` 有依 `GOOS-GOARCH`
+  查表的邏輯,理論上會查到正確的 asset,但沒有用真正跨架構的執行檔
+  驗證過;也沒有在真正的 systemd 服務(而不是直接在終端機執行)底下
+  驗證過整個流程,細節列在 `docs/REAL_HARDWARE_TESTING.md`。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
 
 ## 開發

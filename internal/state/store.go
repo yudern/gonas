@@ -39,6 +39,21 @@ type State struct {
 	HTTPS          HTTPSConfig             `json:"https"`
 	WireGuard      *wireguard.Config       `json:"wireGuard,omitempty"`
 	BackupJobs     []backup.Job            `json:"backupJobs"`
+	Update         UpdateConfig            `json:"update"`
+}
+
+// UpdateConfig 是 Phase 17 新增的自我更新設定。ManifestURL 留空(預設值)
+// 代表使用者完全沒有設定過,自我更新的背景檢查器(見
+// internal/selfupdate.Checker)就完全不會對外發任何網路請求——這是
+// 刻意的隱私/安全預設值:GoNAS 不會在使用者不知情的情況下自動去某個
+// 內建網址「打電話回家」問有沒有新版本,一定要使用者自己在 Web UI 填了
+// 一個更新資訊來源(通常是使用者自己架設或信任的一個靜態 JSON 檔案
+// URL,見 internal/selfupdate 套件文件的 Manifest 格式說明)才會開始
+// 檢查。這跟 HTTPS 設定不同,不需要重啟才會生效——背景檢查器每次要
+// 檢查前都重新讀一次目前設定的網址,設定改變後最晚下一次檢查週期就會
+// 生效。
+type UpdateConfig struct {
+	ManifestURL string `json:"manifestUrl,omitempty"`
 }
 
 // AdminAccount 是 Web 管理介面的一個登入帳號(跟 share.User 那種系統/

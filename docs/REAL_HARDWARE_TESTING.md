@@ -388,6 +388,68 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
 - [ ] 在陣列有明顯讀寫負載時,觀察 Web UI 回應速度、SMART 檢查(會
       實際存取硬碟)有沒有讓一般 API 請求出現明顯延遲。
 
+## 9. gonasd 自我更新(對應 Phase 17,已補上核心機制的真實驗證)
+
+- [x] ✅ 已經在這個沙盒裡對兩個真正編譯出來、注入不同版本號
+      (`v1.0.0-test`/`v9.9.9-test`)的 `gonasd` 執行檔,加上一個服務
+      真實 `manifest.json`(內含真正用 `sha256sum` 算出來的 checksum)
+      跟真實二進位檔的本機 HTTP 伺服器,完整走過一次「啟動舊版本
+      `gonasd` → 用 `curl` 打真正的 API 設定更新來源網址 → 呼叫真正的
+      檢查端點確認 `updateAvailable: true` 且 `latestVersion` 正確 →
+      呼叫真正的套用端點 → 輪詢確認同一個 PID 的程序重啟完成、
+      `GET /api/v1/version` 回報新版本號、`updateAvailable` 恢復
+      `false`」的完整流程。這個流程也是「`/proc/self/exe` 跟著
+      rename 走」那個真實 bug(見 README「Phase 17」一節的詳細說明)
+      被實際抓到的地方——第一版實作在單元測試裡(用注入的假路徑)
+      完全測不出問題,只有這種「真的啟動一個程序、真的讓它自我更新
+      重啟」的驗證才抓得到,修好之後重跑同樣流程確認 `ps`/
+      `/proc/<pid>/comm` 顯示的執行檔名稱正確、不是 `.previous`。
+- [ ] 這次的端到端驗證是在同一台機器、同一個 CPU 架構
+      (linux/amd64)上,用兩個版本號不同但架構相同的執行檔做的。
+      沒有驗證跨架構的情境:例如 manifest 裡同時列出
+      `linux-amd64`/`linux-arm64` 兩份資產,在一台 arm64 機器上執行
+      `handleSystemUpdateApply` 是否真的抓到 `linux-arm64` 這一份、
+      而不是不小心抓錯或漏抓——`Manifest.AssetFor` 的查表邏輯本身有
+      單元測試涵蓋,但沒有用真正跨架構、真的能執行的兩份二進位檔
+      驗證過完整流程(這台沙盒沒有 arm64 的真實硬體/QEMU 使用者態
+      模擬環境可以真的執行 arm64 執行檔)。
+- [ ] 沒有在真正由 systemd 監督(`Restart=on-failure` 之類的重啟策略
+      生效中)的安裝方式底下驗證過自我更新——這次的驗證都是直接在
+      終端機執行 `gonasd`(前景/`nohup` 背景皆有測過),`syscall.Exec`
+      理論上因為是同一個 PID 上原地換掉程式映像檔,systemd 應該完全
+      感知不到「程序其實換了一份新的可執行檔內容」這件事、不會觸發
+      任何重啟策略介入,但這個假設值得在一台真正裝了
+      `build/systemd/gonas.service`、`systemctl start gonas` 啟動的
+      機器上實際驗證一次:套用更新的過程中 `systemctl status gonas`
+      顯示的 PID 應該完全不變,`journalctl -u gonas` 的日誌應該連續
+      不中斷(沒有「服務停止→重新啟動」這種 systemd 自己記錄的事件)。
+- [ ] 沒有在 Docker 容器化部署 gonasd 本身(不是指 GoNAS 管理的那些
+      App 商店容器,而是 gonasd 自己被包進一個 Docker 容器執行)的
+      情境下驗證過——這種部署方式下,容器裡 PID 1 通常就是 gonasd
+      自己,`syscall.Exec` 換掉 PID 1 的程式映像檔在 Linux 上是合法
+      操作,但容器執行環境(尤其是唯讀根檔案系統 + 額外掛載可寫層
+      這類常見的容器安全性設定)下,執行檔所在目錄是否真的可寫、
+      `os.Rename` 的原子性假設在該掛載層上是否依然成立,都需要在真正
+      的容器環境驗證,不能想當然爾。
+- [ ] 沒有驗證「套用更新失敗後手動用 `.previous` 備份檔案復原」這個
+      使用者側的操作流程——`ApplyUpdate` 目前只有在自己緊接著的
+      置換步驟失敗時,才會自動嘗試把備份還原回去;如果失敗發生在更
+      早期(例如下載或驗證失敗),`.previous` 備份根本還沒被建立,
+      不需要復原。但如果使用者是在套用成功、新版本啟動之後,才發現
+      新版本本身有問題想手動降級,目前完全沒有一個「一鍵復原」的
+      API 或 UI,只能靠使用者自己 SSH 進機器,手動
+      `mv gonasd.previous gonasd` 再重啟服務——這個手動流程本身沒有
+      被自動化測試覆蓋過,值得在真機上跑一次確認可行,並評估要不要
+      在之後的 Phase 补一個「復原到上一個版本」的 API/UI。
+- [ ] 沒有驗證過下載一份**真的**幾十到接近 200 MiB
+      (`internal/selfupdate.maxDownloadBytes` 的上限)大小的執行檔,
+      在真實(非 loopback)網路環境、可能不穩定的連線品質下,
+      `DownloadAndVerify` 的行為——這台沙盒的驗證用的是幾 KB 到十幾
+      MB 等級的真實 gonasd 執行檔跟 loopback 網路,沒有真的測過大檔案
+      跨網段下載中途網路中斷、`updateHTTPTimeout`(5 分鐘)是否對
+      真實網速環境(尤其是使用者自己架設在較慢頻寬伺服器上的
+      manifest 主機)是合理的數字。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

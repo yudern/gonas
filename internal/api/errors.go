@@ -55,4 +55,10 @@ var (
 	errAdminAccountNotFound   = errors.New("no account with that username")
 	errCannotDeleteOwnAccount = errors.New("you cannot delete your own account while logged in as it: log in as a different admin account first")
 	errCannotDeleteLastAdmin  = errors.New("cannot delete the last remaining admin-role account: at least one must always exist")
+
+	// Phase 17：自我更新(internal/api/system_update_handlers.go)共用的
+	// sentinel 錯誤。跟這個檔案裡其他錯誤一樣固定用英文——前端
+	// i18n.js 的 errorMap 負責翻成使用者介面語言,見該檔案開頭的說明。
+	errUpdateNotConfigured     = errors.New("no update manifest url has been configured yet: set one first")
+	errUpdateAlreadyInProgress = errors.New("an update is already being downloaded and applied, please wait")
 )

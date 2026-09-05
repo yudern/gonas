@@ -207,10 +207,13 @@ function showSetupGate() {
 // ---------- 儀表板 ----------
 
 async function renderDashboard(el) {
-  const [health, version, dockerStatus, disks, arrayStatus] = await Promise.all([
+  const [health, version, dockerStatus, disks, arrayStatus, me, update] = await Promise.all([
     api.health(), api.version(), api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unknown" })),
+    api.me().catch(() => ({ role: "" })),
+    api.systemUpdate().catch(() => null),
   ]);
+  const isAdmin = me.role === "admin";
 
   el.innerHTML = `
     <h1>${esc(t("dashboard.title"))}</h1>
@@ -226,7 +229,164 @@ async function renderDashboard(el) {
       <h2>${esc(t("dashboard.quickLinks"))}</h2>
       <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
     </div>
+    ${renderSystemUpdateCard(update, version.version, isAdmin)}
   `;
+
+  attachSystemUpdateHandlers(el, isAdmin);
+}
+
+// renderSystemUpdateCard 顯示 Phase 17 自我更新功能的狀態:目前版本、
+// 有沒有設定更新來源、背景檢查器最近一次的結果。RoleViewer 也看得到
+// 這張卡片(「現在是不是最新版本」不算敏感資訊),但只有 isAdmin 才會
+// 拿到設定更新來源/立即檢查/套用更新這些操作按鈕——跟後端
+// requireAuth/requireAdmin 的分法完全對應,見
+// internal/api/router.go 對 /api/v1/system/update* 路由的註冊說明。
+function renderSystemUpdateCard(update, currentVersion, isAdmin) {
+  if (!update) {
+    return `
+    <div class="card">
+      <h2>${esc(t("update.title"))}</h2>
+      <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("update.loadError"))}</p>
+    </div>`;
+  }
+
+  const statusPill = update.updateAvailable
+    ? `<span class="pill warn">${esc(t("update.pillAvailable", { version: update.latestVersion }))}</span>`
+    : (update.configured ? `<span class="pill ok">${esc(t("update.pillUpToDate"))}</span>` : `<span class="pill neutral">${esc(t("update.pillNotConfigured"))}</span>`);
+
+  const checkedLine = update.checkedAt
+    ? `<p style="color:var(--text-dim);font-size:12.5px;margin:6px 0 0">${esc(t("update.lastChecked", { date: formatDateTime(update.checkedAt) }))}</p>`
+    : "";
+  const checkErrorMsg = update.checkError ? msg("error", update.checkError) : "";
+  const notesBlock = update.updateAvailable && update.notes
+    ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0;white-space:pre-wrap">${esc(update.notes)}</p>`
+    : "";
+  const applyErrorMsg = update.applyError ? msg("error", t("update.applyFailed", { reason: update.applyError })) : "";
+  const applyInProgressMsg = update.applyInProgress ? msg("warn", t("update.applyInProgress")) : "";
+
+  // 「立即檢查」「套用更新」都是 requireAdmin 的動作,RoleViewer 只看得
+  // 到上面那些純資訊區塊,不會看到任何按鈕——不是隱藏起來、按了會被
+  // 後端拒絕,而是根本不渲染,跟 renderSecurity 的 isAdmin 判斷是同一個
+  // 慣例。
+  const actions = isAdmin && update.configured ? `
+    <div class="btn-row" style="margin-top:12px">
+      <button type="button" class="secondary" id="update-check-btn" ${update.applyInProgress ? "disabled" : ""}>${esc(t("update.checkNow"))}</button>
+      ${update.updateAvailable ? `<button type="button" class="danger" id="update-apply-btn" ${update.applyInProgress ? "disabled" : ""}>${update.applyInProgress ? esc(t("update.applying")) : esc(t("update.applyNow"))}</button>` : ""}
+    </div>
+  ` : "";
+
+  const settingsForm = isAdmin ? `
+    <form class="stacked" id="update-settings-form" style="margin-top:12px">
+      <div class="field">
+        <label>${esc(t("update.manifestUrl"))}</label>
+        <input type="url" name="manifestUrl" placeholder="https://example.com/gonas-manifest.json" value="${esc(update.manifestUrl || "")}">
+        <div class="hint">${esc(t("update.manifestUrlHint"))}</div>
+      </div>
+      <div class="btn-row"><button type="submit">${esc(t("update.saveSettings"))}</button></div>
+    </form>
+  ` : (!update.configured ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0">${esc(t("update.adminOnlyHint"))}</p>` : "");
+
+  return `
+    <div class="card">
+      <h2>${esc(t("update.title"))}</h2>
+      <p style="margin:0">${esc(t("update.currentVersion", { version: currentVersion }))} ${statusPill}</p>
+      ${checkedLine}
+      ${checkErrorMsg}
+      ${notesBlock}
+      <div id="update-msg"></div>
+      ${applyInProgressMsg}
+      ${applyErrorMsg}
+      ${actions}
+      ${settingsForm}
+    </div>
+  `;
+}
+
+function attachSystemUpdateHandlers(el, isAdmin) {
+  if (!isAdmin) return;
+
+  const settingsForm = el.querySelector("#update-settings-form");
+  if (settingsForm) {
+    settingsForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      try {
+        await api.setSystemUpdateSettings(f.get("manifestUrl").trim());
+        await renderDashboard(el);
+      } catch (err) {
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  const checkBtn = el.querySelector("#update-check-btn");
+  if (checkBtn) {
+    checkBtn.addEventListener("click", async () => {
+      checkBtn.disabled = true;
+      try {
+        await api.checkSystemUpdate();
+        await renderDashboard(el);
+      } catch (err) {
+        checkBtn.disabled = false;
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  const applyBtn = el.querySelector("#update-apply-btn");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      // 這是整個 Web UI 裡數一數二危險的按鈕:按下去之後 gonasd 會
+      // 下載、驗證、置換自己的執行檔,然後整個程序重新啟動——過程中
+      // 陣列跟 Docker 容器本身不受影響(它們是獨立的系統服務/程序,
+      // 不會因為 gonasd 重啟而跟著斷線),但管理介面會有幾秒鐘連不上,
+      // 值得用一個明確的確認對話框攔一次,而不是跟「刪除一個備份工作」
+      // 用一樣輕量的確認方式。
+      if (!confirm(t("update.applyConfirm"))) return;
+      applyBtn.disabled = true;
+      applyBtn.textContent = t("update.applying");
+      const checkBtn2 = el.querySelector("#update-check-btn");
+      if (checkBtn2) checkBtn2.disabled = true;
+      try {
+        const res = await api.applySystemUpdate();
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("ok", translateNotice(res.message));
+        pollForRestartThenReload();
+      } catch (err) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = t("update.applyNow");
+        if (checkBtn2) checkBtn2.disabled = false;
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+}
+
+// pollForRestartThenReload 在使用者觸發「套用更新」之後,定期戳
+// GET /api/v1/health,等 gonasd 真正重新啟動、API 又能回應之後自動重新
+// 整理整個頁面——比起讓使用者自己盯著畫面手動按重新整理,體驗更順暢。
+// 套用更新本身通常只需要幾秒鐘(下載完成之後的重啟是 exec(2) 換掉同一
+// 個 PID 的程式映像檔,幾乎是瞬間的事,見
+// internal/selfupdate.Reexec 的函式註解),中間會有一段 API 完全連不上
+// 的空窗期,這裡的錯誤(fetch 失敗)在這段期間是預期中的過渡狀態,
+// 不需要顯示成錯誤訊息——只有真的等了 1 分鐘還連不上,才放棄輪詢、讓
+// 使用者自己判斷是不是更新失敗了。
+function pollForRestartThenReload() {
+  let attempts = 0;
+  const maxAttempts = 30;
+  const timer = setInterval(async () => {
+    attempts += 1;
+    try {
+      await api.health();
+      clearInterval(timer);
+      location.reload();
+    } catch {
+      if (attempts >= maxAttempts) clearInterval(timer);
+    }
+  }, 2000);
 }
 
 function statTile(label, value, cls) {

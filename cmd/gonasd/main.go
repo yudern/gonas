@@ -19,6 +19,7 @@ import (
 	"github.com/bng147/gonas/internal/api"
 	"github.com/bng147/gonas/internal/config"
 	"github.com/bng147/gonas/internal/doctor"
+	"github.com/bng147/gonas/internal/selfupdate"
 	"github.com/bng147/gonas/internal/version"
 )
 
@@ -150,8 +151,28 @@ func main() {
 
 	logger.Info("gonasd ready", "listenAddr", cfg.ListenAddr, "https", httpsCfg.Enabled)
 
-	<-ctx.Done()
-	logger.Info("shutting down gonasd")
+	// 平常結束(收到 SIGTERM/SIGINT)走 ctx.Done() 這條路;
+	// apiServer.RestartRequested() 是 Phase 17 自我更新功能新增的第二種
+	// 觸發來源——handleSystemUpdateApply 已經把新版執行檔換到
+	// 磁碟上了,這裡收到訊號代表「該優雅關掉目前這個 http.Server、然後
+	// 用新執行檔的內容重新啟動這個程序」,而不是單純結束。兩者共用底下
+	// 同一段 srv.Shutdown 優雅關閉邏輯,只有關閉之後的下一步不同,見
+	// restarting 這個旗標的用法。
+	//
+	// restartExecPath 是訊號本身帶的執行檔路徑(在 ApplyUpdate 置換之前
+	// 就已經解析好),重啟時直接原封不動拿來用——不要在這裡自己重新呼叫
+	// os.Executable() 想「再確認一次」,那樣反而會踩到 /proc/self/exe
+	// 跟著 rename 的坑而拿到錯的路徑,細節見
+	// internal/api.Server 裡 restartRequested 欄位的完整說明。
+	restarting := false
+	var restartExecPath string
+	select {
+	case <-ctx.Done():
+		logger.Info("shutting down gonasd")
+	case restartExecPath = <-apiServer.RestartRequested():
+		restarting = true
+		logger.Info("self-update applied, shutting down gonasd to restart with the new version")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -159,6 +180,23 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
+	}
+
+	if restarting {
+		// syscall.Exec 用新執行檔的內容直接換掉目前這個程序的映像檔
+		// (同一個 PID),不是「結束後靠 systemd/Docker 重啟策略拉起
+		// 一個新程序」——這樣不管 GoNAS 是用哪一種方式部署(systemd
+		// 服務、Docker 容器、或直接在終端機執行)都能正常完成重啟,
+		// 細節見 internal/selfupdate.Reexec 的函式註解。restartExecPath
+		// 是訊號本身帶來的路徑,不是這裡重新查詢的,理由見上面
+		// select 分支旁的說明。
+		if err := selfupdate.Reexec(restartExecPath, os.Args, os.Environ()); err != nil {
+			logger.Error("self-update: re-exec failed, exiting instead", "execPath", restartExecPath, "err", err)
+			os.Exit(1)
+		}
+		// Reexec 成功的話,程式映像檔已經被換掉,execution 不會走到
+		// 這裡——上面的分支是 Reexec 本身失敗(例如執行檔權限被動過
+		// 手腳)時的保底處理。
 	}
 
 	logger.Info("gonasd stopped cleanly")

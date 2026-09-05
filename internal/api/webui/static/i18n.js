@@ -63,6 +63,21 @@ const dict = {
       quickLinksBody: "前往「<a href=\"#/storage\">儲存</a>」設定並啟動陣列、「<a href=\"#/apps\">應用程式</a>」安裝服務、「<a href=\"#/shares\">共享</a>」設定 SMB/NFS、「<a href=\"#/users\">使用者</a>」管理帳號,或「<a href=\"#/monitor\">監控</a>」查看資源使用率與設定告警。",
       uptimeSeconds: "{n} 秒", uptimeMinutes: "{n} 分鐘", uptimeHours: "{h} 小時 {m} 分鐘",
     },
+    update: {
+      title: "系統更新",
+      currentVersion: "目前版本:{version}",
+      pillAvailable: "有新版本 {version}", pillUpToDate: "已是最新版本", pillNotConfigured: "尚未設定更新來源",
+      lastChecked: "上次檢查時間:{date}",
+      manifestUrl: "更新來源網址(Manifest URL)",
+      manifestUrlHint: "填入你自己架設或信任的更新描述檔網址,留空代表完全關閉自我更新檢查——GoNAS 不會內建任何預設的更新伺服器,也不會在你設定之前發出任何相關的網路請求。",
+      saveSettings: "儲存設定",
+      checkNow: "立即檢查", applyNow: "套用更新", applying: "更新中…",
+      applyConfirm: "即將下載新版本並重新啟動 gonasd,過程中管理介面會短暫無法連線(通常只有幾秒鐘)。確定要繼續嗎?",
+      applyInProgress: "更新正在背景下載與套用,請稍候……完成後 gonasd 會自動重新啟動。",
+      applyFailed: "套用更新失敗:{reason}",
+      adminOnlyHint: "只有管理者可以設定更新來源、檢查或套用更新。",
+      loadError: "無法載入系統更新狀態。",
+    },
     array: {
       unconfigured: "尚未設定", stopped: "已停止", starting: "啟動中",
       started: "運作中", stopping: "停止中", failed: "失敗", unknown: "未知",
@@ -333,6 +348,21 @@ const dict = {
       quickLinksBody: "前往「<a href=\"#/storage\">存储</a>」设置并启动阵列、「<a href=\"#/apps\">应用</a>」安装服务、「<a href=\"#/shares\">共享</a>」设置 SMB/NFS、「<a href=\"#/users\">用户</a>」管理账号,或「<a href=\"#/monitor\">监控</a>」查看资源使用率与设置告警。",
       uptimeSeconds: "{n} 秒", uptimeMinutes: "{n} 分钟", uptimeHours: "{h} 小时 {m} 分钟",
     },
+    update: {
+      title: "系统更新",
+      currentVersion: "当前版本:{version}",
+      pillAvailable: "有新版本 {version}", pillUpToDate: "已是最新版本", pillNotConfigured: "尚未设置更新来源",
+      lastChecked: "上次检查时间:{date}",
+      manifestUrl: "更新来源网址(Manifest URL)",
+      manifestUrlHint: "填入你自己搭建或信任的更新描述文件网址,留空代表完全关闭自我更新检查——GoNAS 不会内置任何默认的更新服务器,也不会在你设置之前发出任何相关的网络请求。",
+      saveSettings: "保存设置",
+      checkNow: "立即检查", applyNow: "应用更新", applying: "更新中…",
+      applyConfirm: "即将下载新版本并重启 gonasd,过程中管理界面会短暂无法连接(通常只有几秒钟)。确定要继续吗?",
+      applyInProgress: "更新正在后台下载与应用,请稍候……完成后 gonasd 会自动重启。",
+      applyFailed: "应用更新失败:{reason}",
+      adminOnlyHint: "只有管理员可以设置更新来源、检查或应用更新。",
+      loadError: "无法加载系统更新状态。",
+    },
     array: {
       unconfigured: "尚未设置", stopped: "已停止", starting: "启动中",
       started: "运行中", stopping: "停止中", failed: "失败", unknown: "未知",
@@ -602,6 +632,21 @@ const dict = {
       quickLinks: "Quick links",
       quickLinksBody: "Go to “<a href=\"#/storage\">Storage</a>” to configure and start the array, “<a href=\"#/apps\">Apps</a>” to install services, “<a href=\"#/shares\">Shares</a>” to set up SMB/NFS, “<a href=\"#/users\">Users</a>” to manage accounts, or “<a href=\"#/monitor\">Monitor</a>” to view resource usage and set up alerts.",
       uptimeSeconds: "{n}s", uptimeMinutes: "{n}m", uptimeHours: "{h}h {m}m",
+    },
+    update: {
+      title: "System Update",
+      currentVersion: "Current version: {version}",
+      pillAvailable: "Update available: {version}", pillUpToDate: "Up to date", pillNotConfigured: "No update source configured",
+      lastChecked: "Last checked: {date}",
+      manifestUrl: "Update source URL (manifest URL)",
+      manifestUrlHint: "Point this at an update manifest you host or trust yourself. Leave it blank to turn self-update checks off entirely — GoNAS has no built-in default update server and won't make any related network request until you configure one.",
+      saveSettings: "Save settings",
+      checkNow: "Check now", applyNow: "Apply update", applying: "Updating…",
+      applyConfirm: "This downloads the new version and restarts gonasd. The admin interface will be briefly unreachable (usually just a few seconds). Continue?",
+      applyInProgress: "The update is downloading and applying in the background, please wait… gonasd will restart automatically when it's done.",
+      applyFailed: "Applying the update failed: {reason}",
+      adminOnlyHint: "Only an admin can configure the update source, check for updates, or apply one.",
+      loadError: "Could not load the system update status.",
     },
     array: {
       unconfigured: "Not configured", stopped: "Stopped", starting: "Starting",
@@ -923,6 +968,14 @@ const errorMap = {
   "smtp host is required": { "zh-Hant": "必須填寫 SMTP 伺服器位址。", "zh-Hans": "必须填写 SMTP 服务器地址。", "en": "The SMTP server address is required." },
   "at least one recipient (\"to\") is required": { "zh-Hant": "至少要填一個收件人地址。", "zh-Hans": "至少要填一个收件人地址。", "en": "At least one recipient address is required." },
   "no email notifier with that id": { "zh-Hant": "找不到這個 ID 的 Email 通知。", "zh-Hans": "找不到这个 ID 的邮件通知。", "en": "No email notifier with that ID." },
+  "no update manifest url has been configured yet: set one first": {
+    "zh-Hant": "尚未設定更新來源網址,請先到系統更新設定裡填入。", "zh-Hans": "尚未设置更新来源网址,请先到系统更新设置里填入。",
+    "en": "No update source URL has been configured yet — set one first.",
+  },
+  "an update is already being downloaded and applied, please wait": {
+    "zh-Hant": "已經有一個更新正在背景下載與套用,請稍候。", "zh-Hans": "已经有一个更新正在后台下载与应用,请稍候。",
+    "en": "An update is already being downloaded and applied — please wait.",
+  },
 };
 
 // noticeMap —— 跟 errorMap 同樣的道理,但這裡收的不是「錯誤」,而是後端
@@ -939,6 +992,11 @@ const noticeMap = {
     "zh-Hant": "變更 HTTPS 設定不會立刻生效：gonasd 只在程序啟動時決定要監聽 HTTP 還是 HTTPS,請重新啟動 gonasd 讓新設定生效。",
     "zh-Hans": "更改 HTTPS 设置不会立刻生效:gonasd 只在进程启动时决定要监听 HTTP 还是 HTTPS,请重启 gonasd 让新设置生效。",
     "en": "Changing HTTPS settings doesn't take effect immediately — gonasd only decides whether to listen on HTTP or HTTPS when it starts, so restart gonasd for the new setting to apply.",
+  },
+  "更新已開始在背景下載與套用,完成後 gonasd 會自動重新啟動,請稍後重新整理頁面。": {
+    "zh-Hant": "更新已開始在背景下載與套用,完成後 gonasd 會自動重新啟動,請稍後重新整理頁面。",
+    "zh-Hans": "更新已开始在后台下载与应用,完成后 gonasd 会自动重启,请稍后刷新页面。",
+    "en": "The update has started downloading and applying in the background — gonasd will restart automatically when it's done, please refresh the page shortly.",
   },
   "備份已開始在背景執行,完成後請重新整理查看結果。": {
     "zh-Hant": "備份已開始在背景執行,完成後請重新整理查看結果。",

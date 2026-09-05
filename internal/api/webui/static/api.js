@@ -138,6 +138,11 @@ export const api = {
   filesTrashRestore: (id) => request("POST", `/api/v1/files/trash/${encodeURIComponent(id)}/restore`),
   filesTrashDeleteItem: (id) => request("DELETE", `/api/v1/files/trash/${encodeURIComponent(id)}`),
   filesTrashEmpty: () => request("POST", "/api/v1/files/trash/empty"),
+
+  systemUpdate: () => request("GET", "/api/v1/system/update"),
+  setSystemUpdateSettings: (manifestUrl) => request("PUT", "/api/v1/system/update/settings", { manifestUrl }),
+  checkSystemUpdate: () => request("POST", "/api/v1/system/update/check"),
+  applySystemUpdate: () => request("POST", "/api/v1/system/update/apply"),
 };
 
 // uploadWithProgress 用 XMLHttpRequest 而不是 fetch 送出上傳請求——這是

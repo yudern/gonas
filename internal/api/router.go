@@ -17,6 +17,7 @@ import (
 	"github.com/bng147/gonas/internal/docker"
 	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/security"
+	"github.com/bng147/gonas/internal/selfupdate"
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
 	"github.com/bng147/gonas/internal/version"
@@ -53,6 +54,23 @@ const (
 const (
 	monitorPollInterval    = 10 * time.Second
 	monitorHistoryCapacity = 180
+)
+
+// updateCheckInterval 是背景自我更新檢查的週期。版本更新不是分秒必爭
+// 的事(不像 HTTPS 憑證快過期那樣有明確的截止日),6 小時一次已經能讓
+// 使用者在合理時間內在 Web UI 看到「有新版本」的提示,又不會對使用者
+// 自己架設的 Manifest 伺服器造成有意義的負擔——況且完全沒設定
+// ManifestURL 之前,這個週期根本不會發出任何請求,見
+// internal/selfupdate 套件註解。
+//
+// updateHTTPTimeout 是背景檢查、下載更新檔共用的 HTTP client 逾時。
+// 檢查 Manifest 是小型 JSON,下載執行檔可能是十幾 MB 到快 200 MiB
+// (見 internal/selfupdate.maxDownloadBytes)——5 分鐘對正常網路環境
+// 綽綽有餘,同時還是擋得住「伺服器沒回應、連線掛住不放」的情況,不會讓
+// 背景 goroutine 無限期卡住。
+const (
+	updateCheckInterval = 6 * time.Hour
+	updateHTTPTimeout   = 5 * time.Minute
 )
 
 // Server 持有建立路由所需的共用依賴。
@@ -100,6 +118,55 @@ type Server struct {
 	// goroutine(見 internal/security.CertRenewer)。HTTPS 沒有啟用時
 	// 維持 nil,New()/Close() 都要檢查 nil 再動作。
 	certRenewer *security.CertRenewer
+
+	// updateChecker 是背景週期性檢查是否有新版 gonasd 的 goroutine(見
+	// internal/selfupdate.Checker)。跟 certRenewer 不同,這裡不管
+	// ManifestURL 有沒有設定都會啟動——Checker.Start 每次檢查前都會透過
+	// getManifestURL 重新讀一次 state.json,URL 是空字串(預設值)時
+	// 直接跳過、不發任何網路請求,所以「啟動」不等於「開始連網」,細節
+	// 見 internal/selfupdate 套件註解的隱私設計說明。
+	updateChecker *selfupdate.Checker
+
+	// updateHTTPClient 是 updateChecker 背景檢查、以及套用更新時下載
+	// 執行檔共用的 HTTP client。獨立成一個欄位(而不是每次臨時
+	// new 一個)方便測試替換,正式執行時就是一個帶合理逾時的 client。
+	updateHTTPClient *http.Client
+
+	// restartRequested 是 self-update 實際把新執行檔換上去之後,通知
+	// cmd/gonasd/main.go「該重啟程序了」的訊號,內容是重啟要用的執行檔
+	// 路徑。buffered size 1 是因為送訊號那個 goroutine
+	// (runApplyUpdate)不該被「main.go 還沒讀走上一個訊號」卡住,用
+	// 非阻塞送出(select+default)就好,細節見 RestartRequested 的方法
+	// 註解。
+	//
+	// 這裡刻意傳遞路徑字串,而不是單純的 struct{}{} 訊號,是因為一個
+	// 真實踩到的坑:main.go 收到訊號之後如果自己重新呼叫一次
+	// os.Executable() 找路徑,在 Linux 上會讀到錯的答案——
+	// os.Executable() 底層是讀 /proc/self/exe,這是一個會跟著「目前這個
+	// 執行檔的 inode」被改名而變動的 magic symlink;ApplyUpdate
+	// 已經把「目前正在跑的這個執行檔」(也就是 runApplyUpdate 呼叫
+	// os.Executable() 當下拿到的那個 inode)重新命名成
+	// "<execPath>.previous" 了,所以事後在同一個程序裡再呼叫一次
+	// os.Executable(),读到的會是改名後的 ".previous" 路徑,不是新版本
+	// 執行檔實際所在的路徑——這樣 Reexec 會很荒謬地重新載入舊版本的
+	// 內容。正確做法是在 ApplyUpdate 置換之前就先把路徑記下來(見
+	// runApplyUpdate 裡呼叫 resolveExecPath() 的那一行),透過這個
+	// channel 原封不動地交給 main.go 使用,不要事後重新查詢。
+	restartRequested chan string
+
+	// applyMu 保護 applyStatus——self-update 套用動作是背景 goroutine
+	// 執行的(見 handleSystemUpdateApply),GET /api/v1/system/update
+	// 需要能隨時安全地讀取目前的套用進度。
+	applyMu     sync.Mutex
+	applyStatus applyUpdateStatus
+
+	// updateExecPathFunc 是 runApplyUpdate 用來找出「目前這個執行檔在
+	// 磁碟上的路徑」的函式,預設(nil)時等同 os.Executable。獨立成一個
+	// 可替換的欄位,單純是為了讓測試能注入一個 t.TempDir() 底下的假
+	// 執行檔路徑,不會讓測試不小心去覆寫真正在跑測試的那個二進位檔——
+	// 跟 s.runner/s.docker 這些欄位可以在測試裡被替換成假實作是同樣的
+	// 考量。
+	updateExecPathFunc func() (string, error)
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -161,6 +228,18 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		s.certRenewer.Start(context.Background(), checkInterval, httpsCfg.CertPath, httpsCfg.KeyPath, httpsCfg.Hosts, validFor, renewBefore)
 	}
 
+	// 自我更新的背景檢查器一律啟動,不像 certRenewer 那樣要看設定決定
+	// 要不要啟動——理由見 Server.updateChecker 欄位的說明:沒設定
+	// ManifestURL 之前,啟動這個 goroutine 本身不會產生任何網路流量,
+	// 使用者之後透過 Web UI 設定/清空更新來源網址也不需要重啟 gonasd
+	// 才會生效。
+	s.updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
+	s.restartRequested = make(chan string, 1)
+	s.updateChecker = selfupdate.NewChecker(logger)
+	s.updateChecker.Start(context.Background(), updateCheckInterval, version.Version, func() string {
+		return s.store.Snapshot().Update.ManifestURL
+	}, s.updateHTTPClient)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
@@ -191,6 +270,16 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 
 	mux.HandleFunc("GET /api/v1/security/https", s.requireAuth(s.handleSecurityHTTPSGet))
 	mux.HandleFunc("PUT /api/v1/security/https", s.requireAdmin(s.handleSecurityHTTPSSet))
+
+	// 跟 HTTPS 設定同樣的 requireAuth/requireAdmin 分法:查詢版本/檢查
+	// 結果只是讀資訊,RoleViewer 也該看得到;設定更新來源網址、觸發
+	// 檢查、真正套用更新都是「管理 NAS」的動作,一律 requireAdmin——尤其
+	// apply 會直接置換掉正在執行的 gonasd 執行檔,絕對不能是 RoleViewer
+	// 就能觸發的動作。
+	mux.HandleFunc("GET /api/v1/system/update", s.requireAuth(s.handleSystemUpdateGet))
+	mux.HandleFunc("PUT /api/v1/system/update/settings", s.requireAdmin(s.handleSystemUpdateSettingsSet))
+	mux.HandleFunc("POST /api/v1/system/update/check", s.requireAdmin(s.handleSystemUpdateCheck))
+	mux.HandleFunc("POST /api/v1/system/update/apply", s.requireAdmin(s.handleSystemUpdateApply))
 
 	mux.HandleFunc("GET /api/v1/vpn/status", s.requireAuth(s.handleVPNStatus))
 	mux.HandleFunc("PUT /api/v1/vpn/interface", s.requireAdmin(s.handleVPNInterfaceSet))
@@ -303,6 +392,25 @@ func (s *Server) Close() {
 	if s.certRenewer != nil {
 		s.certRenewer.Stop()
 	}
+
+	if s.updateChecker != nil {
+		s.updateChecker.Stop()
+	}
+}
+
+// RestartRequested 回傳一個訊號 channel,self-update 成功把新版執行檔
+// 換上去之後(見 runApplyUpdate)會往裡面送一個值——內容是重啟時該用
+// 的執行檔路徑,不是空的 struct{}{},理由見 restartRequested 欄位的
+// 說明(main.go 事後自己重新呼叫 os.Executable() 會因為 /proc/self/exe
+// 跟著 rename 的坑而拿到錯誤答案)。cmd/gonasd/main.go 在自己的主迴圈裡
+// 跟 SIGTERM/SIGINT 的 ctx.Done() 一起 select 這個 channel——收到訊號
+// 代表「該優雅關閉目前的 http.Server、然後用 internal/selfupdate.Reexec
+// 搭配這個路徑重新啟動這個程序」,而不是像收到訊號那樣直接結束。獨立
+// 成一個方法(而不是直接讓 main.go 拿 channel 欄位)是為了維持
+// 「main.go 只依賴 api.Server 這一層抽象」的既有慣例,見
+// HTTPSConfig/Close 的方法註解。
+func (s *Server) RestartRequested() <-chan string {
+	return s.restartRequested
 }
 
 // HTTPSCertificateLoader 回傳一個可以指定給 tls.Config.GetCertificate
