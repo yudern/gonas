@@ -107,15 +107,42 @@ fi
 
 # 停用/遮罩預設的 tty1 登入提示，換成我們的狀態主控台——tty2 以後
 # 維持系統原本的 getty 登入，保留一個「找一台真機除錯」的正常管道，
-# 見 gonas-console.service 的說明。
-systemctl disable getty@tty1.service 2>/dev/null || true
-systemctl mask getty@tty1.service 2>/dev/null || true
-systemctl enable gonas-console.service 2>/dev/null || true
+# 見 gonas-console.service 的說明。這三個 systemctl 呼叫原本用
+# `2>/dev/null || true` 完全吞掉結果——跟前面 gonas.service 那個真的
+# 踩到的坑一樣的道理:如果這幾個呼叫在某個 Debian 版本的 in-target
+# chroot 環境裡也一樣悄悄失敗,原本的寫法會讓人完全看不出來、只會在
+# 開機後發現 tty1 還是一般登入畫面才回頭猜是哪裡的問題。改成明確記錄
+# 每一步的成功/失敗,第一次真機/VM 測試時直接看這份 log 就知道是不是
+# 也踩到同一類問題,不用用猜的。
+if systemctl disable getty@tty1.service 2>/dev/null; then
+    log "getty@tty1.service disabled"
+else
+    log "WARNING: 'systemctl disable getty@tty1.service' failed — tty1 may still show the normal login prompt"
+fi
+if systemctl mask getty@tty1.service 2>/dev/null; then
+    log "getty@tty1.service masked"
+else
+    log "WARNING: 'systemctl mask getty@tty1.service' failed"
+fi
+if systemctl enable gonas-console.service 2>/dev/null; then
+    log "gonas-console.service enabled"
+else
+    log "WARNING: 'systemctl enable gonas-console.service' failed — tty1 status console will NOT appear after reboot"
+fi
 
 # --- 3. 品牌化 ------------------------------------------------------
 echo "gonas" > /etc/hostname
 if [ -f /etc/hosts ]; then
-    sed -i "s/127.0.1.1.*/127.0.1.1\tgonas/" /etc/hosts || true
+    if grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+        sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\tgonas/" /etc/hosts || true
+    else
+        # 有些最小化安裝的 /etc/hosts 可能根本沒有 127.0.1.1 這一行
+        # (原本的 sed 只會在有這一行時才替換,沒有的話就靜默不做
+        # 任何事)——這裡改成沒有的話就直接補上一行,而不是假設一定
+        # 存在,純粹是本機主機名稱解析的細節,不影響 gonasd 本身監聽
+        # 0.0.0.0 對外提供服務。
+        echo "127.0.1.1	gonas" >> /etc/hosts
+    fi
 fi
 
 # /etc/os-release 只改 NAME/PRETTY_NAME 這兩個「給人看」的欄位，

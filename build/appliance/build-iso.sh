@@ -147,7 +147,17 @@ cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 # 統一加上 preseed 相關參數，而不是假設某個固定檔名——修改後務必用
 # QEMU 開機檢查選單，見 README.md。
 echo "==> patching boot menu configs to auto-load the GoNAS preseed"
-APPEND_EXTRA="auto=true priority=critical preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# priority=high(不是 critical)是刻意的選擇:preseed.cfg 裡凡是已經
+# 明確給答案的問題,不管 priority 設多少都不會再問一次(debconf 的
+# 優先權只影響「還沒有答案的問題要不要跳出來問」)——用 high 而不是
+# critical,能大幅提高「preseed.cfg 沒有涵蓋到、或刻意留白的高優先權
+# 問題(尤其是 partman/confirm 這類寫入磁碟前的確認)」仍然會真的
+# 顯示出來、而不是被 debconf 用預設值悄悄帶過的機率,對這份 preseed
+# 「寧可多停下來問一次,也不要猜錯」的設計原則而言，high 比 critical
+# 安全。代價是如果真的遇到某個沒被涵蓋到的 medium/low 優先權問題,
+# 会跳出來要人工回答,不算「完全零互動」,但對一份還沒有實機驗證過
+# 的 preseed 來說，這是刻意要接受的取捨。
+APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 
 find "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" -type f \( -name '*.cfg' -o -name 'txt.cfg' \) 2>/dev/null | while read -r cfgfile; do
     # isolinux 語法用 "append ..." 這一行帶核心參數；grub.cfg 用
@@ -155,8 +165,12 @@ find "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" -type f \( -name '*.cfg' -
     if grep -q '^[[:space:]]*append ' "$cfgfile" 2>/dev/null; then
         sed -i "s#^\([[:space:]]*append .*\)\$#\\1 $APPEND_EXTRA#" "$cfgfile"
     fi
+    # 容忍 "---" 後面可能還有空白字元(不同 grub.cfg 產生器有時候會留下
+    # 尾端空白)——原本只用 \$ 錨定行尾,遇到這種情況會整條規則不命中、
+    # 靜默地什麼都不做(sed 對沒匹配到的規則不會報錯),等於 preseed
+    # 根本沒被套用卻毫無錯誤訊息，所以這裡改成容許尾端空白的版本。
     if grep -q '	linux ' "$cfgfile" 2>/dev/null || grep -q '^[[:space:]]*linux ' "$cfgfile" 2>/dev/null; then
-        sed -i "s#\(---\)\$#$APPEND_EXTRA \\1#" "$cfgfile"
+        sed -i "s#\(---\)[[:space:]]*\$#$APPEND_EXTRA \\1#" "$cfgfile"
     fi
     # 選單標題品牌化——把看得到的 "Debian GNU/Linux installer" 字樣換成
     # "GoNAS Installer"，純粹是顯示文字，不影響實際安裝行為。

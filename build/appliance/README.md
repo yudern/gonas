@@ -102,10 +102,13 @@ build/appliance/build-iso.sh arm64 1.2.3
 4. 把 gonasd release tarball、`preseed.cfg`、`late-command.sh`、
    `overlay/` 目錄整份塞進解開的目錄樹裡的 `gonas/` 子目錄。
 5. 修改開機選單設定檔(isolinux/grub),自動帶入
-   `auto=true priority=critical preseed/file=/cdrom/gonas/preseed.cfg`
+   `auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg`
    等核心參數,讓安裝程式一開機就自動套用 preseed,不需要手動在選單
-   按 Enter/輸入指令;順便把看得到的「Debian GNU/Linux installer」
-   字樣換成「GoNAS Installer」。
+   按 Enter/輸入指令(用 `priority=high` 而不是更激進的
+   `critical`,是為了讓 `preseed.cfg` 沒有涵蓋到、或刻意留白的
+   高優先權問題——尤其是磁碟分割的最終確認——仍然有機會真的顯示
+   出來,而不是被 debconf 用預設值悄悄帶過);順便把看得到的
+   「Debian GNU/Linux installer」字樣換成「GoNAS Installer」。
 6. 重新計算 `md5sum.txt`,用 `xorriso -indev ... -outdev ... -map ...
    -boot_image any replay` 重新包裝成一份新的、一樣可開機的 ISO
    (沿用原始 ISO 的 El Torito/isohybrid 開機目錄結構,這是 Debian
@@ -142,12 +145,23 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
 要確認的事情,按順序:
 
 1. **開機選單有沒有自動套用 preseed** —— 開機後應該完全不用手動按
-   任何鍵,安裝程式自己跑完語系/網路/磁碟分割/套件安裝,中途只會在
-   「真的要寫入磁碟」那一步停下來要求確認(見上面的說明,這是刻意
-   保留的)。如果安裝程式停下來問其他問題(語系、鍵盤、使用者帳號
-   之類),代表 `preseed.cfg` 裡某個欄位的 owner/type/value 寫錯了,
-   debian-installer 通常會直接顯示是哪個 debconf 問題在問,對照
-   `preseed.cfg` 修正。
+   任何鍵,安裝程式自己跑完語系/網路/套件安裝,中途會在下面兩種情況
+   停下來要求人工確認,這兩種都是刻意保留的,不是 bug:(a)如果這台
+   機器(或這個 VM)掛了不只一顆磁碟,guided partitioning 一開始就會
+   先問「要對哪一顆磁碟分割」(`preseed.cfg` 故意沒有設定
+   `partman-auto/disk`,見該檔案裡的說明);(b)不管幾顆磁碟,選定
+   之後最後都會停在「真的要把這個分割配置寫入磁碟嗎」的確認畫面
+   (`partman/confirm`/`partman/confirm_nooverwrite` 兩行故意維持
+   註解狀態)。如果安裝程式在**這兩種情況以外**的地方停下來問問題
+   (語系、鍵盤、使用者帳號之類),代表 `preseed.cfg` 裡某個欄位的
+   owner/type/value 寫錯了,或者剛好撞上一個這份 preseed 沒有預期到
+   的 debconf 問題——debian-installer 通常會直接顯示是哪個問題在問,
+   對照 `preseed.cfg` 修正,修正後也記得把這裡的「预期會停下來的
+   地方」清單一併更新。另外如果是在真實硬體(不是 VM)上測,額外
+   留意有沒有跳出「缺少韌體,請插入另一份媒體」的畫面——這是
+   `d-i hw-detect/load_firmware boolean false` 沒有完全生效的跡象
+   (理論上這樣設定就不該再問這一題),VM 用 virtio 裝置通常不會
+   遇到這個問題,所以這一項在真機上比在 VM 上更需要特別留意。
 2. **安裝完重開機後,tty1 是不是狀態畫面而不是登入提示** —— 應該會
    看到 ASCII art「GONAS」字樣、版本號、一個或多個 `http://<ip>:8291`
    的網址(要看虛擬機的網路是不是有正確拿到 DHCP 位址)。如果還是
@@ -198,6 +212,17 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   補裝,效果跟軟體版安裝路徑完全一樣。
 - 沒有做 Secure Boot 簽章相關處理,規劃上假設目標機器的韌體允許
   一般(非簽章)開機或已關閉 Secure Boot。
+- 只用 `d-i hw-detect/load_firmware boolean false` 明確告訴安裝程式
+  「不用等額外的韌體媒體」,不代表真的解決了缺韌體的問題——如果這台
+  機器的網卡/儲存控制器需要非自由韌體才能動作,結果只是安裝程式不會
+  卡住等待,但那個裝置本身可能還是用不了。這在 QEMU/VirtualBox 的
+  virtio 裝置上不會遇到,是真實硬體上才需要留意的落差,見上面「如何
+  驗證」第 1 點。
+- 機器上有不只一顆磁碟時,guided partitioning 會停下來問「要對哪一顆
+  磁碟分割」(這是刻意的,見 `preseed.cfg` 的說明,不是遺漏),所以
+  嚴格來說這不是一份「完全零互動、從開機到裝完中間不用碰鍵盤」的
+  preseed——多碟機器上至少會停兩次:選磁碟、確認寫入。單碟機器
+  (或只掛一顆測試碟的 VM)只會停在確認寫入那一次。
 - `build-iso.sh` 會比對下載回來的官方 ISO 跟 Debian 發布的
   `SHA256SUMS` 是否一致,雜湊不符就直接中止(避免在一份損毀或被
   竄改的 ISO 上繼續動作卻完全沒有任何錯誤訊息)——但這只驗證
