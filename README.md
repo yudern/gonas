@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 8 完成 — 安裝與封裝
+## 目前狀態:Phase 9 完成 — 實機測試與強化
 
 **Phase 0(專案骨架)**
 
@@ -497,11 +497,68 @@ WireGuard-tools/rsync,systemd 也不是真正的 PID 1 —— 所以「實機測
 - 全部變更跑過完整的 `gofmt`/`go build`/`go vet`/`go test ./...`,新增
   的 `internal/security/ratelimit_test.go` 全數通過。
 
-至此,原始技術路線圖(Phase 0–9)已全部完成。GoNAS 目前是一套零第三方
-Go 依賴、可交叉編譯到 x86_64/ARM64、涵蓋儲存陣列/Docker/檔案分享/監控
-告警/備份快照/身分驗證與網路安全/一鍵安裝的完整 NAS 軟體套件,剩下
-的工作是 `docs/REAL_HARDWARE_TESTING.md` 清單裡那些只有真實硬體才能
-驗證的項目。
+**Phase 9.1(修正:這台沙盒其實裝了真的 Docker Engine + 自訂 App 安裝)**
+
+Phase 9 交付之後,重新檢查這台沙盒的環境時發現一個先前的認知錯誤:
+`docker`/`dockerd` 執行檔其實已經預裝在這裡,`dockerd` 也真的能以
+root 身分手動啟動成功(`docker info` 能連上、`overlayfs` 儲存驅動正常
+初始化)——先前所有 Phase 2 的 Docker 整合驗證都只用 HTTP 假伺服器
+模擬 Docker Engine API 回應,是因為當時沒有主動確認過這件事,不是
+真的沒有 Docker 可用。這個發現值得訂正,也直接拿來把 Docker 相關功能
+做一次真正的端到端驗證,同時補上先前找出的一個具體產品缺口(應用
+程式商店只有 3 個內建範本、無法安裝任意 image)。
+
+- **應用程式商店支援自訂安裝**:`POST /api/v1/appstore/apps` 現在接受
+  `templateId`(原本的內建目錄路徑)或 `template`(使用者自己填的完整
+  `appstore.AppTemplate`,不限於 `catalog.go` 裡那 3 個範本)兩者恰好
+  一個,對應到 Unraid「不套用任何 Community Applications 範本、直接
+  新增容器」的安裝方式。新增的 `resolveInstallTemplate` 會擋掉自訂
+  範本 ID 撞到內建目錄或撞到現有已安裝 App 的情況(ID 同時是容器
+  命名前綴跟網路名稱,撞名會讓 Uninstall 誤刪不相干的 App)。8 個
+  單元測試涵蓋這幾種路徑跟碰撞情境,全數通過。
+- **Web UI 新增「自訂安裝」表單**:App ID/名稱/說明/image/埠對應/
+  掛載路徑/環境變數,埠/掛載/環境變數用簡易的多行文字格式(而不是
+  動態新增列的表單元件)換取實作成本,對「裝一個容器、填幾條設定」
+  的情境已經足夠。過程中用 Playwright 抓到一個真的存在的 bug:App ID
+  欄位的 `pattern="[a-z0-9][a-z0-9-]*"` 在這個版本的 Chromium 裡會被
+  當成無效的正規表示式(新版 HTML 規格用 regex 的 `v` flag/Unicode
+  Sets 模式編譯 `pattern` 屬性,這個模式對字元類別裡的連字號比舊模式
+  嚴格),導致整個表單完全無法送出且瀏覽器主控台報一個語法錯誤
+  ——改成明確跳脫 `[a-z0-9][a-z0-9\-]*` 後修好,已重新用 Playwright
+  跑完整個安裝/解除安裝流程確認正常。
+- **真的用 Docker Engine 端到端驗證了(不是 HTTP 假伺服器)**:手動
+  啟動 `dockerd`,用一個 `FROM scratch` + 靜態編譯的 Go 執行檔建置
+  出一個完全不需要連網、不需要向任何 registry 拉取任何東西的最小
+  測試映像檔,拿它對著真正在跑的 `gonasd` 做了以下驗證,全部是第一次
+  真正對著 Docker Engine API(而非 fake HTTP handler)跑:
+  - 單服務自訂安裝:容器真的被建立、啟動,`docker ps` 看得到,
+    透過對應的 host port 打 HTTP 請求拿到真實回應。
+  - 多服務自訂安裝:專屬 bridge 網路真的被建立、兩個容器都掛在
+    上面;解除安裝後容器與網路都真的被清乾淨。
+  - ID 碰撞防護(撞內建目錄 / 撞已安裝 App / 同時給兩種安裝方式 /
+    兩種都不給)分別回傳正確的 409/400。
+  - **安裝失敗時的 rollback 邏輯**:刻意讓多服務範本裡第二個服務指定
+    一個真的拉不到的 image(這台沙盒的網路政策擋掉了對 Docker Hub
+    registry 的存取,一個現成的失敗情境),確認第一個服務已經建立的
+    容器跟共用網路都被正確清乾淨,沒有殘留孤兒容器,也沒有寫進
+    `state.json`。
+  - 整個「填表單 → 安裝 → docker ps 看到真容器 → 按解除安裝 →
+    容器真的消失」流程也透過 Playwright 對著真正的瀏覽器跑過一次
+    (不只是 curl 打 API)。
+  - 這次驗證仍然有邊界:這台沙盒的網路政策擋掉了 Docker Hub 等
+    registry 的存取,所以「拉取一個真實的、之前沒快取過的映像檔」
+    這件事本身沒辦法驗證,`cmd/gonasd/main.go` 裡關於
+    `WriteTimeout` 為什麼刻意不設的說明因此仍然成立,`docs/
+    REAL_HARDWARE_TESTING.md` 裡那一項也維持原樣待驗證。
+
+至此,原始技術路線圖(Phase 0–9)已全部完成,並且比 Phase 9 剛交付時
+多驗證了一層:Docker 容器/網路生命週期、rollback 邏輯已經對著真正的
+Docker Engine 跑過而不只是邏輯正確性的單元測試。GoNAS 目前是一套零
+第三方 Go 依賴、可交叉編譯到 x86_64/ARM64、涵蓋儲存陣列/Docker/檔案
+分享/監控告警/備份快照/身分驗證與網路安全/一鍵安裝的完整 NAS 軟體
+套件,剩下的工作是 `docs/REAL_HARDWARE_TESTING.md` 清單裡那些依然
+需要真實硬體(硬碟、mergerFS/SnapRAID/Samba/NFS/WireGuard-tools 這些
+這台沙盒的網路政策擋掉、裝不上的系統套件)才能驗證的項目。
 
 ## 開發
 

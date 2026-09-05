@@ -345,6 +345,31 @@ async function renderApps(el) {
       <h2>商店目錄</h2>
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl)).join("")}
     </div>
+
+    <div class="card">
+      <h2>自訂安裝</h2>
+      <p class="hint">不透過上面的商店目錄,直接指定任意 image 安裝一個容器(對應 Docker Hub 或其他 registry 上的任何映像檔,或這台機器上已經存在的本機映像檔)。</p>
+      <div id="custom-install-msg"></div>
+      <form class="stacked" id="custom-install-form">
+        <div class="field"><label>App ID(英數字/連字號,用於容器與網路命名,安裝後不能改)</label><input type="text" name="id" pattern="[a-z0-9][a-z0-9\\-]*" placeholder="my-app" required></div>
+        <div class="field"><label>名稱</label><input type="text" name="name" required></div>
+        <div class="field"><label>說明(選填)</label><input type="text" name="description"></div>
+        <div class="field"><label>Image</label><input type="text" name="image" placeholder="nginx:latest" required></div>
+        <div class="field">
+          <label>埠對應(選填,每行一個,格式 host:container,可加 /udp,例如 8080:80)</label>
+          <textarea name="ports" rows="2" placeholder="8080:80"></textarea>
+        </div>
+        <div class="field">
+          <label>掛載路徑(選填,每行一個,格式 host路徑:容器路徑,可加 :ro 唯讀)</label>
+          <textarea name="volumes" rows="2" placeholder="/mnt/tank/appdata/my-app:/data"></textarea>
+        </div>
+        <div class="field">
+          <label>環境變數(選填,每行一個,格式 KEY=VALUE)</label>
+          <textarea name="env" rows="2" placeholder="TZ=Asia/Taipei"></textarea>
+        </div>
+        <div class="btn-row"><button type="submit">安裝</button></div>
+      </form>
+    </div>
   `;
 
   el.querySelectorAll("[data-uninstall]").forEach((btn) => {
@@ -390,6 +415,75 @@ async function renderApps(el) {
         box.innerHTML = msg("error", err.message);
       }
     });
+  });
+
+  const customForm = el.querySelector("#custom-install-form");
+  if (customForm) {
+    customForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(customForm);
+      const box = el.querySelector("#custom-install-msg");
+      let template;
+      try {
+        template = {
+          id: f.get("id").trim(),
+          name: f.get("name").trim(),
+          description: f.get("description").trim(),
+          services: [{
+            name: "app",
+            image: f.get("image").trim(),
+            ports: parsePortLines(f.get("ports")),
+            volumes: parseVolumeLines(f.get("volumes")),
+            env: parseEnvLines(f.get("env")),
+          }],
+        };
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+        return;
+      }
+      try {
+        await api.installCustomApp(template);
+        box.innerHTML = msg("ok", "安裝成功!");
+        setTimeout(() => renderApps(el), 600);
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+}
+
+// parsePortLines/parseVolumeLines/parseEnvLines 把自訂安裝表單裡的簡易
+// 文字格式(每行一個)翻譯成後端 appstore.AppTemplate 期待的結構化欄位
+// ——刻意不做成一排一排可以動態新增/刪除的欄位(常見的 Docker 管理介面
+// 作法),用純文字多行輸入换取實作/維護成本低很多,對「一次裝一個
+// 容器、填個幾條就好」的情境已經足夠,之後真的有需要再改成動態表單。
+function parsePortLines(text) {
+  return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const m = line.match(/^(\d+):(\d+)(\/(tcp|udp))?$/i);
+    if (!m) throw new Error(`埠對應格式錯誤:「${line}」,應為 host:container 或 host:container/udp`);
+    return { hostPort: Number(m[1]), containerPort: Number(m[2]), protocol: (m[4] || "").toLowerCase() || undefined };
+  });
+}
+
+function parseVolumeLines(text) {
+  return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const parts = line.split(":");
+    if (parts.length < 2 || parts.length > 3) {
+      throw new Error(`掛載路徑格式錯誤:「${line}」,應為 host路徑:容器路徑 或 host路徑:容器路徑:ro`);
+    }
+    const readOnly = parts[2] === "ro";
+    if (parts.length === 3 && !readOnly) {
+      throw new Error(`掛載路徑格式錯誤:「${line}」,第三段只接受 ro`);
+    }
+    return { hostPath: parts[0], containerPath: parts[1], readOnly };
+  });
+}
+
+function parseEnvLines(text) {
+  return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const idx = line.indexOf("=");
+    if (idx <= 0) throw new Error(`環境變數格式錯誤:「${line}」,應為 KEY=VALUE`);
+    return { key: line.slice(0, idx), default: line.slice(idx + 1) };
   });
 }
 

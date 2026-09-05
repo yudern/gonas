@@ -1,0 +1,140 @@
+package api
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/bng147/gonas/internal/appstore"
+	"github.com/bng147/gonas/internal/state"
+)
+
+// newTestServer 建立一個只帶 store 的最小 Server,夠用來測
+// resolveInstallTemplate 這種只碰 s.store 的純邏輯,不需要真的啟動
+// HTTP、Docker client 或監控輪詢這些跟這裡要測的行為無關的東西。
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	return &Server{store: store}
+}
+
+func minimalTemplate(id string) appstore.AppTemplate {
+	return appstore.AppTemplate{
+		ID:   id,
+		Name: "Test App " + id,
+		Services: []appstore.ServiceTemplate{
+			{Name: "app", Image: "gonas-test-image:local"},
+		},
+	}
+}
+
+func TestResolveInstallTemplate_ByCatalogID(t *testing.T) {
+	s := newTestServer(t)
+
+	if len(builtinCatalog) == 0 {
+		t.Fatal("builtinCatalog is unexpectedly empty")
+	}
+	want := builtinCatalog[0]
+
+	got, err := s.resolveInstallTemplate(installAppRequest{TemplateID: want.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ID != want.ID {
+		t.Errorf("got template id %q, want %q", got.ID, want.ID)
+	}
+}
+
+func TestResolveInstallTemplate_UnknownCatalogID(t *testing.T) {
+	s := newTestServer(t)
+
+	_, err := s.resolveInstallTemplate(installAppRequest{TemplateID: "does-not-exist"})
+	if err != errAppNotFound {
+		t.Errorf("got err %v, want errAppNotFound", err)
+	}
+}
+
+func TestResolveInstallTemplate_CustomTemplate(t *testing.T) {
+	s := newTestServer(t)
+	tmpl := minimalTemplate("my-custom-app")
+
+	got, err := s.resolveInstallTemplate(installAppRequest{Template: &tmpl})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ID != "my-custom-app" {
+		t.Errorf("got template id %q, want %q", got.ID, "my-custom-app")
+	}
+}
+
+func TestResolveInstallTemplate_NeitherProvided(t *testing.T) {
+	s := newTestServer(t)
+
+	_, err := s.resolveInstallTemplate(installAppRequest{})
+	if err != errAppInstallNeedsExactlyOne {
+		t.Errorf("got err %v, want errAppInstallNeedsExactlyOne", err)
+	}
+}
+
+func TestResolveInstallTemplate_BothProvided(t *testing.T) {
+	s := newTestServer(t)
+	tmpl := minimalTemplate("whatever")
+
+	_, err := s.resolveInstallTemplate(installAppRequest{TemplateID: builtinCatalog[0].ID, Template: &tmpl})
+	if err != errAppInstallNeedsExactlyOne {
+		t.Errorf("got err %v, want errAppInstallNeedsExactlyOne", err)
+	}
+}
+
+func TestResolveInstallTemplate_CustomIDCollidesWithCatalog(t *testing.T) {
+	s := newTestServer(t)
+	tmpl := minimalTemplate(builtinCatalog[0].ID) // 撞內建目錄的 ID
+
+	_, err := s.resolveInstallTemplate(installAppRequest{Template: &tmpl})
+	if err != errAppIDConflictsWithCatalog {
+		t.Errorf("got err %v, want errAppIDConflictsWithCatalog", err)
+	}
+}
+
+func TestResolveInstallTemplate_CustomIDCollidesWithInstalledApp(t *testing.T) {
+	s := newTestServer(t)
+
+	if err := s.store.Update(func(st *state.State) error {
+		st.InstalledApps = append(st.InstalledApps, state.InstalledApp{
+			Template: minimalTemplate("already-installed"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("seeding installed app: %v", err)
+	}
+
+	tmpl := minimalTemplate("already-installed")
+	_, err := s.resolveInstallTemplate(installAppRequest{Template: &tmpl})
+	if err != errAppIDAlreadyInstalled {
+		t.Errorf("got err %v, want errAppIDAlreadyInstalled", err)
+	}
+}
+
+func TestResolveInstallTemplate_DifferentCustomIDsDoNotCollide(t *testing.T) {
+	s := newTestServer(t)
+
+	if err := s.store.Update(func(st *state.State) error {
+		st.InstalledApps = append(st.InstalledApps, state.InstalledApp{
+			Template: minimalTemplate("app-one"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("seeding installed app: %v", err)
+	}
+
+	tmpl := minimalTemplate("app-two")
+	got, err := s.resolveInstallTemplate(installAppRequest{Template: &tmpl})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ID != "app-two" {
+		t.Errorf("got template id %q, want %q", got.ID, "app-two")
+	}
+}

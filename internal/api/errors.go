@@ -30,6 +30,11 @@ var (
 
 	errBackupJobNotFound = errors.New("no backup job with that id")
 
+	// Phase 9.1：自訂 App 安裝(不透過內建目錄範本)共用的 sentinel 錯誤。
+	errAppInstallNeedsExactlyOne = errors.New("provide exactly one of templateId or template")
+	errAppIDConflictsWithCatalog = errors.New("this id is already used by a built-in catalog template")
+	errAppIDAlreadyInstalled     = errors.New("an app with this id is already installed")
+
 	// Phase 9：登入節流、panic 復原共用的 sentinel 錯誤。
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")
 	errInternalServerError  = errors.New("internal server error")
