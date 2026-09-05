@@ -23,42 +23,107 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bng147/gonas/internal/cron"
 )
 
-// Schedule 決定一個備份工作多久執行一次、幾點開始 —— 跟
-// internal/storage.ParitySchedule 是同一種「不是完整 cron 語法,只支援
-// 每隔 N 小時、在某個時刻執行」的簡化排程,理由也一樣:完整 cron 語法
-// 需要第三方套件。備份工作用「小時」而不是 storage 那邊的 time.Duration
-// 當單位,是因為 Duration 序列化成 JSON 是奈秒數的整數,對 Web UI 表單
-// 使用者來說完全不是一個直覺的輸入欄位,直接用「每幾小時」這種整數
-// 反而更貼近實際使用情境(例如「每 24 小時」「每 168 小時(一週)」)。
+// ScheduleKind 決定 Schedule 用哪一種方式決定「多久跑一次」。刻意用字串
+// 常數而不是自訂型別+iota,是因為 Schedule 直接序列化進 state.json,字串
+// 常數對「舊 state.json 檔案裡完全沒有 kind 欄位」這件事最友善 ——
+// JSON 反序列化時空字串會被 EffectiveKind() 當成 ScheduleKindInterval,
+// 不需要額外寫任何遷移程式碼,舊資料原封不動繼續運作。
+const (
+	// ScheduleKindInterval 是原本(Phase 1 就有)的「每隔 N 小時、在某個
+	// 時刻開始」簡化排程,也是 Kind 欄位為空字串時的預設行為。
+	ScheduleKindInterval = "interval"
+	// ScheduleKindCron 是 Phase 15 新增的標準 5 欄位 cron 語法排程,見
+	// internal/cron 套件。
+	ScheduleKindCron = "cron"
+)
+
+// Schedule 決定一個備份工作多久執行一次、幾點開始。歷史上這裡只有
+// 「每隔 N 小時、在某個時刻執行」的簡化排程 —— 跟
+// internal/storage.ParitySchedule 是同一種簡化排程,理由也一樣:完整
+// cron 語法當初需要第三方套件,而這個開發沙盒的網路白名單擋掉了 Go
+// module proxy。internal/cron 套件(見該套件文件)後來补上了一個零
+// 依賴、純標準函式庫的 cron 剖析器/排程計算,所以這裡改成「新增」而不是
+// 「取代」:Kind 欄位額外選擇 "cron" 時改用 CronExpr,Kind 維持空字串或
+// "interval" 時完全照舊,既有的 EveryHours/HourOfDay/MinuteOfHour 三個
+// 欄位、既有的 state.json 檔案不需要任何遷移程式碼就能繼續動作 ——
+// 這比「把舊排程有損地轉換成 cron 表達式」安全,因為 EveryHours 不是
+// 24 的因數時(例如「每 5 小時」)根本沒有對應的標準 cron 寫法可以精確
+// 表達同一件事。
 type Schedule struct {
-	EveryHours   int `json:"everyHours"`
-	HourOfDay    int `json:"hourOfDay"`
-	MinuteOfHour int `json:"minuteOfHour"`
+	Kind         string `json:"kind,omitempty"`
+	EveryHours   int    `json:"everyHours"`
+	HourOfDay    int    `json:"hourOfDay"`
+	MinuteOfHour int    `json:"minuteOfHour"`
+	CronExpr     string `json:"cronExpr,omitempty"`
 }
 
-// Validate 檢查排程欄位是否落在合理範圍。
+// EffectiveKind 回傳這份排程實際生效的種類,把「Kind 欄位是空字串」
+// (所有 Phase 15 之前建立的 Job、或是 Web UI 表單忘記帶欄位)當成
+// ScheduleKindInterval,而不是當成一種要另外處理的錯誤狀態。
+func (s Schedule) EffectiveKind() string {
+	if s.Kind == "" {
+		return ScheduleKindInterval
+	}
+	return s.Kind
+}
+
+// Validate 檢查排程欄位是否落在合理範圍,依 EffectiveKind() 分流:
+// interval 種類檢查原本三個欄位,cron 種類改成用 internal/cron.Parse
+// 驗證 CronExpr 語法是否合法(順便也就此擋掉之後 Scheduler 執行期間
+// 才發現語法錯誤的可能)。
 func (s Schedule) Validate() error {
-	if s.EveryHours <= 0 {
-		return fmt.Errorf("everyHours must be positive, got %d", s.EveryHours)
+	switch s.EffectiveKind() {
+	case ScheduleKindCron:
+		if strings.TrimSpace(s.CronExpr) == "" {
+			return fmt.Errorf("cronExpr is required when schedule kind is %q", ScheduleKindCron)
+		}
+		if _, err := cron.Parse(s.CronExpr); err != nil {
+			return fmt.Errorf("invalid cron expression: %w", err)
+		}
+		return nil
+	case ScheduleKindInterval:
+		if s.EveryHours <= 0 {
+			return fmt.Errorf("everyHours must be positive, got %d", s.EveryHours)
+		}
+		if s.HourOfDay < 0 || s.HourOfDay > 23 {
+			return fmt.Errorf("hourOfDay must be between 0 and 23, got %d", s.HourOfDay)
+		}
+		if s.MinuteOfHour < 0 || s.MinuteOfHour > 59 {
+			return fmt.Errorf("minuteOfHour must be between 0 and 59, got %d", s.MinuteOfHour)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown schedule kind %q, expected %q or %q", s.Kind, ScheduleKindInterval, ScheduleKindCron)
 	}
-	if s.HourOfDay < 0 || s.HourOfDay > 23 {
-		return fmt.Errorf("hourOfDay must be between 0 and 23, got %d", s.HourOfDay)
-	}
-	if s.MinuteOfHour < 0 || s.MinuteOfHour > 59 {
-		return fmt.Errorf("minuteOfHour must be between 0 and 59, got %d", s.MinuteOfHour)
-	}
-	return nil
 }
 
 // Interval 把 EveryHours 轉成 time.Duration,給 Scheduler 內部使用。
+// 只有 interval 種類的排程會呼叫這個方法。
 func (s Schedule) Interval() time.Duration {
 	return time.Duration(s.EveryHours) * time.Hour
 }
 
+// NextCronTime 剖析 CronExpr 並算出嚴格晚於 after 的下一次執行時間。
+// 只有 cron 種類的排程會呼叫這個方法;Validate() 已經確保 CronExpr
+// 語法合法,這裡的剖析錯誤理論上不會發生,但仍然把錯誤原樣往上傳,不
+// 用 panic —— 呼叫端(Scheduler)可以決定要記 log 還是中止排程。
+func (s Schedule) NextCronTime(after time.Time) (time.Time, error) {
+	sched, err := cron.Parse(s.CronExpr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return sched.Next(after)
+}
+
 // Describe 回傳人類可讀的排程描述,給 API/Web UI 顯示用。
 func (s Schedule) Describe() string {
+	if s.EffectiveKind() == ScheduleKindCron {
+		return fmt.Sprintf("Cron 排程:%s", s.CronExpr)
+	}
 	return fmt.Sprintf("每 %d 小時,從 %02d:%02d 開始", s.EveryHours, s.HourOfDay, s.MinuteOfHour)
 }
 

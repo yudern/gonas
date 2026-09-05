@@ -1973,6 +1973,9 @@ function pad2(n) {
 }
 
 function describeSchedule(sched) {
+  if (sched.kind === "cron") {
+    return t("backup.scheduleDescCron", { expr: sched.cronExpr });
+  }
   return t("backup.scheduleDesc", { hours: sched.everyHours, h: pad2(sched.hourOfDay), m: pad2(sched.minuteOfHour) });
 }
 
@@ -1999,12 +2002,24 @@ async function renderBackup(el) {
         <div class="field"><label>${esc(t("backup.sourcePath"))}</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
         <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required></div>
         <div class="field"><label>${esc(t("backup.retention"))}</label><input type="number" name="retentionCount" value="7" min="1" required></div>
-        <div class="field"><label>${esc(t("backup.everyHours"))}</label><input type="number" name="everyHours" value="24" min="1" required></div>
-        <div class="field"><label>${esc(t("backup.startTime"))}</label>
-          <div style="display:flex;gap:8px">
-            <input type="number" name="hourOfDay" value="3" min="0" max="23" style="width:90px" required>
-            <input type="number" name="minuteOfHour" value="0" min="0" max="59" style="width:90px" required>
+        <div class="field"><label>${esc(t("backup.scheduleKind"))}</label>
+          <select name="scheduleKind" id="backup-schedule-kind">
+            <option value="interval">${esc(t("backup.scheduleKindInterval"))}</option>
+            <option value="cron">${esc(t("backup.scheduleKindCron"))}</option>
+          </select>
+        </div>
+        <div id="backup-interval-fields">
+          <div class="field"><label>${esc(t("backup.everyHours"))}</label><input type="number" name="everyHours" value="24" min="1" required></div>
+          <div class="field"><label>${esc(t("backup.startTime"))}</label>
+            <div style="display:flex;gap:8px">
+              <input type="number" name="hourOfDay" value="3" min="0" max="23" style="width:90px" required>
+              <input type="number" name="minuteOfHour" value="0" min="0" max="59" style="width:90px" required>
+            </div>
           </div>
+        </div>
+        <div id="backup-cron-fields" hidden>
+          <div class="field"><label>${esc(t("backup.cronExpr"))}</label><input type="text" name="cronExpr" placeholder="${esc(t("backup.cronExprPlaceholder"))}"></div>
+          <p class="hint">${esc(t("backup.cronHint"))}</p>
         </div>
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("backup.scheduleEnabled"))}</label></div>
         <div class="btn-row"><button type="submit">${esc(t("backup.addJob"))}</button></div>
@@ -2053,22 +2068,58 @@ function renderBackupJobRow(j) {
   `;
 }
 
+// attachBackupScheduleKindToggle 讓「排程方式」下拉選單切換時,同步
+// 顯示/隱藏對應的欄位群組,並且把隱藏群組裡的 required 輸入框拿掉
+// required(反過來顯示時補回去) —— 不這樣做的話,使用者選了「Cron
+// 表達式」之後,瀏覽器內建的表單驗證還是會因為看不見的
+// everyHours/hourOfDay/minuteOfHour 欄位「必填但空白」擋下送出,卻沒有
+// 任何看得到的欄位可以填。
+function attachBackupScheduleKindToggle(el) {
+  const select = el.querySelector("#backup-schedule-kind");
+  const intervalFields = el.querySelector("#backup-interval-fields");
+  const cronFields = el.querySelector("#backup-cron-fields");
+
+  function sync() {
+    const isCron = select.value === "cron";
+    intervalFields.hidden = isCron;
+    cronFields.hidden = !isCron;
+    intervalFields.querySelectorAll("input").forEach((input) => {
+      input.required = !isCron;
+      input.disabled = isCron;
+    });
+    const cronInput = cronFields.querySelector('input[name="cronExpr"]');
+    cronInput.required = isCron;
+    cronInput.disabled = !isCron;
+  }
+
+  select.addEventListener("change", sync);
+  sync();
+}
+
 function attachBackupHandlers(el) {
+  attachBackupScheduleKindToggle(el);
+
   el.querySelector("#backup-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
     const box = el.querySelector("#backup-msg");
+    const kind = f.get("scheduleKind") || "interval";
+    const schedule =
+      kind === "cron"
+        ? { kind: "cron", cronExpr: (f.get("cronExpr") || "").trim() }
+        : {
+            kind: "interval",
+            everyHours: Number(f.get("everyHours")),
+            hourOfDay: Number(f.get("hourOfDay")),
+            minuteOfHour: Number(f.get("minuteOfHour")),
+          };
     const job = {
       name: f.get("name").trim(),
       sourcePath: f.get("sourcePath").trim(),
       destPath: f.get("destPath").trim(),
       retentionCount: Number(f.get("retentionCount")),
       enabled: f.get("enabled") === "on",
-      schedule: {
-        everyHours: Number(f.get("everyHours")),
-        hourOfDay: Number(f.get("hourOfDay")),
-        minuteOfHour: Number(f.get("minuteOfHour")),
-      },
+      schedule,
     };
     try {
       await api.createBackupJob(job);

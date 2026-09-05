@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 14 完成 — 告警的 Email 通知管道
+## 目前狀態:Phase 15 完成 — 備份工作的標準 cron 語法排程
 
 **Phase 0(專案骨架)**
 
@@ -1011,6 +1011,90 @@ Discord、只想「陣列出事時收到一封信」的使用者來說是明顯�
   對著真正的郵件服務商(尤其是需要 STARTTLS 才能完成 AUTH 的路徑)
   送信還沒有真的驗證過,列在 `docs/REAL_HARDWARE_TESTING.md` 提醒
   真機上補測。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
+
+**Phase 15(備份工作的標準 cron 語法排程)—— 按之前列出的優先級清單
+接續處理的下一項**
+
+`internal/backup.Schedule` 從一開始就只支援「每隔 N 小時、在某個時刻
+開始」這種簡化排程(`internal/storage.ParitySchedule` 也是同一種
+設計),程式碼裡明白寫著理由:完整 cron 語法通常要引入第三方套件
+(例如 `github.com/robfig/cron`),而這個開發沙盒的網路白名單擋掉了
+Go module proxy,裝不了。這次補上一個完全自己寫、零第三方依賴、純
+標準函式庫的 cron 剖析器,讓備份工作除了原本的簡化排程外,也能選用
+使用者熟悉的標準 5 欄位 cron 語法(`分 時 日 月 星期`)。
+
+- **`internal/cron`(新套件)**:`Parse(expr string) (Schedule, error)`
+  剖析標準 5 欄位語法,支援 `*`、單一數字、`A-B` 範圍、`*/N` 與
+  `A-B/N` 間隔、`A,B,C` 清單,以及這些語法的組合(例如
+  `1-5,10-20/2`)。刻意不支援 `JAN`、`MON` 這類英文縮寫名稱,讓剖析器
+  維持精簡——這是市面上多數簡化版 cron 剖析器共同的取捨,使用者輸入
+  數字一樣能完整表達所有排程需求。`Schedule.Matches(t time.Time) bool`
+  實作了 vixie-cron 那個常常讓人意外的「日期/星期 OR 邏輯」:如果
+  日期跟星期兩個欄位都不是萬用字元 `*`(都「有限制」),只要符合其中
+  一個就算命中,而不是兩個都要符合——例如 `0 0 1 * 1` 的意思是「每月
+  1 號，或每個星期一」,不是「每月 1 號剛好又是星期一」。
+  `Schedule.Next(after time.Time) (time.Time, error)` 從 `after` 之後
+  逐分鐘往前搜尋下一個符合的時刻,搜尋範圍上限抓大約 4 年,讓
+  `0 0 30 2 *`(2 月 30 號,永遠不存在的日期)這種不可能匹配的表達式
+  會確實回傳錯誤,而不是無限迴圈卡住。測試涵蓋間隔/範圍/清單語法、
+  日期/星期 OR 邏輯、跨月/跨年、閏年 2/29、以及上述的不可能日期。
+- **`internal/backup.Schedule` 用「新增」而不是「取代」的方式擴充**:
+  新增 `Kind string` 欄位(`"interval"` 或 `"cron"`)跟
+  `CronExpr string` 欄位。空字串 `Kind` 一律當成 `"interval"`
+  (`EffectiveKind()` 方法做這個轉換)——這代表所有 Phase 15 之前寫入
+  的 `state.json`(完全沒有 `kind` 欄位)不需要任何遷移程式碼就能
+  繼續正常運作,原本的 `EveryHours`/`HourOfDay`/`MinuteOfHour` 三個
+  欄位、`Validate()`/`Interval()`/`Describe()` 的 interval 種類行為
+  完全照舊。特意選擇「新增欄位」而不是「把舊排程有損地轉換成 cron
+  表達式」,是因為 `EveryHours` 不是 24 的因數時(例如「每 5 小時」)
+  根本沒有對應的標準 cron 寫法能精確表達同一件事,轉換只會是有損的。
+- **`internal/backup.JobScheduler` 依排程種類分流**:`Start()`
+  依 `sched.EffectiveKind()` 選擇路徑——interval 種類完全沿用原本的
+  `runLoop`(固定 `time.Duration` 間隔,行為/既有測試不變);cron 種類
+  改用新的 `runCronLoop`,每一次執行前(包括第一次)都重新呼叫
+  `cron.Schedule.Next(time.Now())` 算出下一個真正該跑的日曆時刻,而
+  不是像固定間隔那樣硬加一段 Duration——這是 cron 語意本身要求的,
+  例如「每月 1 號」這種排程,兩次執行之間的秒數每個月都不一樣。
+  `runCronLoop` 的「下一次時刻怎麼算」抽成一個可注入的函式參數,讓
+  單元測試能餵一個「每 1 毫秒後」的假函式驗證重複執行/`Stop()`
+  行為,不用真的等到下一個日曆分鐘。
+- **API 與前端**:`internal/api` 完全沒有新增/修改任何 handler 邏輯
+  ——`backup.Schedule` 本身的 JSON 標籤跟 `Validate()` 擴充完,既有的
+  `handleBackupJobsCreate` 就「自動」支援了新欄位,這個假設有專門的
+  API 層測試(`internal/api/backup_handlers_test.go`)驗證。前端
+  Backup 頁面的新增工作表單新增一個「排程方式」下拉選單,切換時用
+  JavaScript 顯示/隱藏對應的欄位群組,並同步調整 `required`/
+  `disabled` 屬性(不然瀏覽器內建的表單驗證會因為看不見的必填欄位
+  擋下送出)。工作列表裡的排程描述文字也會依種類顯示「每 N 小時,從
+  HH:MM 開始」或「Cron 排程:`<表達式>`」,三種語言都已翻譯。
+- **真實驗證**:`internal/cron` 有 18 個單元測試涵蓋前述所有語法/
+  邊界案例。`internal/backup` 新增/更新的測試涵蓋 cron 種類的
+  `Validate()`(合法/不合法表達式、未知 Kind、空 CronExpr)、
+  `NextCronTime()`、`Describe()`,以及 `JobScheduler` 對 cron 種類的
+  分流/重複執行/`Stop()`/`nextFn` 回傳錯誤時的防禦性處理。API 層
+  額外驗證了「透過 HTTP 建立 cron 種類的備份工作」「不合法的 cron
+  表達式在寫進 `state.json` 之前就被 400 擋下」「interval 種類的
+  既有行為沒有被動到」「啟用中的 cron 工作真的會啟動排程、也能被
+  `stopBackupScheduler` 乾淨停掉」。除了單元測試,也對著一個真正在跑
+  的 `gonasd`(用真正的 `rsync`,這個沙盒剛好有裝)建立一個
+  `* * * * *`(每分鐘)的 cron 備份工作,實際輪詢確認它在
+  `09:30:00`、`09:31:00` 這兩個整分鐘各觸發了一次(`lastRun` 正確
+  推進),證明排程真的照日曆時刻執行,不是隨便一個固定間隔;也驗證了
+  不合法表達式建立時被 400 擋下、刪除工作後排程確實停止、interval
+  種類的既有建立流程沒有回歸。額外用 Playwright 在三種語言下驗證
+  Backup 頁面「排程方式」下拉選單切換欄位顯示、cron 種類工作的
+  建立與列表顯示,文字正確翻譯,沒有殘留錯誤語言或非預期的 console
+  錯誤。**明確記錄的限制**:這次建立的 rsync 測試工作本身因為這台
+  沙盒的 rsync 版本不支援 `-aAX` 參數要求的 ACL(`rsync: ACLs are
+  not supported on this client`)而執行失敗——這是 Phase 9 就存在、
+  跟 cron 排程無關的既有沙盒限制,不影響本階段驗證的重點(排程本身
+  有沒有在正確的時刻觸發、`LastRun` 有沒有正確推進);
+  `internal/storage.ParitySchedule`(SnapRAID 校驗排程)刻意維持
+  不動、留在範圍外——grep 確認它目前完全沒有被 `internal/api` 或
+  `internal/state` 引用,是既有的死碼,之後真的要接上真機測試時,
+  是重複使用這個新 `internal/cron` 套件的好機會,而不是再造一個
+  跟 `backup.Schedule`平行的第二套 cron 支援。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
 
 ## 開發
