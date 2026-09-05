@@ -1,0 +1,953 @@
+// i18n.js —— GoNAS Web UI 的多語系字典跟輔助函式。
+//
+// 為什麼不用第三方 i18n 框架:跟這個專案其他前端程式碼一樣,刻意不引入
+// 任何建置工具鏈(見 api.js 開頭的說明),所以這裡是一個純標準 JS、
+// 瀏覽器打開就能動的最小實作——一個巢狀字典物件 + 一個 t(key, vars) 查表
+// 函式,足夠應付這支介面的需求,不需要更複雜的東西。
+//
+// 為什麼是「繁體中文/簡體中文/英文」三選一,而不是簡單地把繁體字轉成
+// 簡體字:使用者明確要求「要符合各自的語言使用環境」——同一個概念在
+// 台灣/香港常用的繁體中文技術用語,跟中國大陸常用的簡體中文技術用語,
+// 很多時候用字並不一樣(不只是字形從繁體換成簡體而已),例如「檔案」
+// 對「文件」、「硬碟」對「硬盤」、「使用者」對「用戶」、「設定」對
+// 「設置」、「記憶體」對「內存」。這裡的簡體中文字典是針對這些用詞
+// 差異個別調整過的,不是拿繁體字典去做字元轉換產生的。
+//
+// 語言選擇邏輯(detectLocale):優先用使用者透過右上角選單手動選過、
+// 存在瀏覽器 localStorage 裡的選擇;沒有的話,用瀏覽器回報的語言
+// (navigator.language)猜一個最合理的預設值——中文使用者裡,標示
+// 「台灣/香港/澳門」或單純「zh」的當作繁體中文,標示「中國大陸/新加坡」
+// 或其他中文變體的當作簡體中文;非中文一律預設英文。這只是「猜一個
+// 起始值」,使用者隨時可以用選單換成想要的語言,換過之後就會一直記住
+// 這個選擇,不會每次重新整理又跳回自動偵測的結果。
+
+export const LOCALES = ["zh-Hant", "zh-Hans", "en"];
+export const LOCALE_NAMES = { "zh-Hant": "繁體中文", "zh-Hans": "简体中文", "en": "English" };
+const STORAGE_KEY = "gonas.locale";
+const FALLBACK_LOCALE = "zh-Hant";
+
+const dict = {
+  "zh-Hant": {
+    nav: {
+      dashboard: "儀表板", storage: "儲存", files: "檔案", apps: "應用程式",
+      shares: "共享", users: "使用者", monitor: "監控", backup: "備份", security: "安全",
+      logout: "登出",
+    },
+    common: {
+      loading: "載入中…", loadFailed: "載入失敗:{msg}",
+      save: "儲存", saved: "已儲存。", cancel: "取消", delete: "刪除", rename: "重新命名",
+      close: "關閉", download: "下載", search: "搜尋", confirm: "確定", unknown: "未知",
+      networkError: "無法連線到 gonasd:{msg}",
+    },
+    auth: {
+      loginTitle: "登入",
+      loginSubtitle: "請輸入管理者帳號密碼。已啟用兩步驟驗證的話,一併填入目前的驗證碼。",
+      username: "使用者名稱", password: "密碼", totpCode: "兩步驟驗證碼(如已啟用)",
+      loginBtn: "登入",
+      setupTitle: "初始設定",
+      setupSubtitle: "第一次執行 GoNAS,請先建立唯一的管理者帳號。",
+      passwordMin: "密碼(至少 8 個字元)", confirmPassword: "確認密碼",
+      setupBtn: "建立管理者帳號",
+      passwordMismatch: "兩次輸入的密碼不一致。",
+    },
+    dashboard: {
+      title: "儀表板",
+      subtitle: "GoNAS {version} · {os}/{arch} · 已執行 {uptime}",
+      systemStatus: "系統狀態", running: "運作中",
+      dockerAvailable: "可用", dockerUnavailable: "不可用",
+      storageArray: "儲存陣列", disksDetected: "偵測到的硬碟",
+      dockerWarn: "Docker 無法連線:{reason}。安裝應用程式前需要先確認 Docker 已安裝並啟動。",
+      unknownReason: "未知原因",
+      quickLinks: "快速連結",
+      quickLinksBody: "前往「<a href=\"#/storage\">儲存</a>」設定並啟動陣列、「<a href=\"#/apps\">應用程式</a>」安裝服務、「<a href=\"#/shares\">共享</a>」設定 SMB/NFS、「<a href=\"#/users\">使用者</a>」管理帳號,或「<a href=\"#/monitor\">監控</a>」查看資源使用率與設定告警。",
+      uptimeSeconds: "{n} 秒", uptimeMinutes: "{n} 分鐘", uptimeHours: "{h} 小時 {m} 分鐘",
+    },
+    array: {
+      unconfigured: "尚未設定", stopped: "已停止", starting: "啟動中",
+      started: "運作中", stopping: "停止中", failed: "失敗", unknown: "未知",
+    },
+    storage: {
+      title: "儲存",
+      subtitle: "陣列採 SnapRAID + mergerFS:每顆資料碟各自獨立掛載、資料不打散,由 GoNAS 統一聯合掛載並提供同位校驗。",
+      currentStatus: "目前陣列狀態", mountPoint: "掛載點",
+      startArray: "啟動陣列", stopArray: "停止陣列",
+      arrayStarted: "陣列已啟動", arrayStopped: "陣列已停止",
+      disksDetected: "偵測到的硬碟",
+      colDevice: "裝置", colModel: "型號", colCapacity: "容量", colType: "類型", colMountPoint: "掛載點",
+      noDisksDetected: "沒有偵測到硬碟",
+      poolSetup: "設定儲存池",
+      poolSetupHint: "資料碟/同位碟請填已經格式化並掛載好的路徑(例如 <code>/mnt/disk1</code>),每行一個。GoNAS 目前不會幫你格式化硬碟 —— 這是刻意的:自動格式化是會清空資料的危險操作,交給使用者在系統層面自己確認過再做。",
+      poolName: "池名稱", poolMountPoint: "聯合掛載點",
+      dataDisks: "資料碟路徑(每行一個)", parityDisks: "同位碟路徑(每行一個)",
+      contentFiles: "SnapRAID 索引檔位置(每行一個,建議至少 2 份)",
+      savePool: "儲存設定", poolSaved: "儲存池設定已儲存。",
+    },
+    files: {
+      title: "檔案",
+      subtitle: "直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，不需要另外掛載 SMB/NFS 或安裝用戶端軟體。",
+      unavailable: "檔案管理員目前無法使用:{reason}",
+      unavailableHint: "請先到「儲存」頁面設定陣列的儲存池，並確認陣列已經啟動。",
+      colName: "名稱", colSize: "大小", colModified: "修改時間",
+      upload: "上傳檔案", newFolder: "新增資料夾",
+      moveSelected: "搬移選取項目", copySelected: "複製選取項目",
+      downloadSelected: "下載選取項目", deleteSelected: "刪除選取項目",
+      searchPlaceholder: "搜尋目前目錄底下的檔名…", clearSearch: "清除搜尋",
+      root: "根目錄",
+      emptyFolder: "這個資料夾是空的。", noSearchResults: "沒有找到符合的檔案。",
+      tooManyResults: "結果太多，只顯示前面一部分——請縮小搜尋範圍。",
+      newFolderPrompt: "新資料夾名稱:",
+      selectItemsFirst: "請先勾選要處理的項目。",
+      selectItemsToDownload: "請先勾選要下載的項目。",
+      selectItemsToDelete: "請先勾選要刪除的項目。",
+      moveDestPrompt: "要搬移到哪個資料夾?(相對於根目錄的路徑，留空代表根目錄)",
+      copyDestPrompt: "要複製到哪個資料夾?(相對於根目錄的路徑，留空代表根目錄)",
+      moveDone: "搬移完成。", copyDone: "複製完成。",
+      deleteConfirm: "確定要刪除選取的 {n} 個項目嗎?會先進回收桶，可以之後復原。",
+      deleteDone: "已刪除，可以在下面的回收桶復原。",
+      uploading: "上傳中… {pct}%", uploadDone: "上傳完成。", uploadFailed: "上傳失敗:{msg}",
+      uploadNetworkError: "網路錯誤，上傳失敗",
+      renamePrompt: "新名稱:",
+      close: "關閉", saveText: "儲存", saved: "已儲存。",
+      downloadOriginal: "下載原始檔案",
+      previewUnavailable: "這個檔案沒辦法在瀏覽器裡預覽({msg})，請直接下載。",
+      downloadFile: "下載檔案",
+      trash: "回收桶",
+      trashHint: "刪除的檔案會先進回收桶，可以復原；「永久刪除」或清空回收桶之後就真的沒辦法復原了。",
+      trashEmpty: "回收桶是空的。",
+      emptyTrash: "清空回收桶",
+      emptyTrashConfirm: "確定要清空回收桶嗎?裡面的東西會被永久刪除，沒辦法復原。",
+      restore: "復原", purge: "永久刪除",
+      purgeConfirm: "確定要永久刪除這個項目嗎?沒辦法復原。",
+      trashOriginalPath: "原始位置:{path} · 刪除於 {time}",
+    },
+    apps: {
+      title: "應用程式",
+      subtitle: "用 Docker 容器安裝與管理服務。多容器的 App 會自動建立專屬的共用網路。",
+      dockerWarn: "Docker 無法連線,無法安裝或管理應用程式:{reason}",
+      installed: "已安裝({n})",
+      noneInstalled: "還沒有安裝任何應用程式。",
+      uninstall: "解除安裝",
+      uninstallConfirm: "確定要解除安裝「{name}」嗎?",
+      viewLogs: "查看 Log", execCmd: "執行指令",
+      catalog: "商店目錄",
+      customInstall: "自訂安裝",
+      customInstallHint: "不透過上面的商店目錄,直接指定任意 image 安裝一個容器(對應 Docker Hub 或其他 registry 上的任何映像檔,或這台機器上已經存在的本機映像檔)。",
+      appId: "App ID(英數字/連字號,用於容器與網路命名,安裝後不能改)",
+      name: "名稱", description: "說明(選填)", image: "Image",
+      ports: "埠對應(選填,每行一個,格式 host:container,可加 /udp,例如 8080:80)",
+      volumes: "掛載路徑(選填,每行一個,格式 host路徑:容器路徑,可加 :ro 唯讀)",
+      env: "環境變數(選填,每行一個,格式 KEY=VALUE)",
+      install: "安裝", confirmInstall: "確認安裝", installSuccess: "安裝成功!",
+      required: " (必填)",
+      volumeLabel: "{svc} · 掛載路徑(對應容器內 {path})",
+      logsTitle: "Log(最後 200 行)",
+      logsEmpty: "(這個容器目前沒有任何 log 輸出)",
+      logsFailed: "讀取 log 失敗:{msg}",
+      execTitle: "在容器裡執行一次指令",
+      execHint: "等同 <code>docker exec</code>,指令跑完才會顯示結果,不是持續連線的終端機。用空白分隔參數,例如 <code>cat /etc/os-release</code>。",
+      execRun: "執行", execRunning: "執行中…",
+      execResult: "結束碼:{code}\n\n{output}",
+      execEmptyOutput: "(沒有任何輸出)",
+      execFailed: "執行失敗:{msg}",
+      portFormatError: "埠對應格式錯誤:「{line}」,應為 host:container 或 host:container/udp",
+      volumeFormatError: "掛載路徑格式錯誤:「{line}」,應為 host路徑:容器路徑 或 host路徑:容器路徑:ro",
+      volumeFormatErrorRO: "掛載路徑格式錯誤:「{line}」,第三段只接受 ro",
+      envFormatError: "環境變數格式錯誤:「{line}」,應為 KEY=VALUE",
+    },
+    shares: {
+      title: "共享",
+      subtitle: "SMB(Windows/macOS)與 NFS(Linux)檔案共享。",
+      smbShares: "SMB 共享",
+      colName: "名稱", colPath: "路徑", colReadOnly: "唯讀", colGuest: "允許訪客",
+      yes: "是", no: "否",
+      noShares: "還沒有設定共享",
+      name: "名稱", path: "路徑", comment: "備註",
+      readOnly: "唯讀", guestOk: "允許訪客(匿名)存取",
+      validUsers: "允許的使用者(逗號分隔,留空代表沿用全域設定)",
+      addShare: "新增共享",
+      shareAdded: "共享已新增並套用。", shareAddedWarn: "共享已存起來,但套用失敗:{warn}",
+      nfsExports: "NFS 匯出",
+      colClientRules: "用戶端規則", noExports: "還沒有設定 NFS 匯出",
+      cidr: "允許的網段(CIDR)", options: "選項(逗號分隔)",
+      addExport: "新增匯出",
+      exportAdded: "匯出已新增並套用。", exportAddedWarn: "匯出已存起來,但套用失敗:{warn}",
+    },
+    users: {
+      title: "使用者",
+      subtitle: "帳號同時是系統帳號與 Samba 帳號,沒有互動式登入殼層 —— 純粹是檔案共享的身份。",
+      accounts: "帳號({n})",
+      colUsername: "使用者名稱", colComment: "備註",
+      noUsers: "還沒有建立使用者",
+      username: "使用者名稱", comment: "備註", password: "密碼",
+      createUser: "建立使用者",
+      deleteConfirm: "確定要刪除使用者「{name}」嗎?",
+      userCreated: "使用者已建立。",
+      userCreatedWarn: "使用者已建立,但 {warn}",
+    },
+    monitor: {
+      title: "監控",
+      subtitle: "每 {n} 秒在背景取樣一次系統資源;告警規則觸發或解除時,會寫進 daemon 的 log,也會送到下面設定的通知管道。",
+      cpuUsage: "CPU 使用率", memUsage: "記憶體使用率", diskUsage: "磁碟使用率",
+      uptime: "執行時間",
+      recentTrend: "最近趨勢",
+      notEnoughData: "取樣資料還不夠畫圖,daemon 剛啟動時需要等一小段時間累積。",
+      legendCpu: "CPU", legendMem: "記憶體", legendDisk: "磁碟{path}",
+      alertRules: "告警規則({n})", noRules: "還沒有設定告警規則。",
+      ruleName: "名稱", ruleNamePlaceholder: "CPU 過載",
+      metric: "指標", comparator: "比較方式", threshold: "門檻值",
+      enabled: "啟用", addRule: "新增規則", ruleAdded: "告警規則已新增。",
+      notifiers: "通知管道({n})",
+      notifiersHint: "告警一律會寫進 daemon 的 log;下面可以額外加 webhook 端點,規則觸發或解除時會 POST 一份 JSON 過去。",
+      noNotifiers: "還沒有設定額外的通知管道。",
+      notifierName: "名稱", webhookUrl: "Webhook URL",
+      addNotifier: "新增通知管道", notifierAdded: "通知管道已新增。",
+      metricCpuPercent: "CPU 使用率(%)", metricMemPercent: "記憶體使用率(%)",
+      metricDiskPercent: "磁碟使用率(%)", metricArrayFailed: "陣列狀態變成 failed",
+      metricSmartFailed: "任一顆碟 SMART 檢查沒過",
+      gt: "大於", gte: "大於等於", lt: "小於", lte: "小於等於",
+      statusDisabled: "已停用", statusFiring: "觸發中", statusMonitoring: "監控中",
+      notifierEnabled: "啟用", notifierDisabled: "停用",
+      deleteRuleConfirm: null,
+    },
+    security: {
+      title: "安全",
+      subtitle: "管理登入密碼、兩步驟驗證、Web 介面的 HTTPS,以及 WireGuard VPN 遠端連線。",
+      changePassword: "修改密碼",
+      changePasswordHint: "目前登入身分:<strong>{username}</strong>。修改成功後,其他裝置上已登入的 session 會全部失效。",
+      oldPassword: "目前密碼", newPassword: "新密碼(至少 8 個字元)", confirmNewPassword: "確認新密碼",
+      updatePassword: "更新密碼", passwordUpdated: "密碼已更新。",
+      newPasswordMismatch: "兩次輸入的新密碼不一致。",
+      totp: "兩步驟驗證(TOTP)", totpEnabledPill: "已啟用", totpDisabledPill: "未啟用",
+      totpCurrentPassword: "目前密碼(停用前需要重新確認)",
+      totpDisable: "停用兩步驟驗證", totpDisabled: "兩步驟驗證已停用。",
+      totpBeginSetup: "設定兩步驟驗證",
+      totpSetupHint: "用驗證器 App(Google Authenticator、Authy 等)手動輸入下面的密鑰,或直接貼上 Provisioning URI(部分 App 支援用文字加入帳號,GoNAS 沒有內建 QR code 產生器)。",
+      totpEnterCode: "輸入目前的驗證碼以完成設定",
+      totpEnable: "啟用兩步驟驗證", totpEnabled: "兩步驟驗證已啟用。",
+      https: "HTTPS", currentStatus: "目前狀態:", enabledLabel: "已啟用", disabledLabel: "未啟用",
+      certFile: "憑證檔案", enableHttps: "啟用 HTTPS",
+      certHosts: "憑證主機名稱/IP(每行一個,留空預設 localhost/127.0.0.1)",
+      certHostsHint: "自簽憑證,瀏覽器第一次連線會顯示不受信任的警告,需要手動選擇繼續/信任。",
+      saveHttps: "儲存 HTTPS 設定",
+      httpsSaved: "HTTPS 設定已儲存,請重新啟動 gonasd 讓設定生效。",
+      vpn: "WireGuard VPN",
+      vpnRunning: "介面運作中", vpnNotRunning: "介面未啟用",
+      vpnListenPort: "監聽埠", vpnAddress: "位址", vpnPublicKey: "公鑰",
+      vpnNotConfigured: "還沒有設定 WireGuard 介面。",
+      vpnAddressField: "介面位址(CIDR,每行一個)", vpnListenPortField: "監聽埠",
+      vpnUpdateIface: "更新介面設定", vpnCreateIface: "建立 WireGuard 介面",
+      vpnIfaceSaved: "介面設定已儲存。實際套用/停用連線請透過 SSH 手動執行 wg-quick,或等待之後版本補上一鍵套用。",
+      vpnClients: "用戶端({n})", vpnNoClients: "還沒有加入任何用戶端裝置。",
+      vpnDeviceName: "裝置名稱", vpnDeviceNamePlaceholder: "我的手機",
+      vpnAllowedIPs: "分配的位址(CIDR,通常是介面網段裡的一個 /32)",
+      vpnEndpoint: "GoNAS 對外位址(選填,寫進產生的用戶端設定檔)",
+      vpnAddClient: "新增用戶端並產生設定檔",
+      vpnClientAdded: "已新增用戶端「{name}」,下面是它的設定檔內容 —— 只會顯示這一次,請立刻複製或匯入用戶端裝置。",
+      vpnDeleteConfirm: "確定要刪除這個用戶端嗎?刪除後該裝置會立刻無法再連線,且無法復原。",
+    },
+    backup: {
+      title: "備份",
+      subtitle: "用 rsync 加硬連結輪替(跟 rsnapshot、Time Machine 是同一套技巧)把來源目錄備份到另一個位置,保留最近幾份快照;沒有變更的檔案在磁碟上只佔一份空間。需要主機上已安裝 <code>rsync</code>。",
+      jobs: "備份工作({n})", noJobs: "還沒有設定備份工作。",
+      jobName: "名稱", jobNamePlaceholder: "每日備份",
+      sourcePath: "來源路徑", destPath: "目的地路徑",
+      retention: "保留份數", everyHours: "執行間隔(小時)",
+      startTime: "起始時刻(小時:分鐘)", scheduleEnabled: "啟用排程",
+      addJob: "新增備份工作", jobAdded: "備份工作已新增。",
+      notRunYet: "尚未執行",
+      lastSuccess: "上次成功 · {time}", lastFailed: "上次失敗 · {time}",
+      unknownError: "未知錯誤",
+      jobEnabled: "已啟用", jobDisabled: "已停用",
+      scheduleDesc: "每 {hours} 小時,從 {h}:{m} 開始",
+      runNow: "立即執行", running: "執行中…",
+      snapshots: "快照", deleteJob: "刪除",
+      deleteJobConfirm: "確定要刪除這個備份工作嗎?已經備份好的快照不會被刪除,但排程會停止。",
+      noSnapshots: "還沒有任何成功的快照。",
+    },
+  },
+
+  "zh-Hans": {
+    nav: {
+      dashboard: "仪表盘", storage: "存储", files: "文件", apps: "应用",
+      shares: "共享", users: "用户", monitor: "监控", backup: "备份", security: "安全",
+      logout: "退出登录",
+    },
+    common: {
+      loading: "加载中…", loadFailed: "加载失败:{msg}",
+      save: "保存", saved: "已保存。", cancel: "取消", delete: "删除", rename: "重命名",
+      close: "关闭", download: "下载", search: "搜索", confirm: "确定", unknown: "未知",
+      networkError: "无法连接到 gonasd:{msg}",
+    },
+    auth: {
+      loginTitle: "登录",
+      loginSubtitle: "请输入管理员账号密码。已启用两步验证的话,请一并填入当前的验证码。",
+      username: "用户名", password: "密码", totpCode: "两步验证码(如已启用)",
+      loginBtn: "登录",
+      setupTitle: "初始设置",
+      setupSubtitle: "首次运行 GoNAS,请先创建唯一的管理员账号。",
+      passwordMin: "密码(至少 8 个字符)", confirmPassword: "确认密码",
+      setupBtn: "创建管理员账号",
+      passwordMismatch: "两次输入的密码不一致。",
+    },
+    dashboard: {
+      title: "仪表盘",
+      subtitle: "GoNAS {version} · {os}/{arch} · 已运行 {uptime}",
+      systemStatus: "系统状态", running: "运行中",
+      dockerAvailable: "可用", dockerUnavailable: "不可用",
+      storageArray: "存储阵列", disksDetected: "检测到的硬盘",
+      dockerWarn: "Docker 无法连接:{reason}。安装应用前需要先确认 Docker 已安装并启动。",
+      unknownReason: "未知原因",
+      quickLinks: "快速链接",
+      quickLinksBody: "前往「<a href=\"#/storage\">存储</a>」设置并启动阵列、「<a href=\"#/apps\">应用</a>」安装服务、「<a href=\"#/shares\">共享</a>」设置 SMB/NFS、「<a href=\"#/users\">用户</a>」管理账号,或「<a href=\"#/monitor\">监控</a>」查看资源使用率与设置告警。",
+      uptimeSeconds: "{n} 秒", uptimeMinutes: "{n} 分钟", uptimeHours: "{h} 小时 {m} 分钟",
+    },
+    array: {
+      unconfigured: "尚未设置", stopped: "已停止", starting: "启动中",
+      started: "运行中", stopping: "停止中", failed: "失败", unknown: "未知",
+    },
+    storage: {
+      title: "存储",
+      subtitle: "阵列采用 SnapRAID + mergerFS:每块数据盘各自独立挂载、数据不打散,由 GoNAS 统一联合挂载并提供校验保护。",
+      currentStatus: "当前阵列状态", mountPoint: "挂载点",
+      startArray: "启动阵列", stopArray: "停止阵列",
+      arrayStarted: "阵列已启动", arrayStopped: "阵列已停止",
+      disksDetected: "检测到的硬盘",
+      colDevice: "设备", colModel: "型号", colCapacity: "容量", colType: "类型", colMountPoint: "挂载点",
+      noDisksDetected: "没有检测到硬盘",
+      poolSetup: "设置存储池",
+      poolSetupHint: "数据盘/校验盘请填已经格式化并挂载好的路径(例如 <code>/mnt/disk1</code>),每行一个。GoNAS 目前不会帮你格式化硬盘 —— 这是特意的:自动格式化是会清空数据的危险操作,交给用户在系统层面自己确认过再做。",
+      poolName: "存储池名称", poolMountPoint: "联合挂载点",
+      dataDisks: "数据盘路径(每行一个)", parityDisks: "校验盘路径(每行一个)",
+      contentFiles: "SnapRAID 索引文件位置(每行一个,建议至少 2 份)",
+      savePool: "保存设置", poolSaved: "存储池设置已保存。",
+    },
+    files: {
+      title: "文件",
+      subtitle: "直接在浏览器里浏览、上传、下载、整理阵列里的文件,不需要另外挂载 SMB/NFS 或安装客户端软件。",
+      unavailable: "文件管理器目前无法使用:{reason}",
+      unavailableHint: "请先到「存储」页面设置阵列的存储池,并确认阵列已经启动。",
+      colName: "名称", colSize: "大小", colModified: "修改时间",
+      upload: "上传文件", newFolder: "新建文件夹",
+      moveSelected: "移动选中项", copySelected: "复制选中项",
+      downloadSelected: "下载选中项", deleteSelected: "删除选中项",
+      searchPlaceholder: "搜索当前目录下的文件名…", clearSearch: "清除搜索",
+      root: "根目录",
+      emptyFolder: "这个文件夹是空的。", noSearchResults: "没有找到符合的文件。",
+      tooManyResults: "结果太多,只显示前面一部分——请缩小搜索范围。",
+      newFolderPrompt: "新文件夹名称:",
+      selectItemsFirst: "请先勾选要处理的项目。",
+      selectItemsToDownload: "请先勾选要下载的项目。",
+      selectItemsToDelete: "请先勾选要删除的项目。",
+      moveDestPrompt: "要移动到哪个文件夹?(相对于根目录的路径,留空代表根目录)",
+      copyDestPrompt: "要复制到哪个文件夹?(相对于根目录的路径,留空代表根目录)",
+      moveDone: "移动完成。", copyDone: "复制完成。",
+      deleteConfirm: "确定要删除选中的 {n} 个项目吗?会先进垃圾桶,可以之后恢复。",
+      deleteDone: "已删除,可以在下面的垃圾桶恢复。",
+      uploading: "上传中… {pct}%", uploadDone: "上传完成。", uploadFailed: "上传失败:{msg}",
+      uploadNetworkError: "网络错误，上传失败",
+      renamePrompt: "新名称:",
+      close: "关闭", saveText: "保存", saved: "已保存。",
+      downloadOriginal: "下载原始文件",
+      previewUnavailable: "这个文件没办法在浏览器里预览({msg}),请直接下载。",
+      downloadFile: "下载文件",
+      trash: "垃圾桶",
+      trashHint: "删除的文件会先进垃圾桶,可以恢复;「彻底删除」或清空垃圾桶之后就真的没办法恢复了。",
+      trashEmpty: "垃圾桶是空的。",
+      emptyTrash: "清空垃圾桶",
+      emptyTrashConfirm: "确定要清空垃圾桶吗?里面的内容会被彻底删除,没办法恢复。",
+      restore: "恢复", purge: "彻底删除",
+      purgeConfirm: "确定要彻底删除这个项目吗?没办法恢复。",
+      trashOriginalPath: "原始位置:{path} · 删除于 {time}",
+    },
+    apps: {
+      title: "应用",
+      subtitle: "用 Docker 容器安装与管理服务。多容器的应用会自动创建专属的共用网络。",
+      dockerWarn: "Docker 无法连接,无法安装或管理应用:{reason}",
+      installed: "已安装({n})",
+      noneInstalled: "还没有安装任何应用。",
+      uninstall: "卸载",
+      uninstallConfirm: "确定要卸载「{name}」吗?",
+      viewLogs: "查看日志", execCmd: "执行命令",
+      catalog: "应用商店",
+      customInstall: "自定义安装",
+      customInstallHint: "不通过上面的应用商店,直接指定任意镜像安装一个容器(对应 Docker Hub 或其他 registry 上的任何镜像,或这台机器上已经存在的本地镜像)。",
+      appId: "App ID(英数字/连字符,用于容器与网络命名,安装后不能改)",
+      name: "名称", description: "说明(选填)", image: "镜像(Image)",
+      ports: "端口映射(选填,每行一个,格式 host:container,可加 /udp,例如 8080:80)",
+      volumes: "挂载路径(选填,每行一个,格式 host路径:容器路径,可加 :ro 只读)",
+      env: "环境变量(选填,每行一个,格式 KEY=VALUE)",
+      install: "安装", confirmInstall: "确认安装", installSuccess: "安装成功!",
+      required: " (必填)",
+      volumeLabel: "{svc} · 挂载路径(对应容器内 {path})",
+      logsTitle: "日志(最后 200 行)",
+      logsEmpty: "(这个容器目前没有任何日志输出)",
+      logsFailed: "读取日志失败:{msg}",
+      execTitle: "在容器里执行一次命令",
+      execHint: "等同 <code>docker exec</code>,命令跑完才会显示结果,不是持续连接的终端。用空格分隔参数,例如 <code>cat /etc/os-release</code>。",
+      execRun: "执行", execRunning: "执行中…",
+      execResult: "退出码:{code}\n\n{output}",
+      execEmptyOutput: "(没有任何输出)",
+      execFailed: "执行失败:{msg}",
+      portFormatError: "端口映射格式错误:「{line}」,应为 host:container 或 host:container/udp",
+      volumeFormatError: "挂载路径格式错误:「{line}」,应为 host路径:容器路径 或 host路径:容器路径:ro",
+      volumeFormatErrorRO: "挂载路径格式错误:「{line}」,第三段只接受 ro",
+      envFormatError: "环境变量格式错误:「{line}」,应为 KEY=VALUE",
+    },
+    shares: {
+      title: "共享",
+      subtitle: "SMB(Windows/macOS)与 NFS(Linux)文件共享。",
+      smbShares: "SMB 共享",
+      colName: "名称", colPath: "路径", colReadOnly: "只读", colGuest: "允许访客",
+      yes: "是", no: "否",
+      noShares: "还没有设置共享",
+      name: "名称", path: "路径", comment: "备注",
+      readOnly: "只读", guestOk: "允许访客(匿名)访问",
+      validUsers: "允许的用户(逗号分隔,留空代表沿用全局设置)",
+      addShare: "新建共享",
+      shareAdded: "共享已创建并生效。", shareAddedWarn: "共享已保存,但生效失败:{warn}",
+      nfsExports: "NFS 导出",
+      colClientRules: "客户端规则", noExports: "还没有设置 NFS 导出",
+      cidr: "允许的网段(CIDR)", options: "选项(逗号分隔)",
+      addExport: "新建导出",
+      exportAdded: "导出已创建并生效。", exportAddedWarn: "导出已保存,但生效失败:{warn}",
+    },
+    users: {
+      title: "用户",
+      subtitle: "账号同时是系统账号与 Samba 账号,没有交互式登录终端 —— 纯粹是文件共享的身份。",
+      accounts: "账号({n})",
+      colUsername: "用户名", colComment: "备注",
+      noUsers: "还没有创建用户",
+      username: "用户名", comment: "备注", password: "密码",
+      createUser: "创建用户",
+      deleteConfirm: "确定要删除用户「{name}」吗?",
+      userCreated: "用户已创建。",
+      userCreatedWarn: "用户已创建,但 {warn}",
+    },
+    monitor: {
+      title: "监控",
+      subtitle: "每 {n} 秒在后台采样一次系统资源;告警规则触发或解除时,会写入 daemon 的日志,也会发送到下面设置的通知渠道。",
+      cpuUsage: "CPU 使用率", memUsage: "内存使用率", diskUsage: "磁盘使用率",
+      uptime: "运行时间",
+      recentTrend: "最近趋势",
+      notEnoughData: "采样数据还不够画图,daemon 刚启动时需要等一小段时间累积。",
+      legendCpu: "CPU", legendMem: "内存", legendDisk: "磁盘{path}",
+      alertRules: "告警规则({n})", noRules: "还没有设置告警规则。",
+      ruleName: "名称", ruleNamePlaceholder: "CPU 过载",
+      metric: "指标", comparator: "比较方式", threshold: "阈值",
+      enabled: "启用", addRule: "新建规则", ruleAdded: "告警规则已创建。",
+      notifiers: "通知渠道({n})",
+      notifiersHint: "告警一律会写入 daemon 的日志;下面可以额外加 webhook 端点,规则触发或解除时会 POST 一份 JSON 过去。",
+      noNotifiers: "还没有设置额外的通知渠道。",
+      notifierName: "名称", webhookUrl: "Webhook URL",
+      addNotifier: "新建通知渠道", notifierAdded: "通知渠道已创建。",
+      metricCpuPercent: "CPU 使用率(%)", metricMemPercent: "内存使用率(%)",
+      metricDiskPercent: "磁盘使用率(%)", metricArrayFailed: "阵列状态变为 failed",
+      metricSmartFailed: "任意一块硬盘 SMART 检查未通过",
+      gt: "大于", gte: "大于等于", lt: "小于", lte: "小于等于",
+      statusDisabled: "已停用", statusFiring: "触发中", statusMonitoring: "监控中",
+      notifierEnabled: "启用", notifierDisabled: "停用",
+      deleteRuleConfirm: null,
+    },
+    security: {
+      title: "安全",
+      subtitle: "管理登录密码、两步验证、Web 界面的 HTTPS,以及 WireGuard VPN 远程连接。",
+      changePassword: "修改密码",
+      changePasswordHint: "当前登录身份:<strong>{username}</strong>。修改成功后,其他设备上已登录的会话会全部失效。",
+      oldPassword: "当前密码", newPassword: "新密码(至少 8 个字符)", confirmNewPassword: "确认新密码",
+      updatePassword: "更新密码", passwordUpdated: "密码已更新。",
+      newPasswordMismatch: "两次输入的新密码不一致。",
+      totp: "两步验证(TOTP)", totpEnabledPill: "已启用", totpDisabledPill: "未启用",
+      totpCurrentPassword: "当前密码(停用前需要重新确认)",
+      totpDisable: "停用两步验证", totpDisabled: "两步验证已停用。",
+      totpBeginSetup: "设置两步验证",
+      totpSetupHint: "用验证器 App(Google Authenticator、Authy 等)手动输入下面的密钥,或直接粘贴 Provisioning URI(部分 App 支持用文本添加账号,GoNAS 没有内置二维码生成器)。",
+      totpEnterCode: "输入当前的验证码以完成设置",
+      totpEnable: "启用两步验证", totpEnabled: "两步验证已启用。",
+      https: "HTTPS", currentStatus: "当前状态:", enabledLabel: "已启用", disabledLabel: "未启用",
+      certFile: "证书文件", enableHttps: "启用 HTTPS",
+      certHosts: "证书主机名/IP(每行一个,留空默认 localhost/127.0.0.1)",
+      certHostsHint: "自签名证书,浏览器第一次连接会显示不受信任的警告,需要手动选择继续/信任。",
+      saveHttps: "保存 HTTPS 设置",
+      httpsSaved: "HTTPS 设置已保存,请重启 gonasd 让设置生效。",
+      vpn: "WireGuard VPN",
+      vpnRunning: "接口运行中", vpnNotRunning: "接口未启用",
+      vpnListenPort: "监听端口", vpnAddress: "地址", vpnPublicKey: "公钥",
+      vpnNotConfigured: "还没有设置 WireGuard 接口。",
+      vpnAddressField: "接口地址(CIDR,每行一个)", vpnListenPortField: "监听端口",
+      vpnUpdateIface: "更新接口设置", vpnCreateIface: "创建 WireGuard 接口",
+      vpnIfaceSaved: "接口设置已保存。实际启用/停用连接请通过 SSH 手动执行 wg-quick,或等待后续版本补上一键应用。",
+      vpnClients: "客户端({n})", vpnNoClients: "还没有添加任何客户端设备。",
+      vpnDeviceName: "设备名称", vpnDeviceNamePlaceholder: "我的手机",
+      vpnAllowedIPs: "分配的地址(CIDR,通常是接口网段里的一个 /32)",
+      vpnEndpoint: "GoNAS 对外地址(选填,写入生成的客户端配置文件)",
+      vpnAddClient: "新建客户端并生成配置文件",
+      vpnClientAdded: "已新建客户端「{name}」,下面是它的配置文件内容 —— 只会显示这一次,请立刻复制或导入客户端设备。",
+      vpnDeleteConfirm: "确定要删除这个客户端吗?删除后该设备会立刻无法再连接,且无法恢复。",
+    },
+    backup: {
+      title: "备份",
+      subtitle: "用 rsync 加硬链接轮替(跟 rsnapshot、Time Machine 是同一套技巧)把源目录备份到另一个位置,保留最近几份快照;没有变更的文件在磁盘上只占一份空间。需要主机上已安装 <code>rsync</code>。",
+      jobs: "备份任务({n})", noJobs: "还没有设置备份任务。",
+      jobName: "名称", jobNamePlaceholder: "每日备份",
+      sourcePath: "源路径", destPath: "目标路径",
+      retention: "保留份数", everyHours: "执行间隔(小时)",
+      startTime: "起始时刻(小时:分钟)", scheduleEnabled: "启用计划",
+      addJob: "新建备份任务", jobAdded: "备份任务已创建。",
+      notRunYet: "尚未执行",
+      lastSuccess: "上次成功 · {time}", lastFailed: "上次失败 · {time}",
+      unknownError: "未知错误",
+      jobEnabled: "已启用", jobDisabled: "已停用",
+      scheduleDesc: "每 {hours} 小时,从 {h}:{m} 开始",
+      runNow: "立即执行", running: "执行中…",
+      snapshots: "快照", deleteJob: "删除",
+      deleteJobConfirm: "确定要删除这个备份任务吗?已经备份好的快照不会被删除,但计划会停止。",
+      noSnapshots: "还没有任何成功的快照。",
+    },
+  },
+
+  "en": {
+    nav: {
+      dashboard: "Dashboard", storage: "Storage", files: "Files", apps: "Apps",
+      shares: "Shares", users: "Users", monitor: "Monitor", backup: "Backup", security: "Security",
+      logout: "Log out",
+    },
+    common: {
+      loading: "Loading…", loadFailed: "Failed to load: {msg}",
+      save: "Save", saved: "Saved.", cancel: "Cancel", delete: "Delete", rename: "Rename",
+      close: "Close", download: "Download", search: "Search", confirm: "Confirm", unknown: "Unknown",
+      networkError: "Could not reach gonasd: {msg}",
+    },
+    auth: {
+      loginTitle: "Log in",
+      loginSubtitle: "Enter your administrator username and password. If two-factor authentication is enabled, include your current code.",
+      username: "Username", password: "Password", totpCode: "Two-factor code (if enabled)",
+      loginBtn: "Log in",
+      setupTitle: "Initial setup",
+      setupSubtitle: "This is the first run of GoNAS — create the one administrator account.",
+      passwordMin: "Password (at least 8 characters)", confirmPassword: "Confirm password",
+      setupBtn: "Create administrator account",
+      passwordMismatch: "The two passwords you entered do not match.",
+    },
+    dashboard: {
+      title: "Dashboard",
+      subtitle: "GoNAS {version} · {os}/{arch} · up for {uptime}",
+      systemStatus: "System status", running: "Running",
+      dockerAvailable: "Available", dockerUnavailable: "Unavailable",
+      storageArray: "Storage array", disksDetected: "Disks detected",
+      dockerWarn: "Cannot reach Docker: {reason}. Docker must be installed and running before you can install apps.",
+      unknownReason: "unknown reason",
+      quickLinks: "Quick links",
+      quickLinksBody: "Go to “<a href=\"#/storage\">Storage</a>” to configure and start the array, “<a href=\"#/apps\">Apps</a>” to install services, “<a href=\"#/shares\">Shares</a>” to set up SMB/NFS, “<a href=\"#/users\">Users</a>” to manage accounts, or “<a href=\"#/monitor\">Monitor</a>” to view resource usage and set up alerts.",
+      uptimeSeconds: "{n}s", uptimeMinutes: "{n}m", uptimeHours: "{h}h {m}m",
+    },
+    array: {
+      unconfigured: "Not configured", stopped: "Stopped", starting: "Starting",
+      started: "Running", stopping: "Stopping", failed: "Failed", unknown: "Unknown",
+    },
+    storage: {
+      title: "Storage",
+      subtitle: "The array uses SnapRAID + mergerFS: each data disk is mounted independently and data is never striped, with GoNAS providing a unified mount and parity protection.",
+      currentStatus: "Current array status", mountPoint: "mount point",
+      startArray: "Start array", stopArray: "Stop array",
+      arrayStarted: "Array started", arrayStopped: "Array stopped",
+      disksDetected: "Disks detected",
+      colDevice: "Device", colModel: "Model", colCapacity: "Capacity", colType: "Type", colMountPoint: "Mount point",
+      noDisksDetected: "No disks detected",
+      poolSetup: "Configure storage pool",
+      poolSetupHint: "For data/parity disks, enter paths that are already formatted and mounted (e.g. <code>/mnt/disk1</code>), one per line. GoNAS deliberately does not format disks for you — auto-formatting is a destructive operation that could wipe data, so it's left to you to confirm at the system level first.",
+      poolName: "Pool name", poolMountPoint: "Unified mount point",
+      dataDisks: "Data disk paths (one per line)", parityDisks: "Parity disk paths (one per line)",
+      contentFiles: "SnapRAID content file locations (one per line, at least 2 recommended)",
+      savePool: "Save configuration", poolSaved: "Storage pool configuration saved.",
+    },
+    files: {
+      title: "Files",
+      subtitle: "Browse, upload, download, and organize the files on your array right in the browser — no need to mount SMB/NFS or install any client software.",
+      unavailable: "The file manager is not available right now: {reason}",
+      unavailableHint: "Go to the Storage page to configure the array's storage pool and make sure the array is started.",
+      colName: "Name", colSize: "Size", colModified: "Modified",
+      upload: "Upload", newFolder: "New Folder",
+      moveSelected: "Move Selected", copySelected: "Copy Selected",
+      downloadSelected: "Download Selected", deleteSelected: "Delete Selected",
+      searchPlaceholder: "Search file names in this folder…", clearSearch: "Clear Search",
+      root: "Home",
+      emptyFolder: "This folder is empty.", noSearchResults: "No matching files found.",
+      tooManyResults: "Too many results — only showing the first batch. Try narrowing your search.",
+      newFolderPrompt: "New folder name:",
+      selectItemsFirst: "Select one or more items first.",
+      selectItemsToDownload: "Select one or more items to download first.",
+      selectItemsToDelete: "Select one or more items to delete first.",
+      moveDestPrompt: "Move to which folder? (path relative to the root; leave blank for the root)",
+      copyDestPrompt: "Copy to which folder? (path relative to the root; leave blank for the root)",
+      moveDone: "Move complete.", copyDone: "Copy complete.",
+      deleteConfirm: "Delete the selected {n} item(s)? They'll go to Trash first and can be restored later.",
+      deleteDone: "Deleted — you can restore these from Trash below.",
+      uploading: "Uploading… {pct}%", uploadDone: "Upload complete.", uploadFailed: "Upload failed: {msg}",
+      uploadNetworkError: "Network error — upload failed",
+      renamePrompt: "New name:",
+      close: "Close", saveText: "Save", saved: "Saved.",
+      downloadOriginal: "Download original file",
+      previewUnavailable: "This file can't be previewed in the browser ({msg}). Please download it instead.",
+      downloadFile: "Download file",
+      trash: "Trash",
+      trashHint: "Deleted files go to Trash first and can be restored; “Delete Permanently” or emptying Trash cannot be undone.",
+      trashEmpty: "Trash is empty.",
+      emptyTrash: "Empty Trash",
+      emptyTrashConfirm: "Empty Trash? Everything in it will be permanently deleted and cannot be recovered.",
+      restore: "Restore", purge: "Delete Permanently",
+      purgeConfirm: "Permanently delete this item? This cannot be undone.",
+      trashOriginalPath: "Original location: {path} · deleted {time}",
+    },
+    apps: {
+      title: "Apps",
+      subtitle: "Install and manage services as Docker containers. A multi-container app automatically gets its own private network.",
+      dockerWarn: "Cannot reach Docker, so apps can't be installed or managed: {reason}",
+      installed: "Installed ({n})",
+      noneInstalled: "No apps installed yet.",
+      uninstall: "Uninstall",
+      uninstallConfirm: "Uninstall “{name}”?",
+      viewLogs: "View Logs", execCmd: "Run Command",
+      catalog: "App Catalog",
+      customInstall: "Custom Install",
+      customInstallHint: "Install a container from any image directly, without going through the catalog above — any image from Docker Hub or another registry, or one already present on this machine.",
+      appId: "App ID (letters/digits/hyphens, used to name the container and network — cannot be changed after install)",
+      name: "Name", description: "Description (optional)", image: "Image",
+      ports: "Port mappings (optional, one per line, format host:container, add /udp if needed, e.g. 8080:80)",
+      volumes: "Volume mounts (optional, one per line, format hostPath:containerPath, add :ro for read-only)",
+      env: "Environment variables (optional, one per line, format KEY=VALUE)",
+      install: "Install", confirmInstall: "Confirm Install", installSuccess: "Installed successfully!",
+      required: " (required)",
+      volumeLabel: "{svc} · volume mount (maps to {path} in the container)",
+      logsTitle: "Logs (last 200 lines)",
+      logsEmpty: "(this container hasn't produced any log output yet)",
+      logsFailed: "Failed to load logs: {msg}",
+      execTitle: "Run a one-off command in this container",
+      execHint: "Equivalent to <code>docker exec</code> — runs the command to completion and shows the result; this is not a persistent interactive terminal. Separate arguments with spaces, e.g. <code>cat /etc/os-release</code>.",
+      execRun: "Run", execRunning: "Running…",
+      execResult: "Exit code: {code}\n\n{output}",
+      execEmptyOutput: "(no output)",
+      execFailed: "Command failed: {msg}",
+      portFormatError: "Invalid port mapping “{line}” — expected host:container or host:container/udp",
+      volumeFormatError: "Invalid volume mount “{line}” — expected hostPath:containerPath or hostPath:containerPath:ro",
+      volumeFormatErrorRO: "Invalid volume mount “{line}” — the third segment can only be “ro”",
+      envFormatError: "Invalid environment variable “{line}” — expected KEY=VALUE",
+    },
+    shares: {
+      title: "Shares",
+      subtitle: "SMB (Windows/macOS) and NFS (Linux) file sharing.",
+      smbShares: "SMB Shares",
+      colName: "Name", colPath: "Path", colReadOnly: "Read-only", colGuest: "Guest access",
+      yes: "Yes", no: "No",
+      noShares: "No shares configured yet",
+      name: "Name", path: "Path", comment: "Comment",
+      readOnly: "Read-only", guestOk: "Allow guest (anonymous) access",
+      validUsers: "Allowed users (comma-separated; leave blank to use the global setting)",
+      addShare: "Add Share",
+      shareAdded: "Share added and applied.", shareAddedWarn: "Share saved, but applying it failed: {warn}",
+      nfsExports: "NFS Exports",
+      colClientRules: "Client rules", noExports: "No NFS exports configured yet",
+      cidr: "Allowed network (CIDR)", options: "Options (comma-separated)",
+      addExport: "Add Export",
+      exportAdded: "Export added and applied.", exportAddedWarn: "Export saved, but applying it failed: {warn}",
+    },
+    users: {
+      title: "Users",
+      subtitle: "Accounts are both system and Samba accounts with no interactive login shell — they exist purely as a file-sharing identity.",
+      accounts: "Accounts ({n})",
+      colUsername: "Username", colComment: "Comment",
+      noUsers: "No users created yet",
+      username: "Username", comment: "Comment", password: "Password",
+      createUser: "Create User",
+      deleteConfirm: "Delete user “{name}”?",
+      userCreated: "User created.",
+      userCreatedWarn: "User created, but {warn}",
+    },
+    monitor: {
+      title: "Monitor",
+      subtitle: "System resources are sampled in the background every {n} seconds. When an alert rule fires or clears, it's written to the daemon's log and sent to the notification channels configured below.",
+      cpuUsage: "CPU usage", memUsage: "Memory usage", diskUsage: "Disk usage",
+      uptime: "Uptime",
+      recentTrend: "Recent Trend",
+      notEnoughData: "Not enough samples to draw a chart yet — give the daemon a little time to collect data after starting.",
+      legendCpu: "CPU", legendMem: "Memory", legendDisk: "Disk{path}",
+      alertRules: "Alert Rules ({n})", noRules: "No alert rules configured yet.",
+      ruleName: "Name", ruleNamePlaceholder: "CPU overload",
+      metric: "Metric", comparator: "Comparator", threshold: "Threshold",
+      enabled: "Enabled", addRule: "Add Rule", ruleAdded: "Alert rule added.",
+      notifiers: "Notification Channels ({n})",
+      notifiersHint: "Alerts are always written to the daemon's log. You can also add webhook endpoints below — a JSON payload is POSTed whenever a rule fires or clears.",
+      noNotifiers: "No additional notification channels configured yet.",
+      notifierName: "Name", webhookUrl: "Webhook URL",
+      addNotifier: "Add Notifier", notifierAdded: "Notifier added.",
+      metricCpuPercent: "CPU usage (%)", metricMemPercent: "Memory usage (%)",
+      metricDiskPercent: "Disk usage (%)", metricArrayFailed: "Array state becomes failed",
+      metricSmartFailed: "Any disk fails its SMART check",
+      gt: "Greater than", gte: "Greater than or equal to", lt: "Less than", lte: "Less than or equal to",
+      statusDisabled: "Disabled", statusFiring: "Firing", statusMonitoring: "Monitoring",
+      notifierEnabled: "Enabled", notifierDisabled: "Disabled",
+      deleteRuleConfirm: null,
+    },
+    security: {
+      title: "Security",
+      subtitle: "Manage your login password, two-factor authentication, HTTPS for the web interface, and WireGuard VPN remote access.",
+      changePassword: "Change Password",
+      changePasswordHint: "Currently logged in as <strong>{username}</strong>. After a successful change, sessions logged in on other devices will all be invalidated.",
+      oldPassword: "Current password", newPassword: "New password (at least 8 characters)", confirmNewPassword: "Confirm new password",
+      updatePassword: "Update Password", passwordUpdated: "Password updated.",
+      newPasswordMismatch: "The two new passwords you entered do not match.",
+      totp: "Two-Factor Authentication (TOTP)", totpEnabledPill: "Enabled", totpDisabledPill: "Disabled",
+      totpCurrentPassword: "Current password (required to confirm before disabling)",
+      totpDisable: "Disable Two-Factor Authentication", totpDisabled: "Two-factor authentication disabled.",
+      totpBeginSetup: "Set Up Two-Factor Authentication",
+      totpSetupHint: "Enter the key below manually into an authenticator app (Google Authenticator, Authy, etc.), or paste the provisioning URI directly (some apps support adding an account from text — GoNAS doesn't have a built-in QR code generator).",
+      totpEnterCode: "Enter your current code to finish setup",
+      totpEnable: "Enable Two-Factor Authentication", totpEnabled: "Two-factor authentication enabled.",
+      https: "HTTPS", currentStatus: "Current status:", enabledLabel: "Enabled", disabledLabel: "Disabled",
+      certFile: "certificate file", enableHttps: "Enable HTTPS",
+      certHosts: "Certificate hostnames/IPs (one per line; defaults to localhost/127.0.0.1 if left blank)",
+      certHostsHint: "This is a self-signed certificate — browsers will show an untrusted-connection warning on first visit, which needs to be manually accepted/trusted.",
+      saveHttps: "Save HTTPS Settings",
+      httpsSaved: "HTTPS settings saved — restart gonasd for the change to take effect.",
+      vpn: "WireGuard VPN",
+      vpnRunning: "Interface running", vpnNotRunning: "Interface not enabled",
+      vpnListenPort: "listen port", vpnAddress: "address", vpnPublicKey: "public key",
+      vpnNotConfigured: "No WireGuard interface configured yet.",
+      vpnAddressField: "Interface address (CIDR, one per line)", vpnListenPortField: "Listen port",
+      vpnUpdateIface: "Update Interface", vpnCreateIface: "Create WireGuard Interface",
+      vpnIfaceSaved: "Interface settings saved. To actually bring the connection up or down, run wg-quick manually over SSH for now — one-click apply is planned for a future release.",
+      vpnClients: "Clients ({n})", vpnNoClients: "No client devices added yet.",
+      vpnDeviceName: "Device name", vpnDeviceNamePlaceholder: "My phone",
+      vpnAllowedIPs: "Assigned address (CIDR, usually a /32 within the interface's subnet)",
+      vpnEndpoint: "GoNAS's public address (optional, written into the generated client config)",
+      vpnAddClient: "Add Client and Generate Config",
+      vpnClientAdded: "Added client “{name}” — its configuration is shown below. It's only shown this once, so copy or import it into the client device right away.",
+      vpnDeleteConfirm: "Delete this client? The device will immediately lose its connection and this cannot be undone.",
+    },
+    backup: {
+      title: "Backup",
+      subtitle: "Backs up a source directory to another location using rsync plus hard-link rotation (the same technique used by rsnapshot and Time Machine), keeping a set number of recent snapshots — unchanged files take up only one copy of disk space. Requires <code>rsync</code> to be installed on the host.",
+      jobs: "Backup Jobs ({n})", noJobs: "No backup jobs configured yet.",
+      jobName: "Name", jobNamePlaceholder: "Daily backup",
+      sourcePath: "Source path", destPath: "Destination path",
+      retention: "Snapshots to keep", everyHours: "Interval (hours)",
+      startTime: "Start time (hour:minute)", scheduleEnabled: "Schedule enabled",
+      addJob: "Add Backup Job", jobAdded: "Backup job added.",
+      notRunYet: "Not run yet",
+      lastSuccess: "Last succeeded · {time}", lastFailed: "Last failed · {time}",
+      unknownError: "Unknown error",
+      jobEnabled: "Enabled", jobDisabled: "Disabled",
+      scheduleDesc: "Every {hours}h, starting at {h}:{m}",
+      runNow: "Run Now", running: "Running…",
+      snapshots: "Snapshots", deleteJob: "Delete",
+      deleteJobConfirm: "Delete this backup job? Existing snapshots won't be deleted, but the schedule will stop.",
+      noSnapshots: "No successful snapshots yet.",
+    },
+  },
+};
+
+// 後端 HTTP API 回傳的 error 訊息(見 internal/api/errors.go、
+// internal/filemanager/filemanager.go、internal/docker/exec.go)固定是
+// 英文——這是一份手動維護的翻譯表,把後端「乾淨、可枚舉」的固定錯誤
+// 訊息對應到三種語言。動態組出來、帶有伺服器內部細節(檔案路徑、指令
+// 名稱之類)的錯誤字串不在這份表裡,查不到時原樣顯示英文原文——這些
+// 通常是少見的邊界情況,直接顯示技術性的英文訊息,好過為了「看起來
+// 有翻譯」硬翻一段可能誤導的文字。
+const errorMap = {
+  "no storage pool has been configured yet: PUT /api/v1/storage/pool first": {
+    "zh-Hant": "尚未設定儲存池:請先呼叫 PUT /api/v1/storage/pool,或到「儲存」頁面設定。",
+    "zh-Hans": "尚未设置存储池:请先调用 PUT /api/v1/storage/pool,或到「存储」页面设置。",
+    "en": "No storage pool has been configured yet — configure one on the Storage page first.",
+  },
+  "no installed app with that id": {
+    "zh-Hant": "找不到這個 ID 的已安裝應用程式。", "zh-Hans": "找不到这个 ID 的已安装应用。",
+    "en": "No installed app with that ID.",
+  },
+  "no share with that name": { "zh-Hant": "找不到這個名稱的共享。", "zh-Hans": "找不到这个名称的共享。", "en": "No share with that name." },
+  "a share with that name already exists": { "zh-Hant": "已經有同名的共享存在。", "zh-Hans": "已经有同名的共享存在。", "en": "A share with that name already exists." },
+  "no user with that username": { "zh-Hant": "找不到這個使用者名稱。", "zh-Hans": "找不到这个用户名。", "en": "No user with that username." },
+  "password is required": { "zh-Hant": "必須填寫密碼。", "zh-Hans": "必须填写密码。", "en": "Password is required." },
+  "no alert rule with that id": { "zh-Hant": "找不到這個 ID 的告警規則。", "zh-Hans": "找不到这个 ID 的告警规则。", "en": "No alert rule with that ID." },
+  "no notifier with that id": { "zh-Hant": "找不到這個 ID 的通知管道。", "zh-Hans": "找不到这个 ID 的通知渠道。", "en": "No notifier with that ID." },
+  "not authenticated: please log in": { "zh-Hant": "尚未登入,請先登入。", "zh-Hans": "尚未登录,请先登录。", "en": "Not logged in — please log in first." },
+  "an admin account already exists": { "zh-Hant": "管理者帳號已經存在。", "zh-Hans": "管理员账号已经存在。", "en": "An administrator account already exists." },
+  "username is required": { "zh-Hant": "必須填寫使用者名稱。", "zh-Hans": "必须填写用户名。", "en": "Username is required." },
+  "password must be at least 8 characters": { "zh-Hant": "密碼至少要 8 個字元。", "zh-Hans": "密码至少要 8 个字符。", "en": "Password must be at least 8 characters." },
+  "no admin account has been configured yet: complete first-run setup first": {
+    "zh-Hant": "尚未建立管理者帳號,請先完成初始設定。", "zh-Hans": "尚未创建管理员账号,请先完成初始设置。",
+    "en": "No administrator account has been set up yet — complete first-run setup first.",
+  },
+  "invalid username or password": { "zh-Hant": "使用者名稱或密碼錯誤。", "zh-Hans": "用户名或密码错误。", "en": "Incorrect username or password." },
+  "invalid or expired two-factor authentication code": { "zh-Hant": "兩步驟驗證碼錯誤或已過期。", "zh-Hans": "两步验证码错误或已过期。", "en": "Invalid or expired two-factor code." },
+  "two-factor authentication has not been set up yet": { "zh-Hant": "尚未設定兩步驟驗證。", "zh-Hans": "尚未设置两步验证。", "en": "Two-factor authentication hasn't been set up yet." },
+  "no wireguard interface has been configured yet: PUT /api/v1/vpn/interface first": {
+    "zh-Hant": "尚未設定 WireGuard 介面。", "zh-Hans": "尚未设置 WireGuard 接口。",
+    "en": "No WireGuard interface has been configured yet.",
+  },
+  "no wireguard peer with that id": { "zh-Hant": "找不到這個 ID 的 WireGuard 用戶端。", "zh-Hans": "找不到这个 ID 的 WireGuard 客户端。", "en": "No WireGuard peer with that ID." },
+  "a wireguard peer with that name already exists": { "zh-Hant": "已經有同名的 WireGuard 用戶端存在。", "zh-Hans": "已经有同名的 WireGuard 客户端存在。", "en": "A WireGuard peer with that name already exists." },
+  "peer name is required": { "zh-Hant": "必須填寫用戶端名稱。", "zh-Hans": "必须填写客户端名称。", "en": "Peer name is required." },
+  "at least one allowed IP/CIDR is required": { "zh-Hant": "至少要填一個允許的 IP/CIDR。", "zh-Hans": "至少要填一个允许的 IP/CIDR。", "en": "At least one allowed IP/CIDR is required." },
+  "no backup job with that id": { "zh-Hant": "找不到這個 ID 的備份工作。", "zh-Hans": "找不到这个 ID 的备份任务。", "en": "No backup job with that ID." },
+  "provide exactly one of templateId or template": { "zh-Hant": "templateId 跟 template 要恰好填一個。", "zh-Hans": "templateId 和 template 要恰好填一个。", "en": "Provide exactly one of templateId or template." },
+  "this id is already used by a built-in catalog template": { "zh-Hant": "這個 ID 已經被內建的商店範本使用。", "zh-Hans": "这个 ID 已经被内置的商店模板使用。", "en": "This ID is already used by a built-in catalog template." },
+  "an app with this id is already installed": { "zh-Hant": "已經有相同 ID 的應用程式安裝了。", "zh-Hans": "已经有相同 ID 的应用安装了。", "en": "An app with this ID is already installed." },
+  "too many failed login attempts, please try again later": { "zh-Hant": "登入失敗次數過多,請稍後再試。", "zh-Hans": "登录失败次数过多,请稍后再试。", "en": "Too many failed login attempts — please try again later." },
+  "internal server error": { "zh-Hant": "伺服器內部錯誤。", "zh-Hans": "服务器内部错误。", "en": "Internal server error." },
+  "the storage array has been configured but is not started yet: POST /api/v1/storage/array/start first": {
+    "zh-Hant": "陣列已經設定好但還沒啟動,請先啟動陣列。", "zh-Hans": "阵列已经设置好但还没启动,请先启动阵列。",
+    "en": "The storage array is configured but not started yet — start the array first.",
+  },
+  "the \"path\" query parameter is required": { "zh-Hant": "缺少 path 參數。", "zh-Hans": "缺少 path 参数。", "en": "The “path” parameter is required." },
+  "both \"from\" and \"to\" are required": { "zh-Hant": "來源跟目的地都要填。", "zh-Hans": "来源和目标都要填。", "en": "Both a source and a destination are required." },
+  "no file was found in the upload request": { "zh-Hant": "上傳的請求裡沒有找到任何檔案。", "zh-Hans": "上传的请求里没有找到任何文件。", "en": "No file was found in the upload request." },
+  "filemanager: no root directory configured": { "zh-Hant": "沒有設定根目錄。", "zh-Hans": "没有设置根目录。", "en": "No root directory configured." },
+  "filemanager: path escapes the root directory": { "zh-Hant": "這個路徑跑到根目錄外面了,已被拒絕。", "zh-Hans": "这个路径跑到根目录外面了,已被拒绝。", "en": "That path escapes the root directory and was rejected." },
+  "filemanager: no such file or directory": { "zh-Hant": "找不到這個檔案或資料夾。", "zh-Hans": "找不到这个文件或文件夹。", "en": "No such file or directory." },
+  "filemanager: a file or directory with that name already exists": { "zh-Hant": "已經有同名的檔案或資料夾存在。", "zh-Hans": "已经有同名的文件或文件夹存在。", "en": "A file or directory with that name already exists." },
+  "filemanager: not a directory": { "zh-Hant": "這不是一個資料夾。", "zh-Hans": "这不是一个文件夹。", "en": "That's not a directory." },
+  "filemanager: is a directory, not a file": { "zh-Hant": "這是一個資料夾,不是檔案。", "zh-Hans": "这是一个文件夹,不是文件。", "en": "That's a directory, not a file." },
+  "filemanager: invalid file name": { "zh-Hant": "檔名不合法。", "zh-Hans": "文件名不合法。", "en": "Invalid file name." },
+  "filemanager: file is too large to preview or edit as text": { "zh-Hant": "檔案太大,沒辦法用文字方式預覽或編輯。", "zh-Hans": "文件太大,没办法用文本方式预览或编辑。", "en": "This file is too large to preview or edit as text." },
+  "filemanager: file does not look like a UTF-8 text file": { "zh-Hant": "這個檔案看起來不是 UTF-8 文字檔。", "zh-Hans": "这个文件看起来不是 UTF-8 文本文件。", "en": "This file doesn't look like a UTF-8 text file." },
+  "exec command must not be empty": { "zh-Hant": "指令不能是空的。", "zh-Hans": "命令不能为空。", "en": "The command must not be empty." },
+};
+
+// noticeMap —— 跟 errorMap 同樣的道理,但這裡收的不是「錯誤」,而是後端
+// 在正常(非錯誤)回應裡直接內嵌、原本寫死是繁體中文的固定文字:HTTPS
+// 設定的「需要重啟才生效」提示(internal/api/security_handlers.go)、
+// 立即執行備份工作的成功訊息(internal/api/backup_handlers.go),以及
+// 內建 App 商店目錄裡三個範本、共 8 個環境變數的說明文字
+// (internal/api/catalog.go)。這些字串在後端是常數,不像 errors.go 那樣
+// 全部改成英文再翻譯——商店範本的說明文字本來就是要給人看的展示內容,
+// 用固定字串定義本身沒問題,只是「支援多語系」這個新需求出現後,前端
+// 這裡也需要對應的翻譯,原理跟 errorMap 一模一樣。
+const noticeMap = {
+  "變更 HTTPS 設定不會立刻生效：gonasd 只在程序啟動時決定要監聽 HTTP 還是 HTTPS,請重新啟動 gonasd 讓新設定生效。": {
+    "zh-Hant": "變更 HTTPS 設定不會立刻生效：gonasd 只在程序啟動時決定要監聽 HTTP 還是 HTTPS,請重新啟動 gonasd 讓新設定生效。",
+    "zh-Hans": "更改 HTTPS 设置不会立刻生效:gonasd 只在进程启动时决定要监听 HTTP 还是 HTTPS,请重启 gonasd 让新设置生效。",
+    "en": "Changing HTTPS settings doesn't take effect immediately — gonasd only decides whether to listen on HTTP or HTTPS when it starts, so restart gonasd for the new setting to apply.",
+  },
+  "備份已開始在背景執行,完成後請重新整理查看結果。": {
+    "zh-Hant": "備份已開始在背景執行,完成後請重新整理查看結果。",
+    "zh-Hans": "备份已开始在后台运行,完成后请刷新查看结果。",
+    "en": "The backup has started running in the background — refresh the page once it's done to see the result.",
+  },
+  "Docker 容器的圖形化管理介面，可以在 GoNAS 自己的 App 商店之外，直接管理所有容器。": {
+    "zh-Hant": "Docker 容器的圖形化管理介面，可以在 GoNAS 自己的 App 商店之外，直接管理所有容器。",
+    "zh-Hans": "Docker 容器的图形化管理界面,可以在 GoNAS 自己的应用商店之外,直接管理所有容器。",
+    "en": "A graphical management interface for Docker containers — lets you manage any container directly, beyond just what GoNAS's own App Catalog installed.",
+  },
+  "瀏覽器裡的 VS Code，方便直接在 NAS 上編輯設定檔、寫小腳本，不用另外 SSH 進去。": {
+    "zh-Hant": "瀏覽器裡的 VS Code，方便直接在 NAS 上編輯設定檔、寫小腳本，不用另外 SSH 進去。",
+    "zh-Hans": "浏览器里的 VS Code,方便直接在 NAS 上编辑配置文件、写小脚本,不用另外 SSH 进去。",
+    "en": "VS Code in the browser — edit config files or write small scripts directly on the NAS without SSHing in separately.",
+  },
+  "WordPress + MySQL 的多容器範例，示範一個 App 底下多個服務如何透過共用網路互通。": {
+    "zh-Hant": "WordPress + MySQL 的多容器範例，示範一個 App 底下多個服務如何透過共用網路互通。",
+    "zh-Hans": "WordPress + MySQL 的多容器示例,演示一个应用下多个服务如何通过共用网络互通。",
+    "en": "A multi-container WordPress + MySQL example, showing how multiple services under one app talk to each other over a shared network.",
+  },
+  "執行容器的使用者 ID": { "zh-Hant": "執行容器的使用者 ID", "zh-Hans": "运行容器的用户 ID", "en": "User ID the container runs as" },
+  "執行容器的群組 ID": { "zh-Hant": "執行容器的群組 ID", "zh-Hans": "运行容器的组 ID", "en": "Group ID the container runs as" },
+  "時區，例如 Asia/Taipei": { "zh-Hant": "時區，例如 Asia/Taipei", "zh-Hans": "时区,例如 Asia/Shanghai", "en": "Timezone, e.g. Asia/Taipei" },
+  "登入 code-server 網頁介面的密碼": { "zh-Hant": "登入 code-server 網頁介面的密碼", "zh-Hans": "登录 code-server 网页界面的密码", "en": "Password for logging into the code-server web interface" },
+  "MySQL root 密碼": { "zh-Hant": "MySQL root 密碼", "zh-Hans": "MySQL root 密码", "en": "MySQL root password" },
+  "wordpress 資料庫使用者的密碼": { "zh-Hant": "wordpress 資料庫使用者的密碼", "zh-Hans": "wordpress 数据库用户的密码", "en": "Password for the wordpress database user" },
+  "要跟 db 服務的 MYSQL_PASSWORD 填一樣的值": { "zh-Hant": "要跟 db 服務的 MYSQL_PASSWORD 填一樣的值", "zh-Hans": "要跟 db 服务的 MYSQL_PASSWORD 填一样的值", "en": "Must match the MYSQL_PASSWORD value given to the db service" },
+};
+
+// noticePrefixes 處理「固定前綴 + 動態內容(通常是底層指令的原始錯誤
+// 訊息,本來就是英文)」這種訊息——只翻譯前綴,後面動態的部分原樣保留。
+const noticePrefixes = [
+  {
+    prefix: "無法查詢介面即時狀態(可能是尚未執行 `wg-quick up`,或這台主機沒有安裝 wireguard-tools): ",
+    translated: {
+      "zh-Hant": "無法查詢介面即時狀態(可能是尚未執行 `wg-quick up`,或這台主機沒有安裝 wireguard-tools): ",
+      "zh-Hans": "无法查询接口实时状态(可能是尚未执行 `wg-quick up`,或这台主机没有安装 wireguard-tools): ",
+      "en": "Could not query the interface's live status (wg-quick up may not have been run yet, or wireguard-tools isn't installed on this host): ",
+    },
+  },
+];
+
+// translateNotice 翻譯後端在正常回應裡直接內嵌的固定文字(不是錯誤)。
+// 查表邏輯跟 translateError 一樣:查得到就翻,查不到(通常是還沒收錄進
+// noticeMap/noticePrefixes 的內容,或本來就是英文的技術性內容)原樣
+// 傳回去。
+export function translateNotice(raw) {
+  if (!raw) return raw;
+  const exact = noticeMap[raw];
+  if (exact) return exact[currentLocale] || exact[FALLBACK_LOCALE] || raw;
+  for (const { prefix, translated } of noticePrefixes) {
+    if (raw.startsWith(prefix)) {
+      const localizedPrefix = translated[currentLocale] || translated[FALLBACK_LOCALE] || prefix;
+      return localizedPrefix + raw.slice(prefix.length);
+    }
+  }
+  return raw;
+}
+
+function detectLocale() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && LOCALES.includes(saved)) return saved;
+  } catch { /* localStorage 被瀏覽器擋掉(例如隱私模式)時,退回自動偵測 */ }
+
+  // GoNAS 原本整支介面就是繁體中文寫的——這是這個專案「原生」的語言,
+  // 不是三選一裡隨便挑的一個。所以還沒有使用者手動選過語言的情況下,
+  // 只有瀏覽器明確回報是簡體中文慣用地區(中國大陸/新加坡等)時才預設
+  // 簡體中文,其他所有情況(包含瀏覽器語言是英文、日文,或任何不是
+  // 中文的設定)一律預設繁體中文,而不是貿然假設「不是中文就是想看
+  // 英文」。英文終究是使用者可以隨時從語言選單主動選的選項,不該變成
+  // 大多數瀏覽器語言設成 en-US 的人第一次打開就看到、原本沒打算要的
+  // 預設值。
+  const lang = (navigator.language || "").toLowerCase();
+  if (/-(cn|sg)\b/.test(lang) || lang === "zh-hans") return "zh-Hans";
+  return "zh-Hant";
+}
+
+let currentLocale = detectLocale();
+
+export function getLocale() {
+  return currentLocale;
+}
+
+export function setLocale(locale) {
+  if (!LOCALES.includes(locale)) return;
+  currentLocale = locale;
+  try { localStorage.setItem(STORAGE_KEY, locale); } catch { /* 存不進去就算了,這一輪還是會用新語言,只是重新整理後會再重猜一次 */ }
+}
+
+function lookup(locale, key) {
+  const parts = key.split(".");
+  let node = dict[locale];
+  for (const p of parts) {
+    if (node == null) return undefined;
+    node = node[p];
+  }
+  return node;
+}
+
+// t(key, vars) —— 查表 + 用 {name} 語法做簡單的字串內插。目前語言查不到
+// 就退回繁體中文(這支介面原本就是繁體中文寫的,資料最完整),繁體中文
+// 也查不到才顯示 key 本身——後者理論上不該發生,出現就是翻譯字典漏了
+// 一條,顯示 key 方便一眼看出漏在哪裡,而不是靜靜地顯示 undefined。
+export function t(key, vars) {
+  let text = lookup(currentLocale, key);
+  if (text === undefined) text = lookup(FALLBACK_LOCALE, key);
+  if (text === undefined) return key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      text = text.replaceAll(`{${k}}`, String(v));
+    }
+  }
+  return text;
+}
+
+// translateError 把後端回傳的英文錯誤字串(err.message)翻成目前語言—
+// 只翻譯已知、乾淨的固定訊息(見上面 errorMap 的說明),查不到的原樣
+// 傳回去,不強行翻譯帶有動態內容的技術性錯誤。
+export function translateError(rawMessage) {
+  const entry = errorMap[rawMessage];
+  if (!entry) return rawMessage;
+  return entry[currentLocale] || entry[FALLBACK_LOCALE] || rawMessage;
+}

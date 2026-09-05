@@ -1,4 +1,5 @@
 import { api, setUnauthorizedHandler } from "/api.js";
+import { t, getLocale, setLocale, translateNotice } from "/i18n.js";
 
 const content = document.getElementById("content");
 const navLinks = document.querySelectorAll(".nav-list a");
@@ -33,17 +34,44 @@ function msg(kind, text) {
   return `<div class="msg ${kind}">${esc(text)}</div>`;
 }
 
+// applyStaticI18n 翻譯 index.html 裡固定存在、跟目前路由無關的文字
+// (側邊欄導覽、登出按鈕)——這些元素在 app.js 載入前就已經在 DOM 裡,
+// 不屬於任何一支 render 函式,所以獨立處理。
+function applyStaticI18n() {
+  navLinks.forEach((a) => {
+    const route = a.dataset.route;
+    if (route) a.textContent = t(`nav.${route}`);
+  });
+  const logoutBtn = document.getElementById("logout-btn");
+  if (logoutBtn) logoutBtn.textContent = t("nav.logout");
+}
+
+// wireLangSwitcher 讓側邊欄的語言選單生效。切換語言後直接重新整理整個
+// 頁面而不是嘗試就地重新渲染目前畫面——這支介面沒有任何一個地方的
+// 狀態貴到值得为了省一次整頁重新整理去換取更複雜的「重新渲染目前這頁,
+// 且不要弄丟使用者手上正在填的表單」邏輯,重新整理在本機 NAS 管理介面
+// 上不到一秒就完成,使用者也不會太在意。
+function wireLangSwitcher() {
+  const sel = document.getElementById("lang-switcher");
+  if (!sel) return;
+  sel.value = getLocale();
+  sel.addEventListener("change", () => {
+    setLocale(sel.value);
+    location.reload();
+  });
+}
+
 async function router() {
   const hash = location.hash.replace(/^#\//, "") || "dashboard";
   const route = routes[hash] ? hash : "dashboard";
 
   navLinks.forEach((a) => a.classList.toggle("active", a.dataset.route === route));
 
-  content.innerHTML = `<p class="loading">載入中…</p>`;
+  content.innerHTML = `<p class="loading">${esc(t("common.loading"))}</p>`;
   try {
     await routes[route](content);
   } catch (err) {
-    content.innerHTML = msg("error", "載入失敗:" + err.message);
+    content.innerHTML = msg("error", t("common.loadFailed", { msg: err.message }));
   }
 }
 
@@ -60,6 +88,8 @@ window.addEventListener("DOMContentLoaded", boot);
 let showingApp = false;
 
 async function boot() {
+  applyStaticI18n();
+  wireLangSwitcher();
   setUnauthorizedHandler(showLoginGate);
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
@@ -72,7 +102,7 @@ async function boot() {
     status = await api.authStatus();
   } catch (err) {
     authGate.hidden = false;
-    authGateContent.innerHTML = msg("error", "無法連線到 gonasd:" + err.message);
+    authGateContent.innerHTML = msg("error", t("common.networkError", { msg: err.message }));
     return;
   }
 
@@ -105,14 +135,14 @@ function showLoginGate() {
   shell.hidden = true;
   authGate.hidden = false;
   authGateContent.innerHTML = `
-    <h1>登入</h1>
-    <p class="page-subtitle">請輸入管理者帳號密碼。已啟用兩步驟驗證的話,一併填入目前的驗證碼。</p>
+    <h1>${esc(t("auth.loginTitle"))}</h1>
+    <p class="page-subtitle">${esc(t("auth.loginSubtitle"))}</p>
     <div id="login-msg"></div>
     <form class="stacked" id="login-form">
-      <div class="field"><label>使用者名稱</label><input type="text" name="username" autocomplete="username" required></div>
-      <div class="field"><label>密碼</label><input type="password" name="password" autocomplete="current-password" required></div>
-      <div class="field"><label>兩步驟驗證碼(如已啟用)</label><input type="text" name="totpCode" inputmode="numeric" pattern="[0-9]*" placeholder="123456" autocomplete="one-time-code"></div>
-      <div class="btn-row"><button type="submit">登入</button></div>
+      <div class="field"><label>${esc(t("auth.username"))}</label><input type="text" name="username" autocomplete="username" required></div>
+      <div class="field"><label>${esc(t("auth.password"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
+      <div class="field"><label>${esc(t("auth.totpCode"))}</label><input type="text" name="totpCode" inputmode="numeric" pattern="[0-9]*" placeholder="123456" autocomplete="one-time-code"></div>
+      <div class="btn-row"><button type="submit">${esc(t("auth.loginBtn"))}</button></div>
     </form>
   `;
   authGateContent.querySelector("#login-form").addEventListener("submit", async (ev) => {
@@ -133,14 +163,14 @@ function showSetupGate() {
   shell.hidden = true;
   authGate.hidden = false;
   authGateContent.innerHTML = `
-    <h1>初始設定</h1>
-    <p class="page-subtitle">第一次執行 GoNAS,請先建立唯一的管理者帳號。</p>
+    <h1>${esc(t("auth.setupTitle"))}</h1>
+    <p class="page-subtitle">${esc(t("auth.setupSubtitle"))}</p>
     <div id="setup-msg"></div>
     <form class="stacked" id="setup-form">
-      <div class="field"><label>使用者名稱</label><input type="text" name="username" autocomplete="username" required></div>
-      <div class="field"><label>密碼(至少 8 個字元)</label><input type="password" name="password" minlength="8" autocomplete="new-password" required></div>
-      <div class="field"><label>確認密碼</label><input type="password" name="confirm" minlength="8" autocomplete="new-password" required></div>
-      <div class="btn-row"><button type="submit">建立管理者帳號</button></div>
+      <div class="field"><label>${esc(t("auth.username"))}</label><input type="text" name="username" autocomplete="username" required></div>
+      <div class="field"><label>${esc(t("auth.passwordMin"))}</label><input type="password" name="password" minlength="8" autocomplete="new-password" required></div>
+      <div class="field"><label>${esc(t("auth.confirmPassword"))}</label><input type="password" name="confirm" minlength="8" autocomplete="new-password" required></div>
+      <div class="btn-row"><button type="submit">${esc(t("auth.setupBtn"))}</button></div>
     </form>
   `;
   authGateContent.querySelector("#setup-form").addEventListener("submit", async (ev) => {
@@ -148,7 +178,7 @@ function showSetupGate() {
     const f = new FormData(ev.target);
     const box = authGateContent.querySelector("#setup-msg");
     if (f.get("password") !== f.get("confirm")) {
-      box.innerHTML = msg("error", "兩次輸入的密碼不一致。");
+      box.innerHTML = msg("error", t("auth.passwordMismatch"));
       return;
     }
     try {
@@ -169,18 +199,18 @@ async function renderDashboard(el) {
   ]);
 
   el.innerHTML = `
-    <h1>儀表板</h1>
-    <p class="page-subtitle">GoNAS ${esc(version.version)} · ${esc(version.goos)}/${esc(version.goarch)} · 已執行 ${formatUptime(health.uptimeSeconds)}</p>
+    <h1>${esc(t("dashboard.title"))}</h1>
+    <p class="page-subtitle">${esc(t("dashboard.subtitle", { version: version.version, os: version.goos, arch: version.goarch, uptime: formatUptime(health.uptimeSeconds) }))}</p>
     <div class="grid">
-      ${statTile("系統狀態", "運作中", "ok")}
-      ${statTile("Docker", dockerStatus.available ? "可用" : "不可用", dockerStatus.available ? "ok" : "danger")}
-      ${statTile("儲存陣列", arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state))}
-      ${statTile("偵測到的硬碟", String(disks.length), "")}
+      ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok")}
+      ${statTile("Docker", dockerStatus.available ? t("dashboard.dockerAvailable") : t("dashboard.dockerUnavailable"), dockerStatus.available ? "ok" : "danger")}
+      ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state))}
+      ${statTile(t("dashboard.disksDetected"), String(disks.length), "")}
     </div>
-    ${!dockerStatus.available ? msg("warn", "Docker 無法連線:" + (dockerStatus.error || "未知原因") + "。安裝應用程式前需要先確認 Docker 已安裝並啟動。") : ""}
+    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: dockerStatus.error || t("dashboard.unknownReason") })) : ""}
     <div class="card">
-      <h2>快速連結</h2>
-      <p style="color:var(--text-dim);font-size:13px;margin:0">前往「<a href="#/storage">儲存</a>」設定並啟動陣列、「<a href="#/apps">應用程式</a>」安裝服務、「<a href="#/shares">共享</a>」設定 SMB/NFS、「<a href="#/users">使用者</a>」管理帳號,或「<a href="#/monitor">監控</a>」查看資源使用率與設定告警。</p>
+      <h2>${esc(t("dashboard.quickLinks"))}</h2>
+      <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
     </div>
   `;
 }
@@ -191,15 +221,15 @@ function statTile(label, value, cls) {
 
 function formatUptime(sec) {
   sec = sec || 0;
-  if (sec < 60) return `${sec} 秒`;
+  if (sec < 60) return t("dashboard.uptimeSeconds", { n: sec });
   const m = Math.floor(sec / 60);
-  if (m < 60) return `${m} 分鐘`;
+  if (m < 60) return t("dashboard.uptimeMinutes", { n: m });
   const h = Math.floor(m / 60);
-  return `${h} 小時 ${m % 60} 分鐘`;
+  return t("dashboard.uptimeHours", { h, m: m % 60 });
 }
 
 function arrayLabel(state) {
-  return { unconfigured: "尚未設定", stopped: "已停止", starting: "啟動中", started: "運作中", stopping: "停止中", failed: "失敗", unknown: "未知" }[state] || state;
+  return t(`array.${state}`) !== `array.${state}` ? t(`array.${state}`) : state;
 }
 function arrayPillClass(state) {
   if (state === "started") return "ok";
@@ -216,27 +246,27 @@ async function renderStorage(el) {
   ]);
 
   el.innerHTML = `
-    <h1>儲存</h1>
-    <p class="page-subtitle">陣列採 SnapRAID + mergerFS:每顆資料碟各自獨立掛載、資料不打散,由 GoNAS 統一聯合掛載並提供同位校驗。</p>
+    <h1>${esc(t("storage.title"))}</h1>
+    <p class="page-subtitle">${esc(t("storage.subtitle"))}</p>
 
     <div class="card">
-      <h2>目前陣列狀態</h2>
+      <h2>${esc(t("storage.currentStatus"))}</h2>
       <p style="margin:0 0 12px">
         <span class="pill ${arrayPillClass(arrayStatus.state)}">${esc(arrayLabel(arrayStatus.state))}</span>
-        ${arrayStatus.mountPoint ? ` · 掛載點 <code>${esc(arrayStatus.mountPoint)}</code>` : ""}
+        ${arrayStatus.mountPoint ? ` · ${esc(t("storage.mountPoint"))} <code>${esc(arrayStatus.mountPoint)}</code>` : ""}
       </p>
       ${arrayStatus.error ? msg("error", arrayStatus.error) : ""}
       <div class="btn-row">
-        <button id="start-array" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>啟動陣列</button>
-        <button id="stop-array" class="secondary" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>停止陣列</button>
+        <button id="start-array" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.startArray"))}</button>
+        <button id="stop-array" class="secondary" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.stopArray"))}</button>
       </div>
     </div>
 
     <div class="card">
-      <h2>偵測到的硬碟</h2>
+      <h2>${esc(t("storage.disksDetected"))}</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>裝置</th><th>型號</th><th>容量</th><th>類型</th><th>掛載點</th></tr></thead>
+          <thead><tr><th>${esc(t("storage.colDevice"))}</th><th>${esc(t("storage.colModel"))}</th><th>${esc(t("storage.colCapacity"))}</th><th>${esc(t("storage.colType"))}</th><th>${esc(t("storage.colMountPoint"))}</th></tr></thead>
           <tbody>
             ${disks.length ? disks.map((d) => `
               <tr>
@@ -245,32 +275,29 @@ async function renderStorage(el) {
                 <td>${formatBytes(d.sizeBytes)}</td>
                 <td>${d.rotational ? "HDD" : "SSD/NVMe"}</td>
                 <td>${esc(d.mountpoint || "—")}</td>
-              </tr>`).join("") : `<tr><td colspan="5" class="empty-state">沒有偵測到硬碟</td></tr>`}
+              </tr>`).join("") : `<tr><td colspan="5" class="empty-state">${esc(t("storage.noDisksDetected"))}</td></tr>`}
           </tbody>
         </table>
       </div>
     </div>
 
     <div class="card">
-      <h2>設定儲存池</h2>
-      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
-        資料碟/同位碟請填已經格式化並掛載好的路徑(例如 <code>/mnt/disk1</code>),每行一個。
-        GoNAS 目前不會幫你格式化硬碟 —— 這是刻意的:自動格式化是會清空資料的危險操作,交給使用者在系統層面自己確認過再做。
-      </p>
+      <h2>${esc(t("storage.poolSetup"))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("storage.poolSetupHint")}</p>
       <div id="pool-msg"></div>
       <form class="stacked" id="pool-form">
-        <div class="field"><label>池名稱</label><input type="text" name="name" value="tank" required></div>
-        <div class="field"><label>聯合掛載點</label><input type="text" name="mountPoint" value="/mnt/tank" required></div>
-        <div class="field"><label>資料碟路徑(每行一個)</label><textarea name="dataDisks" rows="3" placeholder="/mnt/disk1&#10;/mnt/disk2"></textarea></div>
-        <div class="field"><label>同位碟路徑(每行一個)</label><textarea name="parityDisks" rows="2" placeholder="/mnt/parity1"></textarea></div>
-        <div class="field"><label>SnapRAID 索引檔位置(每行一個,建議至少 2 份)</label><textarea name="contentFiles" rows="2" placeholder="/mnt/disk1&#10;/boot/config/snapraid"></textarea></div>
-        <div class="btn-row"><button type="submit">儲存設定</button></div>
+        <div class="field"><label>${esc(t("storage.poolName"))}</label><input type="text" name="name" value="tank" required></div>
+        <div class="field"><label>${esc(t("storage.poolMountPoint"))}</label><input type="text" name="mountPoint" value="/mnt/tank" required></div>
+        <div class="field"><label>${esc(t("storage.dataDisks"))}</label><textarea name="dataDisks" rows="3" placeholder="/mnt/disk1&#10;/mnt/disk2"></textarea></div>
+        <div class="field"><label>${esc(t("storage.parityDisks"))}</label><textarea name="parityDisks" rows="2" placeholder="/mnt/parity1"></textarea></div>
+        <div class="field"><label>${esc(t("storage.contentFiles"))}</label><textarea name="contentFiles" rows="2" placeholder="/mnt/disk1&#10;/boot/config/snapraid"></textarea></div>
+        <div class="btn-row"><button type="submit">${esc(t("storage.savePool"))}</button></div>
       </form>
     </div>
   `;
 
-  el.querySelector("#start-array").addEventListener("click", () => runAction(api.startArray, "陣列已啟動", renderStorage, el));
-  el.querySelector("#stop-array").addEventListener("click", () => runAction(api.stopArray, "陣列已停止", renderStorage, el));
+  el.querySelector("#start-array").addEventListener("click", () => runAction(api.startArray, renderStorage, el));
+  el.querySelector("#stop-array").addEventListener("click", () => runAction(api.stopArray, renderStorage, el));
 
   el.querySelector("#pool-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -285,7 +312,7 @@ async function renderStorage(el) {
     const box = el.querySelector("#pool-msg");
     try {
       await api.setPool(pool);
-      box.innerHTML = msg("ok", "儲存池設定已儲存。");
+      box.innerHTML = msg("ok", t("storage.poolSaved"));
       await renderStorage(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -297,7 +324,7 @@ function linesOf(text) {
   return (text || "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-async function runAction(fn, okText, rerender, el) {
+async function runAction(fn, rerender, el) {
   try {
     await fn();
     await rerender(el);
@@ -347,16 +374,16 @@ async function renderFiles(el) {
   const status = await api.filesStatus().catch((e) => ({ available: false, reason: e.message }));
 
   el.innerHTML = `
-    <h1>檔案</h1>
-    <p class="page-subtitle">直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，不需要另外掛載 SMB/NFS 或安裝用戶端軟體。</p>
+    <h1>${esc(t("files.title"))}</h1>
+    <p class="page-subtitle">${esc(t("files.subtitle"))}</p>
     <div id="files-root"></div>
   `;
   const root = el.querySelector("#files-root");
 
   if (!status.available) {
     root.innerHTML = `
-      ${msg("warn", "檔案管理員目前無法使用:" + (status.reason || ""))}
-      <p class="hint">請先到「儲存」頁面設定陣列的儲存池，並確認陣列已經啟動。</p>
+      ${msg("warn", t("files.unavailable", { reason: status.reason || "" }))}
+      <p class="hint">${esc(t("files.unavailableHint"))}</p>
     `;
     return;
   }
@@ -368,18 +395,18 @@ async function renderFiles(el) {
       <div id="files-msg"></div>
       <div id="files-drop-zone" class="files-drop-zone">
         <table class="file-table">
-          <thead><tr><th></th><th>名稱</th><th>大小</th><th>修改時間</th><th></th></tr></thead>
+          <thead><tr><th></th><th>${esc(t("files.colName"))}</th><th>${esc(t("files.colSize"))}</th><th>${esc(t("files.colModified"))}</th><th></th></tr></thead>
           <tbody id="files-tbody"></tbody>
         </table>
       </div>
       <div id="files-panel"></div>
     </div>
     <div class="card">
-      <h2>回收桶</h2>
-      <p class="hint">刪除的檔案會先進回收桶，可以復原；「永久刪除」或清空回收桶之後就真的沒辦法復原了。</p>
+      <h2>${esc(t("files.trash"))}</h2>
+      <p class="hint">${esc(t("files.trashHint"))}</p>
       <div id="trash-msg"></div>
       <div id="trash-list"></div>
-      <div class="btn-row"><button class="secondary" id="trash-empty-btn">清空回收桶</button></div>
+      <div class="btn-row"><button class="secondary" id="trash-empty-btn">${esc(t("files.emptyTrash"))}</button></div>
     </div>
   `;
 
@@ -389,7 +416,7 @@ async function renderFiles(el) {
   await loadTrash(root);
 
   root.querySelector("#trash-empty-btn").addEventListener("click", async () => {
-    if (!confirm("確定要清空回收桶嗎?裡面的東西會被永久刪除，沒辦法復原。")) return;
+    if (!confirm(t("files.emptyTrashConfirm"))) return;
     try {
       await api.filesTrashEmpty();
       await loadTrash(root);
@@ -403,18 +430,18 @@ function wireFilesToolbar(root) {
   const toolbar = root.querySelector("#files-toolbar");
   toolbar.innerHTML = `
     <div class="btn-row">
-      <button type="button" id="files-upload-btn">上傳檔案</button>
+      <button type="button" id="files-upload-btn">${esc(t("files.upload"))}</button>
       <input type="file" id="files-upload-input" multiple hidden>
-      <button type="button" class="secondary" id="files-mkdir-btn">新增資料夾</button>
-      <button type="button" class="secondary" id="files-move-btn">搬移選取項目</button>
-      <button type="button" class="secondary" id="files-copy-btn">複製選取項目</button>
-      <button type="button" class="secondary" id="files-download-btn">下載選取項目</button>
-      <button type="button" class="danger" id="files-delete-btn">刪除選取項目</button>
+      <button type="button" class="secondary" id="files-mkdir-btn">${esc(t("files.newFolder"))}</button>
+      <button type="button" class="secondary" id="files-move-btn">${esc(t("files.moveSelected"))}</button>
+      <button type="button" class="secondary" id="files-copy-btn">${esc(t("files.copySelected"))}</button>
+      <button type="button" class="secondary" id="files-download-btn">${esc(t("files.downloadSelected"))}</button>
+      <button type="button" class="danger" id="files-delete-btn">${esc(t("files.deleteSelected"))}</button>
     </div>
     <form class="btn-row" id="files-search-form" style="margin-top:8px">
-      <input type="text" id="files-search-input" placeholder="搜尋目前目錄底下的檔名…" style="flex:1;min-width:200px">
-      <button type="submit" class="secondary">搜尋</button>
-      <button type="button" class="secondary" id="files-search-clear" hidden>清除搜尋</button>
+      <input type="text" id="files-search-input" placeholder="${esc(t("files.searchPlaceholder"))}" style="flex:1;min-width:200px">
+      <button type="submit" class="secondary">${esc(t("common.search"))}</button>
+      <button type="button" class="secondary" id="files-search-clear" hidden>${esc(t("files.clearSearch"))}</button>
     </form>
   `;
 
@@ -426,7 +453,7 @@ function wireFilesToolbar(root) {
   });
 
   toolbar.querySelector("#files-mkdir-btn").addEventListener("click", async () => {
-    const name = prompt("新資料夾名稱:");
+    const name = prompt(t("files.newFolderPrompt"));
     if (!name) return;
     try {
       await api.filesMkdir(joinPath(filesState.path, name));
@@ -503,7 +530,7 @@ async function loadFilesList(root) {
 function renderBreadcrumb(root) {
   const parts = filesState.path ? filesState.path.split("/") : [];
   let acc = "";
-  const crumbs = [`<a href="#" data-goto="">根目錄</a>`];
+  const crumbs = [`<a href="#" data-goto="">${esc(t("files.root"))}</a>`];
   for (const part of parts) {
     acc = joinPath(acc, part);
     crumbs.push(`<a href="#" data-goto="${esc(acc)}">${esc(part)}</a>`);
@@ -526,7 +553,7 @@ function renderBreadcrumb(root) {
 function renderFileRows(root, entries, { flatPaths, truncated }) {
   const tbody = root.querySelector("#files-tbody");
   if (!entries.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${flatPaths ? "沒有找到符合的檔案。" : "這個資料夾是空的。"}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${esc(flatPaths ? t("files.noSearchResults") : t("files.emptyFolder"))}</td></tr>`;
     return;
   }
   tbody.innerHTML = entries.map((e) => `
@@ -538,11 +565,11 @@ function renderFileRows(root, entries, { flatPaths, truncated }) {
       <td>${e.isDir ? "—" : formatBytes(e.size)}</td>
       <td>${esc(formatDateTime(e.modTime))}</td>
       <td class="btn-row" style="margin:0">
-        ${e.isDir ? "" : `<a class="secondary" href="${api.filesDownloadURL(e.path)}">下載</a>`}
-        <button type="button" class="secondary" data-rename="${esc(e.path)}" data-isdir="${e.isDir}">重新命名</button>
+        ${e.isDir ? "" : `<a class="secondary" href="${api.filesDownloadURL(e.path)}">${esc(t("common.download"))}</a>`}
+        <button type="button" class="secondary" data-rename="${esc(e.path)}" data-isdir="${e.isDir}">${esc(t("common.rename"))}</button>
       </td>
     </tr>
-  `).join("") + (truncated ? `<tr><td colspan="5" class="empty-state">結果太多，只顯示前面一部分——請縮小搜尋範圍。</td></tr>` : "");
+  `).join("") + (truncated ? `<tr><td colspan="5" class="empty-state">${esc(t("files.tooManyResults"))}</td></tr>` : "");
 
   tbody.querySelectorAll("[data-select]").forEach((cb) => {
     cb.addEventListener("change", () => {
@@ -575,16 +602,16 @@ function renderFileRows(root, entries, { flatPaths, truncated }) {
 
 async function openFilePreview(root, path) {
   const panel = root.querySelector("#files-panel");
-  panel.innerHTML = `<div class="service-panel"><p class="loading">載入中…</p></div>`;
+  panel.innerHTML = `<div class="service-panel"><p class="loading">${esc(t("common.loading"))}</p></div>`;
   try {
     const { content } = await api.filesReadText(path);
     panel.innerHTML = `
       <div class="service-panel">
-        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>關閉</button></div>
+        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>${esc(t("files.close"))}</button></div>
         <textarea class="file-editor">${esc(content)}</textarea>
         <div class="btn-row" style="margin-top:8px">
-          <button type="button" data-save-text>儲存</button>
-          <a class="secondary" href="${api.filesDownloadURL(path)}">下載原始檔案</a>
+          <button type="button" data-save-text>${esc(t("files.saveText"))}</button>
+          <a class="secondary" href="${api.filesDownloadURL(path)}">${esc(t("files.downloadOriginal"))}</a>
         </div>
         <div id="file-editor-msg"></div>
       </div>
@@ -594,7 +621,7 @@ async function openFilePreview(root, path) {
       const newContent = panel.querySelector(".file-editor").value;
       try {
         await api.filesWriteText(path, newContent);
-        panel.querySelector("#file-editor-msg").innerHTML = msg("ok", "已儲存。");
+        panel.querySelector("#file-editor-msg").innerHTML = msg("ok", t("files.saved"));
       } catch (err) {
         panel.querySelector("#file-editor-msg").innerHTML = msg("error", err.message);
       }
@@ -602,9 +629,9 @@ async function openFilePreview(root, path) {
   } catch (err) {
     panel.innerHTML = `
       <div class="service-panel">
-        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>關閉</button></div>
-        <p class="hint">這個檔案沒辦法在瀏覽器裡預覽(${esc(err.message)})，請直接下載。</p>
-        <div class="btn-row"><a href="${api.filesDownloadURL(path)}">下載檔案</a></div>
+        <div class="panel-header"><strong>${esc(basename(path))}</strong><button type="button" data-panel-close>${esc(t("files.close"))}</button></div>
+        <p class="hint">${esc(t("files.previewUnavailable", { msg: err.message }))}</p>
+        <div class="btn-row"><a href="${api.filesDownloadURL(path)}">${esc(t("files.downloadFile"))}</a></div>
       </div>
     `;
     panel.querySelector("[data-panel-close]").addEventListener("click", () => { panel.innerHTML = ""; });
@@ -613,7 +640,7 @@ async function openFilePreview(root, path) {
 
 async function renameItem(root, path) {
   const oldName = basename(path);
-  const newName = prompt("新名稱:", oldName);
+  const newName = prompt(t("files.renamePrompt"), oldName);
   if (!newName || newName === oldName) return;
   try {
     await api.filesMove(path, joinPath(dirname(path), newName));
@@ -625,10 +652,10 @@ async function renameItem(root, path) {
 
 async function moveOrCopySelected(root, kind) {
   if (filesState.selected.size === 0) {
-    showFilesMsg(root, "warn", "請先勾選要處理的項目。");
+    showFilesMsg(root, "warn", t("files.selectItemsFirst"));
     return;
   }
-  const dest = prompt(`要${kind === "move" ? "搬移" : "複製"}到哪個資料夾?(相對於根目錄的路徑，留空代表根目錄)`, filesState.path);
+  const dest = prompt(kind === "move" ? t("files.moveDestPrompt") : t("files.copyDestPrompt"), filesState.path);
   if (dest === null) return;
   const op = kind === "move" ? api.filesMove : api.filesCopy;
   const errors = [];
@@ -640,13 +667,13 @@ async function moveOrCopySelected(root, kind) {
     }
   }
   if (errors.length) showFilesMsg(root, "error", errors.join("；"));
-  else showFilesMsg(root, "ok", `${kind === "move" ? "搬移" : "複製"}完成。`);
+  else showFilesMsg(root, "ok", kind === "move" ? t("files.moveDone") : t("files.copyDone"));
   await loadFilesList(root);
 }
 
 function downloadSelected(root) {
   if (filesState.selected.size === 0) {
-    showFilesMsg(root, "warn", "請先勾選要下載的項目。");
+    showFilesMsg(root, "warn", t("files.selectItemsToDownload"));
     return;
   }
   const rows = root.querySelectorAll("#files-tbody tr[data-path]");
@@ -669,10 +696,10 @@ function downloadSelected(root) {
 
 async function deleteSelected(root) {
   if (filesState.selected.size === 0) {
-    showFilesMsg(root, "warn", "請先勾選要刪除的項目。");
+    showFilesMsg(root, "warn", t("files.selectItemsToDelete"));
     return;
   }
-  if (!confirm(`確定要刪除選取的 ${filesState.selected.size} 個項目嗎?會先進回收桶，可以之後復原。`)) return;
+  if (!confirm(t("files.deleteConfirm", { n: filesState.selected.size }))) return;
   const errors = [];
   for (const path of filesState.selected) {
     try {
@@ -682,7 +709,7 @@ async function deleteSelected(root) {
     }
   }
   if (errors.length) showFilesMsg(root, "error", errors.join("；"));
-  else showFilesMsg(root, "ok", "已刪除，可以在下面的回收桶復原。");
+  else showFilesMsg(root, "ok", t("files.deleteDone"));
   await loadFilesList(root);
   await loadTrash(root);
 }
@@ -691,15 +718,15 @@ async function uploadFiles(root, fileList) {
   const formData = new FormData();
   for (const f of fileList) formData.append("file", f);
 
-  showFilesMsg(root, "ok", `上傳中… 0%`);
+  showFilesMsg(root, "ok", t("files.uploading", { pct: 0 }));
   try {
     await api.filesUpload(filesState.path, formData, (fraction) => {
-      showFilesMsg(root, "ok", `上傳中… ${Math.round(fraction * 100)}%`);
+      showFilesMsg(root, "ok", t("files.uploading", { pct: Math.round(fraction * 100) }));
     });
-    showFilesMsg(root, "ok", "上傳完成。");
+    showFilesMsg(root, "ok", t("files.uploadDone"));
     await loadFilesList(root);
   } catch (err) {
-    showFilesMsg(root, "error", "上傳失敗:" + err.message);
+    showFilesMsg(root, "error", t("files.uploadFailed", { msg: err.message }));
   }
 }
 
@@ -708,20 +735,20 @@ async function loadTrash(root) {
   try {
     const trash = await api.filesTrashList();
     if (!trash.length) {
-      list.innerHTML = `<p class="empty-state">回收桶是空的。</p>`;
+      list.innerHTML = `<p class="empty-state">${esc(t("files.trashEmpty"))}</p>`;
       return;
     }
-    list.innerHTML = trash.map((t) => `
-      <div class="rule-row" data-trash-id="${esc(t.id)}">
+    list.innerHTML = trash.map((t2) => `
+      <div class="rule-row" data-trash-id="${esc(t2.id)}">
         <div class="rule-main">
           <div>
-            <div class="rule-name">${esc(t.name)}${t.isDir ? "/" : ""}</div>
-            <div class="rule-cond">原始位置:${esc(t.originalPath)} · 刪除於 ${esc(formatDateTime(t.deletedAt))}${t.isDir ? "" : " · " + esc(formatBytes(t.size))}</div>
+            <div class="rule-name">${esc(t2.name)}${t2.isDir ? "/" : ""}</div>
+            <div class="rule-cond">${esc(t("files.trashOriginalPath", { path: t2.originalPath, time: formatDateTime(t2.deletedAt) }))}${t2.isDir ? "" : " · " + esc(formatBytes(t2.size))}</div>
           </div>
         </div>
         <div class="btn-row" style="margin:0">
-          <button type="button" class="secondary" data-restore="${esc(t.id)}">復原</button>
-          <button type="button" class="danger" data-purge="${esc(t.id)}">永久刪除</button>
+          <button type="button" class="secondary" data-restore="${esc(t2.id)}">${esc(t("files.restore"))}</button>
+          <button type="button" class="danger" data-purge="${esc(t2.id)}">${esc(t("files.purge"))}</button>
         </div>
       </div>
     `).join("");
@@ -739,7 +766,7 @@ async function loadTrash(root) {
     });
     list.querySelectorAll("[data-purge]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm("確定要永久刪除這個項目嗎?沒辦法復原。")) return;
+        if (!confirm(t("files.purgeConfirm"))) return;
         try {
           await api.filesTrashDeleteItem(btn.dataset.purge);
           await loadTrash(root);
@@ -762,69 +789,69 @@ async function renderApps(el) {
   ]);
 
   el.innerHTML = `
-    <h1>應用程式</h1>
-    <p class="page-subtitle">用 Docker 容器安裝與管理服務。多容器的 App 會自動建立專屬的共用網路。</p>
-    ${!dockerStatus.available ? msg("warn", "Docker 無法連線,無法安裝或管理應用程式:" + (dockerStatus.error || "")) : ""}
+    <h1>${esc(t("apps.title"))}</h1>
+    <p class="page-subtitle">${esc(t("apps.subtitle"))}</p>
+    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: dockerStatus.error || "" })) : ""}
 
     <div class="card">
-      <h2>已安裝(${installed.length})</h2>
+      <h2>${esc(t("apps.installed", { n: installed.length }))}</h2>
       ${installed.length ? installed.map((app) => `
         <div class="app-card">
           <div class="app-card-main">
             <div>
               <h3>${esc(app.template.name)}</h3>
-              <p>${esc(app.template.description || "")}</p>
+              <p>${esc(translateNotice(app.template.description || ""))}</p>
             </div>
-            <button class="danger" data-uninstall="${esc(app.template.id)}">解除安裝</button>
+            <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
           </div>
           <div class="services">
             ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => `
               <div class="service-row">
                 <span>${esc(svc)}: ${esc(id.slice(0, 12))}</span>
-                <button type="button" data-logs-toggle="${esc(id)}">查看 Log</button>
-                <button type="button" data-exec-toggle="${esc(id)}">執行指令</button>
+                <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
+                <button type="button" data-exec-toggle="${esc(id)}">${esc(t("apps.execCmd"))}</button>
               </div>
               <div class="service-panel" id="panel-${esc(id)}" hidden></div>
             `).join("")}
           </div>
         </div>
-      `).join("") : `<p class="empty-state">還沒有安裝任何應用程式。</p>`}
+      `).join("") : `<p class="empty-state">${esc(t("apps.noneInstalled"))}</p>`}
     </div>
 
     <div class="card">
-      <h2>商店目錄</h2>
+      <h2>${esc(t("apps.catalog"))}</h2>
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl)).join("")}
     </div>
 
     <div class="card">
-      <h2>自訂安裝</h2>
-      <p class="hint">不透過上面的商店目錄,直接指定任意 image 安裝一個容器(對應 Docker Hub 或其他 registry 上的任何映像檔,或這台機器上已經存在的本機映像檔)。</p>
+      <h2>${esc(t("apps.customInstall"))}</h2>
+      <p class="hint">${esc(t("apps.customInstallHint"))}</p>
       <div id="custom-install-msg"></div>
       <form class="stacked" id="custom-install-form">
-        <div class="field"><label>App ID(英數字/連字號,用於容器與網路命名,安裝後不能改)</label><input type="text" name="id" pattern="[a-z0-9][a-z0-9\\-]*" placeholder="my-app" required></div>
-        <div class="field"><label>名稱</label><input type="text" name="name" required></div>
-        <div class="field"><label>說明(選填)</label><input type="text" name="description"></div>
-        <div class="field"><label>Image</label><input type="text" name="image" placeholder="nginx:latest" required></div>
+        <div class="field"><label>${esc(t("apps.appId"))}</label><input type="text" name="id" pattern="[a-z0-9][a-z0-9\\-]*" placeholder="my-app" required></div>
+        <div class="field"><label>${esc(t("apps.name"))}</label><input type="text" name="name" required></div>
+        <div class="field"><label>${esc(t("apps.description"))}</label><input type="text" name="description"></div>
+        <div class="field"><label>${esc(t("apps.image"))}</label><input type="text" name="image" placeholder="nginx:latest" required></div>
         <div class="field">
-          <label>埠對應(選填,每行一個,格式 host:container,可加 /udp,例如 8080:80)</label>
+          <label>${esc(t("apps.ports"))}</label>
           <textarea name="ports" rows="2" placeholder="8080:80"></textarea>
         </div>
         <div class="field">
-          <label>掛載路徑(選填,每行一個,格式 host路徑:容器路徑,可加 :ro 唯讀)</label>
+          <label>${esc(t("apps.volumes"))}</label>
           <textarea name="volumes" rows="2" placeholder="/mnt/tank/appdata/my-app:/data"></textarea>
         </div>
         <div class="field">
-          <label>環境變數(選填,每行一個,格式 KEY=VALUE)</label>
+          <label>${esc(t("apps.env"))}</label>
           <textarea name="env" rows="2" placeholder="TZ=Asia/Taipei"></textarea>
         </div>
-        <div class="btn-row"><button type="submit">安裝</button></div>
+        <div class="btn-row"><button type="submit">${esc(t("apps.install"))}</button></div>
       </form>
     </div>
   `;
 
   el.querySelectorAll("[data-uninstall]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm(`確定要解除安裝「${btn.closest(".app-card").querySelector("h3").textContent}」嗎?`)) return;
+      if (!confirm(t("apps.uninstallConfirm", { name: btn.closest(".app-card").querySelector("h3").textContent }))) return;
       try {
         await api.uninstallApp(btn.dataset.uninstall);
         await renderApps(el);
@@ -866,7 +893,7 @@ async function renderApps(el) {
       const box = form.querySelector(".install-msg");
       try {
         await api.installApp(templateId, overrides);
-        box.innerHTML = msg("ok", "安裝成功!");
+        box.innerHTML = msg("ok", t("apps.installSuccess"));
         setTimeout(() => renderApps(el), 600);
       } catch (err) {
         box.innerHTML = msg("error", err.message);
@@ -900,7 +927,7 @@ async function renderApps(el) {
       }
       try {
         await api.installCustomApp(template);
-        box.innerHTML = msg("ok", "安裝成功!");
+        box.innerHTML = msg("ok", t("apps.installSuccess"));
         setTimeout(() => renderApps(el), 600);
       } catch (err) {
         box.innerHTML = msg("error", err.message);
@@ -919,13 +946,13 @@ async function showContainerLogsPanel(el, containerID) {
   const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
   if (!panel) return;
   panel.hidden = false;
-  panel.innerHTML = `<div class="panel-header"><strong>Log(最後 200 行)</strong><button type="button" data-panel-close>關閉</button></div><pre class="log-output">載入中…</pre>`;
+  panel.innerHTML = `<div class="panel-header"><strong>${esc(t("apps.logsTitle"))}</strong><button type="button" data-panel-close>${esc(t("common.close"))}</button></div><pre class="log-output">${esc(t("common.loading"))}</pre>`;
   wirePanelClose(panel);
   try {
     const { logs } = await api.containerLogs(containerID, "200");
-    panel.querySelector(".log-output").textContent = logs || "(這個容器目前沒有任何 log 輸出)";
+    panel.querySelector(".log-output").textContent = logs || t("apps.logsEmpty");
   } catch (err) {
-    panel.querySelector(".log-output").textContent = "讀取 log 失敗:" + err.message;
+    panel.querySelector(".log-output").textContent = t("apps.logsFailed", { msg: err.message });
   }
 }
 
@@ -934,11 +961,11 @@ function showContainerExecPanel(el, containerID) {
   if (!panel) return;
   panel.hidden = false;
   panel.innerHTML = `
-    <div class="panel-header"><strong>在容器裡執行一次指令</strong><button type="button" data-panel-close>關閉</button></div>
-    <p class="hint">等同 <code>docker exec</code>,指令跑完才會顯示結果,不是持續連線的終端機。用空白分隔參數,例如 <code>cat /etc/os-release</code>。</p>
+    <div class="panel-header"><strong>${esc(t("apps.execTitle"))}</strong><button type="button" data-panel-close>${esc(t("common.close"))}</button></div>
+    <p class="hint">${t("apps.execHint")}</p>
     <form class="exec-form">
       <input type="text" name="cmd" placeholder="ls -la /data" required>
-      <button type="submit">執行</button>
+      <button type="submit">${esc(t("apps.execRun"))}</button>
     </form>
     <pre class="log-output" hidden></pre>
   `;
@@ -950,12 +977,12 @@ function showContainerExecPanel(el, containerID) {
     const raw = new FormData(form).get("cmd").trim();
     if (!raw) return;
     output.hidden = false;
-    output.textContent = "執行中…";
+    output.textContent = t("apps.execRunning");
     try {
       const result = await api.containerExec(containerID, raw.split(/\s+/));
-      output.textContent = `結束碼:${result.exitCode}\n\n${result.output || "(沒有任何輸出)"}`;
+      output.textContent = t("apps.execResult", { code: result.exitCode, output: result.output || t("apps.execEmptyOutput") });
     } catch (err) {
-      output.textContent = "執行失敗:" + err.message;
+      output.textContent = t("apps.execFailed", { msg: err.message });
     }
   });
 }
@@ -981,7 +1008,7 @@ function cssEscape(id) {
 function parsePortLines(text) {
   return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
     const m = line.match(/^(\d+):(\d+)(\/(tcp|udp))?$/i);
-    if (!m) throw new Error(`埠對應格式錯誤:「${line}」,應為 host:container 或 host:container/udp`);
+    if (!m) throw new Error(t("apps.portFormatError", { line }));
     return { hostPort: Number(m[1]), containerPort: Number(m[2]), protocol: (m[4] || "").toLowerCase() || undefined };
   });
 }
@@ -990,11 +1017,11 @@ function parseVolumeLines(text) {
   return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
     const parts = line.split(":");
     if (parts.length < 2 || parts.length > 3) {
-      throw new Error(`掛載路徑格式錯誤:「${line}」,應為 host路徑:容器路徑 或 host路徑:容器路徑:ro`);
+      throw new Error(t("apps.volumeFormatError", { line }));
     }
     const readOnly = parts[2] === "ro";
     if (parts.length === 3 && !readOnly) {
-      throw new Error(`掛載路徑格式錯誤:「${line}」,第三段只接受 ro`);
+      throw new Error(t("apps.volumeFormatErrorRO", { line }));
     }
     return { hostPath: parts[0], containerPath: parts[1], readOnly };
   });
@@ -1003,7 +1030,7 @@ function parseVolumeLines(text) {
 function parseEnvLines(text) {
   return (text || "").split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
     const idx = line.indexOf("=");
-    if (idx <= 0) throw new Error(`環境變數格式錯誤:「${line}」,應為 KEY=VALUE`);
+    if (idx <= 0) throw new Error(t("apps.envFormatError", { line }));
     return { key: line.slice(0, idx), default: line.slice(idx + 1) };
   });
 }
@@ -1012,13 +1039,13 @@ function renderCatalogEntry(tmpl) {
   const fields = tmpl.services.flatMap((svc) => {
     const env = (svc.env || []).map((e) => `
       <div class="field">
-        <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? " (必填)" : ""}</label>
+        <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? esc(t("apps.required")) : ""}</label>
         <input type="${/pass/i.test(e.key) ? "password" : "text"}" name="${esc(svc.name)}.env.${esc(e.key)}" placeholder="${esc(e.default || "")}" ${e.required ? "required" : ""}>
-        ${e.description ? `<div class="hint">${esc(e.description)}</div>` : ""}
+        ${e.description ? `<div class="hint">${esc(translateNotice(e.description))}</div>` : ""}
       </div>`);
     const vol = (svc.volumes || []).map((v) => `
       <div class="field">
-        <label>${esc(svc.name)} · 掛載路徑(對應容器內 ${esc(v.containerPath)})</label>
+        <label>${t("apps.volumeLabel", { svc: esc(svc.name), path: esc(v.containerPath) })}</label>
         <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" placeholder="/mnt/tank/appdata/${esc(tmpl.id)}" required>
       </div>`);
     return [...env, ...vol];
@@ -1028,15 +1055,15 @@ function renderCatalogEntry(tmpl) {
     <div class="app-card">
       <div>
         <h3>${esc(tmpl.name)}</h3>
-        <p>${esc(tmpl.description || "")}</p>
+        <p>${esc(translateNotice(tmpl.description || ""))}</p>
         <div class="services">${tmpl.services.map((s) => esc(s.image)).join(" · ")}</div>
       </div>
-      <button class="secondary" data-toggle-install="${esc(tmpl.id)}">安裝</button>
+      <button class="secondary" data-toggle-install="${esc(tmpl.id)}">${esc(t("apps.install"))}</button>
     </div>
     <form class="install-form" id="install-form-${esc(tmpl.id)}" data-install="${esc(tmpl.id)}">
       <div class="install-msg"></div>
       ${fields.join("")}
-      <div class="btn-row"><button type="submit">確認安裝</button></div>
+      <div class="btn-row"><button type="submit">${esc(t("apps.confirmInstall"))}</button></div>
     </form>
   `;
 }
@@ -1044,57 +1071,57 @@ function renderCatalogEntry(tmpl) {
 // ---------- 共享 ----------
 
 async function renderShares(el) {
-  const [shares, exports] = await Promise.all([api.shares().catch(() => []), api.exports().catch(() => [])]);
+  const [shares, exportsList] = await Promise.all([api.shares().catch(() => []), api.exports().catch(() => [])]);
 
   el.innerHTML = `
-    <h1>共享</h1>
-    <p class="page-subtitle">SMB(Windows/macOS)與 NFS(Linux)檔案共享。</p>
+    <h1>${esc(t("shares.title"))}</h1>
+    <p class="page-subtitle">${esc(t("shares.subtitle"))}</p>
 
     <div class="card">
-      <h2>SMB 共享</h2>
+      <h2>${esc(t("shares.smbShares"))}</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名稱</th><th>路徑</th><th>唯讀</th><th>允許訪客</th><th></th></tr></thead>
+          <thead><tr><th>${esc(t("shares.colName"))}</th><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colReadOnly"))}</th><th>${esc(t("shares.colGuest"))}</th><th></th></tr></thead>
           <tbody>
             ${shares.length ? shares.map((s) => `
               <tr>
                 <td>${esc(s.name)}</td><td><code>${esc(s.path)}</code></td>
-                <td>${s.readOnly ? "是" : "否"}</td><td>${s.guestOk ? "是" : "否"}</td>
-                <td><button class="secondary" data-del-share="${esc(s.name)}">刪除</button></td>
-              </tr>`).join("") : `<tr><td colspan="5" class="empty-state">還沒有設定共享</td></tr>`}
+                <td>${s.readOnly ? esc(t("shares.yes")) : esc(t("shares.no"))}</td><td>${s.guestOk ? esc(t("shares.yes")) : esc(t("shares.no"))}</td>
+                <td><button class="secondary" data-del-share="${esc(s.name)}">${esc(t("common.delete"))}</button></td>
+              </tr>`).join("") : `<tr><td colspan="5" class="empty-state">${esc(t("shares.noShares"))}</td></tr>`}
           </tbody>
         </table>
       </div>
       <div id="share-msg"></div>
       <form class="stacked" id="share-form" style="margin-top:16px">
-        <div class="field"><label>名稱</label><input type="text" name="name" required></div>
-        <div class="field"><label>路徑</label><input type="text" name="path" placeholder="/mnt/tank/media" required></div>
-        <div class="field"><label>備註</label><input type="text" name="comment"></div>
-        <div class="checkbox-row"><label><input type="checkbox" name="readOnly"> 唯讀</label></div>
-        <div class="checkbox-row"><label><input type="checkbox" name="guestOk"> 允許訪客(匿名)存取</label></div>
-        <div class="field"><label>允許的使用者(逗號分隔,留空代表沿用全域設定)</label><input type="text" name="validUsers" placeholder="alice, bob"></div>
-        <div class="btn-row"><button type="submit">新增共享</button></div>
+        <div class="field"><label>${esc(t("shares.name"))}</label><input type="text" name="name" required></div>
+        <div class="field"><label>${esc(t("shares.path"))}</label><input type="text" name="path" placeholder="/mnt/tank/media" required></div>
+        <div class="field"><label>${esc(t("shares.comment"))}</label><input type="text" name="comment"></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="readOnly"> ${esc(t("shares.readOnly"))}</label></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="guestOk"> ${esc(t("shares.guestOk"))}</label></div>
+        <div class="field"><label>${esc(t("shares.validUsers"))}</label><input type="text" name="validUsers" placeholder="alice, bob"></div>
+        <div class="btn-row"><button type="submit">${esc(t("shares.addShare"))}</button></div>
       </form>
     </div>
 
     <div class="card">
-      <h2>NFS 匯出</h2>
+      <h2>${esc(t("shares.nfsExports"))}</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>路徑</th><th>用戶端規則</th></tr></thead>
+          <thead><tr><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colClientRules"))}</th></tr></thead>
           <tbody>
-            ${exports.length ? exports.map((e) => `
+            ${exportsList.length ? exportsList.map((e) => `
               <tr><td><code>${esc(e.path)}</code></td><td>${(e.clients || []).map((c) => `${esc(c.cidr || "*")}(${(c.options || []).join(",")})`).join(", ")}</td></tr>
-            `).join("") : `<tr><td colspan="2" class="empty-state">還沒有設定 NFS 匯出</td></tr>`}
+            `).join("") : `<tr><td colspan="2" class="empty-state">${esc(t("shares.noExports"))}</td></tr>`}
           </tbody>
         </table>
       </div>
       <div id="export-msg"></div>
       <form class="stacked" id="export-form" style="margin-top:16px">
-        <div class="field"><label>路徑</label><input type="text" name="path" placeholder="/mnt/tank/media" required></div>
-        <div class="field"><label>允許的網段(CIDR)</label><input type="text" name="cidr" placeholder="192.168.1.0/24" required></div>
-        <div class="field"><label>選項(逗號分隔)</label><input type="text" name="options" value="rw,sync,no_subtree_check" required></div>
-        <div class="btn-row"><button type="submit">新增匯出</button></div>
+        <div class="field"><label>${esc(t("shares.path"))}</label><input type="text" name="path" placeholder="/mnt/tank/media" required></div>
+        <div class="field"><label>${esc(t("shares.cidr"))}</label><input type="text" name="cidr" placeholder="192.168.1.0/24" required></div>
+        <div class="field"><label>${esc(t("shares.options"))}</label><input type="text" name="options" value="rw,sync,no_subtree_check" required></div>
+        <div class="btn-row"><button type="submit">${esc(t("shares.addExport"))}</button></div>
       </form>
     </div>
   `;
@@ -1120,7 +1147,7 @@ async function renderShares(el) {
     const box = el.querySelector("#share-msg");
     try {
       const res = await api.createShare(share);
-      box.innerHTML = res.applied ? msg("ok", "共享已新增並套用。") : msg("warn", "共享已存起來,但套用失敗:" + (res.warning || ""));
+      box.innerHTML = res.applied ? msg("ok", t("shares.shareAdded")) : msg("warn", t("shares.shareAddedWarn", { warn: res.warning || "" }));
       await renderShares(el);
     } catch (err) { box.innerHTML = msg("error", err.message); }
   });
@@ -1135,7 +1162,7 @@ async function renderShares(el) {
     const box = el.querySelector("#export-msg");
     try {
       const res = await api.createExport(exp);
-      box.innerHTML = res.applied ? msg("ok", "匯出已新增並套用。") : msg("warn", "匯出已存起來,但套用失敗:" + (res.warning || ""));
+      box.innerHTML = res.applied ? msg("ok", t("shares.exportAdded")) : msg("warn", t("shares.exportAddedWarn", { warn: res.warning || "" }));
       await renderShares(el);
     } catch (err) { box.innerHTML = msg("error", err.message); }
   });
@@ -1147,35 +1174,35 @@ async function renderUsers(el) {
   const users = await api.users().catch(() => []);
 
   el.innerHTML = `
-    <h1>使用者</h1>
-    <p class="page-subtitle">帳號同時是系統帳號與 Samba 帳號,沒有互動式登入殼層 —— 純粹是檔案共享的身份。</p>
+    <h1>${esc(t("users.title"))}</h1>
+    <p class="page-subtitle">${esc(t("users.subtitle"))}</p>
 
     <div class="card">
-      <h2>帳號(${users.length})</h2>
+      <h2>${esc(t("users.accounts", { n: users.length }))}</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>使用者名稱</th><th>備註</th><th></th></tr></thead>
+          <thead><tr><th>${esc(t("users.colUsername"))}</th><th>${esc(t("users.colComment"))}</th><th></th></tr></thead>
           <tbody>
             ${users.length ? users.map((u) => `
               <tr><td>${esc(u.username)}</td><td>${esc(u.comment || "—")}</td>
-              <td><button class="secondary" data-del-user="${esc(u.username)}">刪除</button></td></tr>
-            `).join("") : `<tr><td colspan="3" class="empty-state">還沒有建立使用者</td></tr>`}
+              <td><button class="secondary" data-del-user="${esc(u.username)}">${esc(t("common.delete"))}</button></td></tr>
+            `).join("") : `<tr><td colspan="3" class="empty-state">${esc(t("users.noUsers"))}</td></tr>`}
           </tbody>
         </table>
       </div>
       <div id="user-msg"></div>
       <form class="stacked" id="user-form" style="margin-top:16px">
-        <div class="field"><label>使用者名稱</label><input type="text" name="username" placeholder="alice" required></div>
-        <div class="field"><label>備註</label><input type="text" name="comment" placeholder="Alice Chen"></div>
-        <div class="field"><label>密碼</label><input type="password" name="password" required></div>
-        <div class="btn-row"><button type="submit">建立使用者</button></div>
+        <div class="field"><label>${esc(t("users.username"))}</label><input type="text" name="username" placeholder="alice" required></div>
+        <div class="field"><label>${esc(t("users.comment"))}</label><input type="text" name="comment" placeholder="Alice Chen"></div>
+        <div class="field"><label>${esc(t("users.password"))}</label><input type="password" name="password" required></div>
+        <div class="btn-row"><button type="submit">${esc(t("users.createUser"))}</button></div>
       </form>
     </div>
   `;
 
   el.querySelectorAll("[data-del-user]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm(`確定要刪除使用者「${btn.dataset.delUser}」嗎?`)) return;
+      if (!confirm(t("users.deleteConfirm", { name: btn.dataset.delUser }))) return;
       try { await api.deleteUser(btn.dataset.delUser); await renderUsers(el); }
       catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", err.message)); }
     });
@@ -1187,7 +1214,7 @@ async function renderUsers(el) {
     const box = el.querySelector("#user-msg");
     try {
       const res = await api.createUser({ username: f.get("username").trim(), comment: f.get("comment").trim(), password: f.get("password") });
-      box.innerHTML = res.sambaWarning ? msg("warn", "使用者已建立,但 " + res.sambaWarning) : msg("ok", "使用者已建立。");
+      box.innerHTML = res.sambaWarning ? msg("warn", t("users.userCreatedWarn", { warn: res.sambaWarning })) : msg("ok", t("users.userCreated"));
       await renderUsers(el);
     } catch (err) { box.innerHTML = msg("error", err.message); }
   });
@@ -1195,14 +1222,15 @@ async function renderUsers(el) {
 
 // ---------- 監控 ----------
 
-const METRIC_LABELS = {
-  cpuPercent: "CPU 使用率",
-  memPercent: "記憶體使用率",
-  diskPercent: "磁碟使用率",
-  arrayFailed: "陣列狀態變成 failed",
-  smartFailed: "任一顆碟 SMART 檢查沒過",
+const METRIC_KEYS = {
+  cpuPercent: "monitor.metricCpuPercent",
+  memPercent: "monitor.metricMemPercent",
+  diskPercent: "monitor.metricDiskPercent",
+  arrayFailed: "monitor.metricArrayFailed",
+  smartFailed: "monitor.metricSmartFailed",
 };
-const COMPARATOR_LABELS = { ">": ">", ">=": "≥", "<": "<", "<=": "≤" };
+const COMPARATOR_KEYS = { ">": "monitor.gt", ">=": "monitor.gte", "<": "monitor.lt", "<=": "monitor.lte" };
+const COMPARATOR_SYMBOLS = { ">": ">", ">=": "≥", "<": "<", "<=": "≤" };
 
 function isBooleanMetric(metric) {
   return metric === "arrayFailed" || metric === "smartFailed";
@@ -1217,67 +1245,67 @@ async function renderMonitor(el) {
   ]);
 
   el.innerHTML = `
-    <h1>監控</h1>
-    <p class="page-subtitle">每 ${MONITOR_POLL_SECONDS} 秒在背景取樣一次系統資源;告警規則觸發或解除時,會寫進 daemon 的 log,也會送到下面設定的通知管道。</p>
+    <h1>${esc(t("monitor.title"))}</h1>
+    <p class="page-subtitle">${esc(t("monitor.subtitle", { n: MONITOR_POLL_SECONDS }))}</p>
 
     <div class="grid">
-      ${statTile("CPU 使用率", formatPercent(system && system.cpuPercent), percentClass(system && system.cpuPercent))}
-      ${statTile("記憶體使用率", formatPercent(system && system.memPercent), percentClass(system && system.memPercent))}
-      ${statTile("磁碟使用率", formatPercent(system && system.diskPercent), percentClass(system && system.diskPercent))}
-      ${statTile("執行時間", system ? formatUptime(system.uptimeSeconds) : "—", "")}
+      ${statTile(t("monitor.cpuUsage"), formatPercent(system && system.cpuPercent), percentClass(system && system.cpuPercent))}
+      ${statTile(t("monitor.memUsage"), formatPercent(system && system.memPercent), percentClass(system && system.memPercent))}
+      ${statTile(t("monitor.diskUsage"), formatPercent(system && system.diskPercent), percentClass(system && system.diskPercent))}
+      ${statTile(t("monitor.uptime"), system ? formatUptime(system.uptimeSeconds) : "—", "")}
     </div>
 
     <div class="card chart-card">
-      <h2>最近趨勢</h2>
-      ${history.length < 2 ? `<p class="empty-state">取樣資料還不夠畫圖,daemon 剛啟動時需要等一小段時間累積。</p>` : `<canvas id="monitor-chart"></canvas>`}
+      <h2>${esc(t("monitor.recentTrend"))}</h2>
+      ${history.length < 2 ? `<p class="empty-state">${esc(t("monitor.notEnoughData"))}</p>` : `<canvas id="monitor-chart"></canvas>`}
       <div class="chart-legend">
-        <span><span class="swatch" style="background:var(--accent)"></span>CPU</span>
-        <span><span class="swatch" style="background:var(--warn)"></span>記憶體</span>
-        <span><span class="swatch" style="background:var(--ok)"></span>磁碟${system ? `(${esc(system.diskPath)})` : ""}</span>
+        <span><span class="swatch" style="background:var(--accent)"></span>${esc(t("monitor.legendCpu"))}</span>
+        <span><span class="swatch" style="background:var(--warn)"></span>${esc(t("monitor.legendMem"))}</span>
+        <span><span class="swatch" style="background:var(--ok)"></span>${esc(t("monitor.legendDisk", { path: system ? `(${system.diskPath})` : "" }))}</span>
       </div>
     </div>
 
     <div class="card">
-      <h2>告警規則(${rules.length})</h2>
-      ${rules.length ? rules.map((r) => renderRuleRow(r)).join("") : `<p class="empty-state">還沒有設定告警規則。</p>`}
+      <h2>${esc(t("monitor.alertRules", { n: rules.length }))}</h2>
+      ${rules.length ? rules.map((r) => renderRuleRow(r)).join("") : `<p class="empty-state">${esc(t("monitor.noRules"))}</p>`}
       <div id="rule-msg"></div>
       <form class="stacked" id="rule-form" style="margin-top:16px">
-        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="CPU 過載" required></div>
+        <div class="field"><label>${esc(t("monitor.ruleName"))}</label><input type="text" name="name" placeholder="${esc(t("monitor.ruleNamePlaceholder"))}" required></div>
         <div class="field">
-          <label>指標</label>
+          <label>${esc(t("monitor.metric"))}</label>
           <select name="metric" id="rule-metric">
-            <option value="cpuPercent">CPU 使用率(%)</option>
-            <option value="memPercent">記憶體使用率(%)</option>
-            <option value="diskPercent">磁碟使用率(%)</option>
-            <option value="arrayFailed">陣列狀態變成 failed</option>
-            <option value="smartFailed">任一顆碟 SMART 檢查沒過</option>
+            <option value="cpuPercent">${esc(t("monitor.metricCpuPercent"))}</option>
+            <option value="memPercent">${esc(t("monitor.metricMemPercent"))}</option>
+            <option value="diskPercent">${esc(t("monitor.metricDiskPercent"))}</option>
+            <option value="arrayFailed">${esc(t("monitor.metricArrayFailed"))}</option>
+            <option value="smartFailed">${esc(t("monitor.metricSmartFailed"))}</option>
           </select>
         </div>
         <div class="field" id="rule-comparator-field">
-          <label>比較方式</label>
+          <label>${esc(t("monitor.comparator"))}</label>
           <select name="comparator">
-            <option value=">">大於</option>
-            <option value=">=">大於等於</option>
-            <option value="<">小於</option>
-            <option value="<=">小於等於</option>
+            <option value=">">${esc(t("monitor.gt"))}</option>
+            <option value=">=">${esc(t("monitor.gte"))}</option>
+            <option value="<">${esc(t("monitor.lt"))}</option>
+            <option value="<=">${esc(t("monitor.lte"))}</option>
           </select>
         </div>
-        <div class="field" id="rule-threshold-field"><label>門檻值</label><input type="number" name="threshold" value="90" step="0.1"></div>
-        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用</label></div>
-        <div class="btn-row"><button type="submit">新增規則</button></div>
+        <div class="field" id="rule-threshold-field"><label>${esc(t("monitor.threshold"))}</label><input type="number" name="threshold" value="90" step="0.1"></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
+        <div class="btn-row"><button type="submit">${esc(t("monitor.addRule"))}</button></div>
       </form>
     </div>
 
     <div class="card">
-      <h2>通知管道(${notifiers.length})</h2>
-      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">告警一律會寫進 daemon 的 log;下面可以額外加 webhook 端點,規則觸發或解除時會 POST 一份 JSON 過去。</p>
-      ${notifiers.length ? notifiers.map((n) => renderNotifierRow(n)).join("") : `<p class="empty-state">還沒有設定額外的通知管道。</p>`}
+      <h2>${esc(t("monitor.notifiers", { n: notifiers.length }))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.notifiersHint"))}</p>
+      ${notifiers.length ? notifiers.map((n) => renderNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noNotifiers"))}</p>`}
       <div id="notifier-msg"></div>
       <form class="stacked" id="notifier-form" style="margin-top:16px">
-        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="Slack" required></div>
-        <div class="field"><label>Webhook URL</label><input type="text" name="url" placeholder="https://example.com/hook" required></div>
-        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用</label></div>
-        <div class="btn-row"><button type="submit">新增通知管道</button></div>
+        <div class="field"><label>${esc(t("monitor.notifierName"))}</label><input type="text" name="name" placeholder="Slack" required></div>
+        <div class="field"><label>${esc(t("monitor.webhookUrl"))}</label><input type="text" name="url" placeholder="https://example.com/hook" required></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
+        <div class="btn-row"><button type="submit">${esc(t("monitor.addNotifier"))}</button></div>
       </form>
     </div>
   `;
@@ -1323,7 +1351,7 @@ async function renderMonitor(el) {
     const box = el.querySelector("#rule-msg");
     try {
       await api.createAlertRule(rule);
-      box.innerHTML = msg("ok", "告警規則已新增。");
+      box.innerHTML = msg("ok", t("monitor.ruleAdded"));
       await renderMonitor(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -1348,7 +1376,7 @@ async function renderMonitor(el) {
     const box = el.querySelector("#notifier-msg");
     try {
       await api.createNotifier(notifier);
-      box.innerHTML = msg("ok", "通知管道已新增。");
+      box.innerHTML = msg("ok", t("monitor.notifierAdded"));
       await renderMonitor(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -1369,20 +1397,20 @@ function percentClass(v) {
 
 function renderRuleRow(r) {
   const boolean = isBooleanMetric(r.metric);
-  const metricLabel = METRIC_LABELS[r.metric] || r.metric;
-  const cond = boolean ? metricLabel : `${metricLabel} ${COMPARATOR_LABELS[r.comparator] || r.comparator} ${r.threshold}`;
+  const metricLabel = t(METRIC_KEYS[r.metric] || "") || r.metric;
+  const cond = boolean ? metricLabel : `${metricLabel} ${COMPARATOR_SYMBOLS[r.comparator] || r.comparator} ${r.threshold}`;
   const statusCls = !r.enabled ? "neutral" : r.firing ? "danger" : "ok";
-  const statusText = !r.enabled ? "已停用" : r.firing ? "觸發中" : "監控中";
+  const statusText = !r.enabled ? t("monitor.statusDisabled") : r.firing ? t("monitor.statusFiring") : t("monitor.statusMonitoring");
   return `
     <div class="rule-row">
       <div class="rule-main">
-        <span class="pill ${statusCls}">${statusText}</span>
+        <span class="pill ${statusCls}">${esc(statusText)}</span>
         <div>
           <div class="rule-name">${esc(r.name)}</div>
           <div class="rule-cond">${esc(cond)}</div>
         </div>
       </div>
-      <button class="secondary" data-del-rule="${esc(r.id)}">刪除</button>
+      <button class="secondary" data-del-rule="${esc(r.id)}">${esc(t("common.delete"))}</button>
     </div>`;
 }
 
@@ -1390,13 +1418,13 @@ function renderNotifierRow(n) {
   return `
     <div class="rule-row">
       <div class="rule-main">
-        <span class="pill ${n.enabled ? "ok" : "neutral"}">${n.enabled ? "啟用" : "停用"}</span>
+        <span class="pill ${n.enabled ? "ok" : "neutral"}">${n.enabled ? esc(t("monitor.notifierEnabled")) : esc(t("monitor.notifierDisabled"))}</span>
         <div>
           <div class="rule-name">${esc(n.name)}</div>
           <div class="rule-cond">${esc(n.url)}</div>
         </div>
       </div>
-      <button class="secondary" data-del-notifier="${esc(n.id)}">刪除</button>
+      <button class="secondary" data-del-notifier="${esc(n.id)}">${esc(t("common.delete"))}</button>
     </div>`;
 }
 
@@ -1469,18 +1497,18 @@ async function renderSecurity(el) {
   ]);
 
   el.innerHTML = `
-    <h1>安全</h1>
-    <p class="page-subtitle">管理登入密碼、兩步驟驗證、Web 介面的 HTTPS,以及 WireGuard VPN 遠端連線。</p>
+    <h1>${esc(t("security.title"))}</h1>
+    <p class="page-subtitle">${esc(t("security.subtitle"))}</p>
 
     <div class="card">
-      <h2>修改密碼</h2>
-      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">目前登入身分:<strong>${esc(me.username)}</strong>。修改成功後,其他裝置上已登入的 session 會全部失效。</p>
+      <h2>${esc(t("security.changePassword"))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("security.changePasswordHint", { username: esc(me.username) })}</p>
       <div id="password-msg"></div>
       <form class="stacked" id="password-form">
-        <div class="field"><label>目前密碼</label><input type="password" name="oldPassword" autocomplete="current-password" required></div>
-        <div class="field"><label>新密碼(至少 8 個字元)</label><input type="password" name="newPassword" minlength="8" autocomplete="new-password" required></div>
-        <div class="field"><label>確認新密碼</label><input type="password" name="confirmPassword" minlength="8" autocomplete="new-password" required></div>
-        <div class="btn-row"><button type="submit">更新密碼</button></div>
+        <div class="field"><label>${esc(t("security.oldPassword"))}</label><input type="password" name="oldPassword" autocomplete="current-password" required></div>
+        <div class="field"><label>${esc(t("security.newPassword"))}</label><input type="password" name="newPassword" minlength="8" autocomplete="new-password" required></div>
+        <div class="field"><label>${esc(t("security.confirmNewPassword"))}</label><input type="password" name="confirmPassword" minlength="8" autocomplete="new-password" required></div>
+        <div class="btn-row"><button type="submit">${esc(t("security.updatePassword"))}</button></div>
       </form>
     </div>
 
@@ -1489,26 +1517,26 @@ async function renderSecurity(el) {
     </div>
 
     <div class="card">
-      <h2>HTTPS</h2>
+      <h2>${esc(t("security.https"))}</h2>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
-        目前狀態:<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? "已啟用" : "未啟用"}</span>
-        ${https.certPath ? ` · 憑證檔案 <code>${esc(https.certPath)}</code>` : ""}
+        ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
+        ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
       </p>
-      ${https.restartRequiredNotice ? msg("warn", https.restartRequiredNotice) : ""}
+      ${https.restartRequiredNotice ? msg("warn", translateNotice(https.restartRequiredNotice)) : ""}
       <div id="https-msg"></div>
       <form class="stacked" id="https-form">
-        <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> 啟用 HTTPS</label></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> ${esc(t("security.enableHttps"))}</label></div>
         <div class="field">
-          <label>憑證主機名稱/IP(每行一個,留空預設 localhost/127.0.0.1)</label>
+          <label>${esc(t("security.certHosts"))}</label>
           <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10"></textarea>
-          <div class="hint">自簽憑證,瀏覽器第一次連線會顯示不受信任的警告,需要手動選擇繼續/信任。</div>
+          <div class="hint">${esc(t("security.certHostsHint"))}</div>
         </div>
-        <div class="btn-row"><button type="submit">儲存 HTTPS 設定</button></div>
+        <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
       </form>
     </div>
 
     <div class="card">
-      <h2>WireGuard VPN</h2>
+      <h2>${esc(t("security.vpn"))}</h2>
       ${renderVPNSection(vpnStatus, peers)}
     </div>
   `;
@@ -1525,12 +1553,12 @@ function attachPasswordFormHandlers(el) {
     const f = new FormData(ev.target);
     const box = el.querySelector("#password-msg");
     if (f.get("newPassword") !== f.get("confirmPassword")) {
-      box.innerHTML = msg("error", "兩次輸入的新密碼不一致。");
+      box.innerHTML = msg("error", t("security.newPasswordMismatch"));
       return;
     }
     try {
       await api.changePassword(f.get("oldPassword"), f.get("newPassword"));
-      box.innerHTML = msg("ok", "密碼已更新。");
+      box.innerHTML = msg("ok", t("security.passwordUpdated"));
       ev.target.reset();
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -1541,21 +1569,21 @@ function attachPasswordFormHandlers(el) {
 function renderTOTPSection(enabled) {
   if (enabled) {
     return `
-      <h2>兩步驟驗證(TOTP)</h2>
-      <p style="margin:0 0 12px"><span class="pill ok">已啟用</span></p>
+      <h2>${esc(t("security.totp"))}</h2>
+      <p style="margin:0 0 12px"><span class="pill ok">${esc(t("security.totpEnabledPill"))}</span></p>
       <div id="totp-msg"></div>
       <form class="stacked" id="totp-disable-form">
-        <div class="field"><label>目前密碼(停用前需要重新確認)</label><input type="password" name="password" autocomplete="current-password" required></div>
-        <div class="btn-row"><button type="submit" class="danger">停用兩步驟驗證</button></div>
+        <div class="field"><label>${esc(t("security.totpCurrentPassword"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
+        <div class="btn-row"><button type="submit" class="danger">${esc(t("security.totpDisable"))}</button></div>
       </form>
     `;
   }
   return `
-    <h2>兩步驟驗證(TOTP)</h2>
-    <p style="margin:0 0 12px"><span class="pill neutral">未啟用</span></p>
+    <h2>${esc(t("security.totp"))}</h2>
+    <p style="margin:0 0 12px"><span class="pill neutral">${esc(t("security.totpDisabledPill"))}</span></p>
     <div id="totp-msg"></div>
     <div id="totp-setup-area">
-      <button class="secondary" id="totp-begin-setup">設定兩步驟驗證</button>
+      <button class="secondary" id="totp-begin-setup">${esc(t("security.totpBeginSetup"))}</button>
     </div>
   `;
 }
@@ -1568,12 +1596,12 @@ function attachTOTPHandlers(el) {
       try {
         const { secret, provisioningUri } = await api.totpSetup();
         el.querySelector("#totp-setup-area").innerHTML = `
-          <p style="color:var(--text-dim);font-size:12.5px">用驗證器 App(Google Authenticator、Authy 等)手動輸入下面的密鑰,或直接貼上 Provisioning URI(部分 App 支援用文字加入帳號,GoNAS 沒有內建 QR code 產生器)。</p>
+          <p style="color:var(--text-dim);font-size:12.5px">${esc(t("security.totpSetupHint"))}</p>
           <p><code style="word-break:break-all">${esc(secret)}</code></p>
           <p style="font-size:11.5px;color:var(--text-faint);word-break:break-all">${esc(provisioningUri)}</p>
           <form class="stacked" id="totp-enable-form">
-            <div class="field"><label>輸入目前的驗證碼以完成設定</label><input type="text" name="code" inputmode="numeric" pattern="[0-9]*" placeholder="123456" required></div>
-            <div class="btn-row"><button type="submit">啟用兩步驟驗證</button></div>
+            <div class="field"><label>${esc(t("security.totpEnterCode"))}</label><input type="text" name="code" inputmode="numeric" pattern="[0-9]*" placeholder="123456" required></div>
+            <div class="btn-row"><button type="submit">${esc(t("security.totpEnable"))}</button></div>
           </form>
         `;
         el.querySelector("#totp-enable-form").addEventListener("submit", async (ev) => {
@@ -1581,7 +1609,7 @@ function attachTOTPHandlers(el) {
           const f = new FormData(ev.target);
           try {
             await api.totpEnable(f.get("code").trim());
-            box.innerHTML = msg("ok", "兩步驟驗證已啟用。");
+            box.innerHTML = msg("ok", t("security.totpEnabled"));
             await renderSecurity(el);
           } catch (err) {
             box.innerHTML = msg("error", err.message);
@@ -1601,7 +1629,7 @@ function attachTOTPHandlers(el) {
       const box = el.querySelector("#totp-msg");
       try {
         await api.totpDisable(f.get("password"));
-        box.innerHTML = msg("ok", "兩步驟驗證已停用。");
+        box.innerHTML = msg("ok", t("security.totpDisabled"));
         await renderSecurity(el);
       } catch (err) {
         box.innerHTML = msg("error", err.message);
@@ -1617,7 +1645,7 @@ function attachHTTPSFormHandlers(el) {
     const box = el.querySelector("#https-msg");
     try {
       await api.setHTTPSSettings({ enabled: f.get("enabled") === "on", hosts: linesOf(f.get("hosts")) });
-      box.innerHTML = msg("ok", "HTTPS 設定已儲存,請重新啟動 gonasd 讓設定生效。");
+      box.innerHTML = msg("ok", t("security.httpsSaved"));
     } catch (err) {
       box.innerHTML = msg("error", err.message);
     }
@@ -1627,32 +1655,32 @@ function attachHTTPSFormHandlers(el) {
 function renderVPNSection(status, peers) {
   const statusBlock = status.configured ? `
     <p style="margin:0 0 12px">
-      <span class="pill ${status.running ? "ok" : "neutral"}">${status.running ? "介面運作中" : "介面未啟用"}</span>
-      · 監聽埠 <code>${esc(status.listenPort)}</code>
-      · 位址 <code>${esc((status.address || []).join(", "))}</code>
-      ${status.publicKey ? ` · 公鑰 <code style="word-break:break-all">${esc(status.publicKey)}</code>` : ""}
+      <span class="pill ${status.running ? "ok" : "neutral"}">${status.running ? esc(t("security.vpnRunning")) : esc(t("security.vpnNotRunning"))}</span>
+      · ${esc(t("security.vpnListenPort"))} <code>${esc(status.listenPort)}</code>
+      · ${esc(t("security.vpnAddress"))} <code>${esc((status.address || []).join(", "))}</code>
+      ${status.publicKey ? ` · ${esc(t("security.vpnPublicKey"))} <code style="word-break:break-all">${esc(status.publicKey)}</code>` : ""}
     </p>
-    ${status.warning ? msg("warn", status.warning) : ""}
-  ` : `<p class="empty-state">還沒有設定 WireGuard 介面。</p>`;
+    ${status.warning ? msg("warn", translateNotice(status.warning)) : ""}
+  ` : `<p class="empty-state">${esc(t("security.vpnNotConfigured"))}</p>`;
 
   return `
     ${statusBlock}
     <div id="vpn-iface-msg"></div>
     <form class="stacked" id="vpn-iface-form">
-      <div class="field"><label>介面位址(CIDR,每行一個)</label><textarea name="address" rows="1" placeholder="10.10.0.1/24">${esc((status.address || []).join("\n"))}</textarea></div>
-      <div class="field"><label>監聽埠</label><input type="number" name="listenPort" value="${status.listenPort || 51820}"></div>
-      <div class="btn-row"><button type="submit">${status.configured ? "更新介面設定" : "建立 WireGuard 介面"}</button></div>
+      <div class="field"><label>${esc(t("security.vpnAddressField"))}</label><textarea name="address" rows="1" placeholder="10.10.0.1/24">${esc((status.address || []).join("\n"))}</textarea></div>
+      <div class="field"><label>${esc(t("security.vpnListenPortField"))}</label><input type="number" name="listenPort" value="${status.listenPort || 51820}"></div>
+      <div class="btn-row"><button type="submit">${status.configured ? esc(t("security.vpnUpdateIface")) : esc(t("security.vpnCreateIface"))}</button></div>
     </form>
 
     ${status.configured ? `
-      <h2 style="margin-top:24px" id="vpn-peer-count">用戶端(${peers.length})</h2>
+      <h2 style="margin-top:24px" id="vpn-peer-count">${esc(t("security.vpnClients", { n: peers.length }))}</h2>
       <div id="vpn-peers-list">${renderPeerRows(peers)}</div>
       <div id="vpn-peer-msg"></div>
       <form class="stacked" id="vpn-peer-form" style="margin-top:16px">
-        <div class="field"><label>裝置名稱</label><input type="text" name="name" placeholder="我的手機" required></div>
-        <div class="field"><label>分配的位址(CIDR,通常是介面網段裡的一個 /32)</label><input type="text" name="allowedIPs" placeholder="10.10.0.2/32" required></div>
-        <div class="field"><label>GoNAS 對外位址(選填,寫進產生的用戶端設定檔)</label><input type="text" name="endpoint" placeholder="mynas.example.com:51820"></div>
-        <div class="btn-row"><button type="submit">新增用戶端並產生設定檔</button></div>
+        <div class="field"><label>${esc(t("security.vpnDeviceName"))}</label><input type="text" name="name" placeholder="${esc(t("security.vpnDeviceNamePlaceholder"))}" required></div>
+        <div class="field"><label>${esc(t("security.vpnAllowedIPs"))}</label><input type="text" name="allowedIPs" placeholder="10.10.0.2/32" required></div>
+        <div class="field"><label>${esc(t("security.vpnEndpoint"))}</label><input type="text" name="endpoint" placeholder="mynas.example.com:51820"></div>
+        <div class="btn-row"><button type="submit">${esc(t("security.vpnAddClient"))}</button></div>
       </form>
       <div id="vpn-client-config"></div>
     ` : ""}
@@ -1660,7 +1688,7 @@ function renderVPNSection(status, peers) {
 }
 
 function renderPeerRows(peers) {
-  if (!peers.length) return `<p class="empty-state">還沒有加入任何用戶端裝置。</p>`;
+  if (!peers.length) return `<p class="empty-state">${esc(t("security.vpnNoClients"))}</p>`;
   return peers.map((p) => `
     <div class="rule-row">
       <div class="rule-main">
@@ -1669,7 +1697,7 @@ function renderPeerRows(peers) {
           <div class="rule-cond">${esc((p.allowedIPs || []).join(", "))} · <span style="word-break:break-all">${esc(p.publicKey)}</span></div>
         </div>
       </div>
-      <button class="secondary" data-del-peer="${esc(p.id)}">刪除</button>
+      <button class="secondary" data-del-peer="${esc(p.id)}">${esc(t("common.delete"))}</button>
     </div>
   `).join("");
 }
@@ -1681,7 +1709,7 @@ function attachVPNHandlers(el) {
     const box = el.querySelector("#vpn-iface-msg");
     try {
       await api.setVPNInterface({ address: linesOf(f.get("address")), listenPort: Number(f.get("listenPort")) || undefined });
-      box.innerHTML = msg("ok", "介面設定已儲存。實際套用/停用連線請透過 SSH 手動執行 wg-quick,或等待之後版本補上一鍵套用。");
+      box.innerHTML = msg("ok", t("security.vpnIfaceSaved"));
       await renderSecurity(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -1700,7 +1728,7 @@ function attachVPNHandlers(el) {
           allowedIPs: linesOf(f.get("allowedIPs")),
           endpoint: f.get("endpoint").trim(),
         });
-        box.innerHTML = msg("ok", `已新增用戶端「${esc(res.peer.name)}」,下面是它的設定檔內容 —— 只會顯示這一次,請立刻複製或匯入用戶端裝置。`);
+        box.innerHTML = msg("ok", t("security.vpnClientAdded", { name: esc(res.peer.name) }));
         el.querySelector("#vpn-client-config").innerHTML = `<pre class="client-config">${esc(res.clientConfig)}</pre>`;
         // 只重畫 peer 清單那一小塊,不整頁重繪 renderSecurity —— 不然剛顯示
         // 出來、只出現這一次的 clientConfig 內容會立刻被蓋掉,使用者連
@@ -1719,7 +1747,7 @@ function attachVPNHandlers(el) {
 function attachPeerDeleteHandlers(el) {
   el.querySelectorAll("[data-del-peer]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("確定要刪除這個用戶端嗎?刪除後該裝置會立刻無法再連線,且無法復原。")) return;
+      if (!confirm(t("security.vpnDeleteConfirm"))) return;
       try {
         await api.deleteVPNPeer(btn.dataset.delPeer);
         await refreshPeerList(el);
@@ -1735,7 +1763,7 @@ function attachPeerDeleteHandlers(el) {
 // 不被動到。
 async function refreshPeerList(el) {
   const peers = await api.vpnPeers().catch(() => []);
-  el.querySelector("#vpn-peer-count").textContent = `用戶端(${peers.length})`;
+  el.querySelector("#vpn-peer-count").textContent = t("security.vpnClients", { n: peers.length });
   el.querySelector("#vpn-peers-list").innerHTML = renderPeerRows(peers);
   attachPeerDeleteHandlers(el);
 }
@@ -1747,7 +1775,7 @@ function pad2(n) {
 }
 
 function describeSchedule(sched) {
-  return `每 ${sched.everyHours} 小時,從 ${pad2(sched.hourOfDay)}:${pad2(sched.minuteOfHour)} 開始`;
+  return t("backup.scheduleDesc", { hours: sched.everyHours, h: pad2(sched.hourOfDay), m: pad2(sched.minuteOfHour) });
 }
 
 function formatDateTime(iso) {
@@ -1761,27 +1789,27 @@ async function renderBackup(el) {
   const jobs = await api.backupJobs().catch(() => []);
 
   el.innerHTML = `
-    <h1>備份</h1>
-    <p class="page-subtitle">用 rsync 加硬連結輪替(跟 rsnapshot、Time Machine 是同一套技巧)把來源目錄備份到另一個位置,保留最近幾份快照;沒有變更的檔案在磁碟上只佔一份空間。需要主機上已安裝 <code>rsync</code>。</p>
+    <h1>${esc(t("backup.title"))}</h1>
+    <p class="page-subtitle">${t("backup.subtitle")}</p>
 
     <div class="card">
-      <h2>備份工作(${jobs.length})</h2>
+      <h2>${esc(t("backup.jobs", { n: jobs.length }))}</h2>
       <div id="backup-jobs-list">${renderBackupJobRows(jobs)}</div>
       <div id="backup-msg"></div>
       <form class="stacked" id="backup-form" style="margin-top:16px">
-        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="每日備份" required></div>
-        <div class="field"><label>來源路徑</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
-        <div class="field"><label>目的地路徑</label><input type="text" name="destPath" placeholder="/mnt/backup" required></div>
-        <div class="field"><label>保留份數</label><input type="number" name="retentionCount" value="7" min="1" required></div>
-        <div class="field"><label>執行間隔(小時)</label><input type="number" name="everyHours" value="24" min="1" required></div>
-        <div class="field"><label>起始時刻(小時:分鐘)</label>
+        <div class="field"><label>${esc(t("backup.jobName"))}</label><input type="text" name="name" placeholder="${esc(t("backup.jobNamePlaceholder"))}" required></div>
+        <div class="field"><label>${esc(t("backup.sourcePath"))}</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
+        <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required></div>
+        <div class="field"><label>${esc(t("backup.retention"))}</label><input type="number" name="retentionCount" value="7" min="1" required></div>
+        <div class="field"><label>${esc(t("backup.everyHours"))}</label><input type="number" name="everyHours" value="24" min="1" required></div>
+        <div class="field"><label>${esc(t("backup.startTime"))}</label>
           <div style="display:flex;gap:8px">
             <input type="number" name="hourOfDay" value="3" min="0" max="23" style="width:90px" required>
             <input type="number" name="minuteOfHour" value="0" min="0" max="59" style="width:90px" required>
           </div>
         </div>
-        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用排程</label></div>
-        <div class="btn-row"><button type="submit">新增備份工作</button></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("backup.scheduleEnabled"))}</label></div>
+        <div class="btn-row"><button type="submit">${esc(t("backup.addJob"))}</button></div>
       </form>
     </div>
   `;
@@ -1790,36 +1818,36 @@ async function renderBackup(el) {
 }
 
 function renderBackupJobRows(jobs) {
-  if (!jobs.length) return `<p class="empty-state">還沒有設定備份工作。</p>`;
+  if (!jobs.length) return `<p class="empty-state">${esc(t("backup.noJobs"))}</p>`;
   return jobs.map((j) => renderBackupJobRow(j)).join("");
 }
 
 function renderBackupJobRow(j) {
-  let statusPill = `<span class="pill neutral">尚未執行</span>`;
+  let statusPill = `<span class="pill neutral">${esc(t("backup.notRunYet"))}</span>`;
   let errorMsg = "";
   if (j.lastRun) {
     if (j.lastRun.success) {
-      statusPill = `<span class="pill ok">上次成功 · ${esc(formatDateTime(j.lastRun.finishedAt))}</span>`;
+      statusPill = `<span class="pill ok">${esc(t("backup.lastSuccess", { time: formatDateTime(j.lastRun.finishedAt) }))}</span>`;
       if (j.lastRun.error) errorMsg = msg("warn", j.lastRun.error);
     } else {
-      statusPill = `<span class="pill danger">上次失敗 · ${esc(formatDateTime(j.lastRun.finishedAt))}</span>`;
-      errorMsg = msg("error", j.lastRun.error || "未知錯誤");
+      statusPill = `<span class="pill danger">${esc(t("backup.lastFailed", { time: formatDateTime(j.lastRun.finishedAt) }))}</span>`;
+      errorMsg = msg("error", j.lastRun.error || t("backup.unknownError"));
     }
   }
   return `
     <div class="rule-row" data-job-row="${esc(j.id)}">
       <div class="rule-main">
-        <span class="pill ${j.enabled ? "ok" : "neutral"}">${j.enabled ? "已啟用" : "已停用"}</span>
+        <span class="pill ${j.enabled ? "ok" : "neutral"}">${j.enabled ? esc(t("backup.jobEnabled")) : esc(t("backup.jobDisabled"))}</span>
         <div>
           <div class="rule-name">${esc(j.name)}</div>
-          <div class="rule-cond">${esc(j.sourcePath)} → ${esc(j.destPath)} · 保留 ${j.retentionCount} 份 · ${esc(describeSchedule(j.schedule))}</div>
+          <div class="rule-cond">${esc(j.sourcePath)} → ${esc(j.destPath)} · ${esc(t("backup.retention"))} ${j.retentionCount} · ${esc(describeSchedule(j.schedule))}</div>
         </div>
       </div>
       <div class="btn-row" style="margin:0">
         ${statusPill}
-        <button class="secondary" data-run-job="${esc(j.id)}">立即執行</button>
-        <button class="secondary" data-view-snapshots="${esc(j.id)}">快照</button>
-        <button class="secondary" data-del-job="${esc(j.id)}">刪除</button>
+        <button class="secondary" data-run-job="${esc(j.id)}">${esc(t("backup.runNow"))}</button>
+        <button class="secondary" data-view-snapshots="${esc(j.id)}">${esc(t("backup.snapshots"))}</button>
+        <button class="secondary" data-del-job="${esc(j.id)}">${esc(t("backup.deleteJob"))}</button>
       </div>
     </div>
     ${errorMsg}
@@ -1846,7 +1874,7 @@ function attachBackupHandlers(el) {
     };
     try {
       await api.createBackupJob(job);
-      box.innerHTML = msg("ok", "備份工作已新增。");
+      box.innerHTML = msg("ok", t("backup.jobAdded"));
       await renderBackup(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -1860,21 +1888,21 @@ function attachBackupJobRowHandlers(el) {
   el.querySelectorAll("[data-run-job]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       btn.disabled = true;
-      btn.textContent = "執行中…";
+      btn.textContent = t("backup.running");
       try {
         const res = await api.runBackupJob(btn.dataset.runJob);
-        el.insertAdjacentHTML("afterbegin", msg("ok", res.message));
+        el.insertAdjacentHTML("afterbegin", msg("ok", translateNotice(res.message)));
       } catch (err) {
         el.insertAdjacentHTML("afterbegin", msg("error", err.message));
         btn.disabled = false;
-        btn.textContent = "立即執行";
+        btn.textContent = t("backup.runNow");
       }
     });
   });
 
   el.querySelectorAll("[data-del-job]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("確定要刪除這個備份工作嗎?已經備份好的快照不會被刪除,但排程會停止。")) return;
+      if (!confirm(t("backup.deleteJobConfirm"))) return;
       try {
         await api.deleteBackupJob(btn.dataset.delJob);
         await renderBackup(el);
@@ -1893,12 +1921,12 @@ function attachBackupJobRowHandlers(el) {
         return;
       }
       panel.hidden = false;
-      panel.innerHTML = `<p class="loading">載入中…</p>`;
+      panel.innerHTML = `<p class="loading">${esc(t("common.loading"))}</p>`;
       try {
         const snapshots = await api.backupJobSnapshots(id);
         panel.innerHTML = snapshots.length
           ? `<ul class="snapshot-list">${snapshots.map((s) => `<li><code>${esc(s.name)}</code> · ${esc(formatDateTime(s.createdAt))}</li>`).join("")}</ul>`
-          : `<p class="empty-state">還沒有任何成功的快照。</p>`;
+          : `<p class="empty-state">${esc(t("backup.noSnapshots"))}</p>`;
       } catch (err) {
         panel.innerHTML = msg("error", err.message);
       }

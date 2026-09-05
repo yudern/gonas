@@ -292,6 +292,18 @@ a { color: var(--accent); }
 .sidebar-footer { display: flex; flex-direction: column; gap: 8px; }
 .logout-btn { width: 100%; font-size: 12.5px; padding: 7px 12px; }
 
+/* 語言選單。刻意放在側邊欄最下面、跟登出按鈕放在一起——這是一個「设定
+   一次、很少再動」的選項，不需要佔用導覽列的視覺重量。 */
+.lang-switcher {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--sidebar-active);
+  background: var(--sidebar-active);
+  color: var(--sidebar-text);
+}
+
 /* ---------- 備份頁 ---------- */
 
 .snapshots-panel {

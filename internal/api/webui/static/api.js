@@ -10,6 +10,8 @@
 // 邏輯。/api/v1/auth/* 本身的 401(例如密碼打錯)刻意不觸發這個回呼 ——
 // 那是登入表單自己要處理、顯示在表單上的錯誤訊息,不是「session 失效,
 // 帶使用者回登入畫面」。
+import { translateError, t } from "/i18n.js";
+
 let onUnauthorized = null;
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
 
@@ -34,7 +36,10 @@ async function request(method, path, body) {
   }
 
   if (!res.ok) {
-    const message = (data && data.error) ? data.error : `${res.status} ${res.statusText}`;
+    // 後端固定回英文錯誤訊息(見 internal/api/errors.go 的說明),
+    // translateError 把裡面「乾淨、可枚舉」的固定訊息翻成目前介面語言,
+    // 查不到的動態/技術性訊息就原樣顯示英文,見 i18n.js 的說明。
+    const message = (data && data.error) ? translateError(data.error) : `${res.status} ${res.statusText}`;
     throw new Error(message);
   }
   return data;
@@ -152,7 +157,7 @@ function uploadWithProgress(path, formData, onProgress) {
         reject(new Error((data && data.error) ? data.error : `${xhr.status} ${xhr.statusText}`));
       }
     };
-    xhr.onerror = () => reject(new Error("網路錯誤，上傳失敗"));
+    xhr.onerror = () => reject(new Error(t("files.uploadNetworkError")));
     xhr.send(formData);
   });
 }
