@@ -275,6 +275,18 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
     </div>
   ` : "";
 
+  // 復原按鈕刻意不跟著 update.configured 一起判斷是否顯示——備份檔案
+  // (執行檔旁邊的 .previous)是否存在跟「現在有沒有設定更新來源網址」
+  // 是兩件獨立的事:使用者完全可能先套用過一次更新、之後又把更新來源
+  // 清空,這種情況下備份依然在,復原功能也應該依然可用,見
+  // internal/api/system_update_handlers.go 的 buildSystemUpdateResponse
+  // 對 BackupAvailable 的說明。
+  const rollbackAction = isAdmin && update.backupAvailable ? `
+    <div class="btn-row" style="margin-top:8px">
+      <button type="button" class="secondary" id="update-rollback-btn" ${update.applyInProgress ? "disabled" : ""}>${update.applyInProgress ? esc(t("update.rollingBack")) : esc(t("update.rollback"))}</button>
+    </div>
+  ` : "";
+
   const settingsForm = isAdmin ? `
     <form class="stacked" id="update-settings-form" style="margin-top:12px">
       <div class="field">
@@ -297,6 +309,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
       ${applyInProgressMsg}
       ${applyErrorMsg}
       ${actions}
+      ${rollbackAction}
       ${settingsForm}
     </div>
   `;
@@ -358,6 +371,34 @@ function attachSystemUpdateHandlers(el, isAdmin) {
         applyBtn.disabled = false;
         applyBtn.textContent = t("update.applyNow");
         if (checkBtn2) checkBtn2.disabled = false;
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  const rollbackBtn = el.querySelector("#update-rollback-btn");
+  if (rollbackBtn) {
+    rollbackBtn.addEventListener("click", async () => {
+      // 跟「套用更新」一樣是高風險操作——會置換執行檔並重啟整個
+      // gonasd 程序——所以一樣用明確的確認對話框攔一次。
+      if (!confirm(t("update.rollbackConfirm"))) return;
+      rollbackBtn.disabled = true;
+      rollbackBtn.textContent = t("update.rollingBack");
+      const applyBtn2 = el.querySelector("#update-apply-btn");
+      const checkBtn3 = el.querySelector("#update-check-btn");
+      if (applyBtn2) applyBtn2.disabled = true;
+      if (checkBtn3) checkBtn3.disabled = true;
+      try {
+        const res = await api.rollbackSystemUpdate();
+        const box = el.querySelector("#update-msg");
+        if (box) box.innerHTML = msg("ok", translateNotice(res.message));
+        pollForRestartThenReload();
+      } catch (err) {
+        rollbackBtn.disabled = false;
+        rollbackBtn.textContent = t("update.rollback");
+        if (applyBtn2) applyBtn2.disabled = false;
+        if (checkBtn3) checkBtn3.disabled = false;
         const box = el.querySelector("#update-msg");
         if (box) box.innerHTML = msg("error", err.message);
       }
@@ -1448,13 +1489,16 @@ function isBooleanMetric(metric) {
 }
 
 async function renderMonitor(el) {
-  const [system, history, rules, notifiers, emailNotifiers] = await Promise.all([
+  const [system, history, rules, notifiers, emailNotifiers, digest, me] = await Promise.all([
     api.monitorSystem().catch(() => null),
     api.monitorHistory().catch(() => []),
     api.alertRules().catch(() => []),
     api.notifiers().catch(() => []),
     api.emailNotifiers().catch(() => []),
+    api.digest().catch(() => null),
+    api.me().catch(() => ({ role: "" })),
   ]);
+  const isAdmin = me.role === "admin";
 
   el.innerHTML = `
     <h1>${esc(t("monitor.title"))}</h1>
@@ -1543,6 +1587,8 @@ async function renderMonitor(el) {
         <div class="btn-row"><button type="submit">${esc(t("monitor.addEmailNotifier"))}</button></div>
       </form>
     </div>
+
+    ${renderDigestCard(digest, notifiers, emailNotifiers, isAdmin)}
   `;
 
   const canvas = el.querySelector("#monitor-chart");
@@ -1652,6 +1698,111 @@ async function renderMonitor(el) {
       box.innerHTML = msg("error", err.message);
     }
   });
+
+  if (isAdmin) attachDigestHandlers(el);
+}
+
+// renderDigestCard 是 Phase 18c 新增的週期性健康摘要卡片。查看目前設定
+// (啟用與否、cron 表達式、上次送出時間)所有登入使用者都看得到——跟
+// 這個頁面其他「目前狀態」資訊一樣;只有 isAdmin 才會看到設定表單跟
+// 「立即送出」按鈕,跟 update/security 頁面對 RoleViewer 的處理是同一個
+// 慣例。notifiers/emailNotifiers 是已經設定好的 webhook/email 管道清單
+// (跟上面兩張卡片共用同一次 API 呼叫的結果),這裡讓使用者用核取方塊
+// 勾選其中哪些要收到 digest——digest 刻意不另外設計一套平行的通知
+// 管道表單,見 state.DigestConfig 的套件註解。
+function renderDigestCard(digest, notifiers, emailNotifiers, isAdmin) {
+  if (!digest) {
+    return `
+    <div class="card">
+      <h2>${esc(t("monitor.digestTitle"))}</h2>
+      <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("monitor.digestLoadError"))}</p>
+    </div>`;
+  }
+
+  const statusPill = digest.enabled
+    ? `<span class="pill ok">${esc(t("monitor.digestPillEnabled"))}</span>`
+    : `<span class="pill neutral">${esc(t("monitor.digestPillDisabled"))}</span>`;
+  const lastSentLine = digest.lastSentAt
+    ? `<p style="color:var(--text-dim);font-size:12.5px;margin:6px 0 0">${esc(t("monitor.digestLastSent", { date: formatDateTime(digest.lastSentAt) }))}</p>`
+    : `<p style="color:var(--text-dim);font-size:12.5px;margin:6px 0 0">${esc(t("monitor.digestNeverSent"))}</p>`;
+
+  const notifierCheckboxes = (items, selectedIds, dataAttr) => items.length ? items.map((n) => `
+    <label class="checkbox-row"><input type="checkbox" ${dataAttr}="${esc(n.id)}" ${selectedIds.includes(n.id) ? "checked" : ""}> ${esc(n.name)}</label>
+  `).join("") : `<p class="empty-state">${esc(t("monitor.digestNoChannels"))}</p>`;
+
+  const adminSection = isAdmin ? `
+    <div id="digest-msg"></div>
+    <form class="stacked" id="digest-form" style="margin-top:12px">
+      <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${digest.enabled ? "checked" : ""}> ${esc(t("monitor.digestEnable"))}</label></div>
+      <div class="field">
+        <label>${esc(t("monitor.digestCronExpr"))}</label>
+        <input type="text" name="cronExpr" placeholder="0 8 * * *" value="${esc(digest.cronExpr || "")}">
+        <div class="hint">${esc(t("monitor.digestCronExprHint"))}</div>
+      </div>
+      <div class="field">
+        <label>${esc(t("monitor.digestWebhookChannels"))}</label>
+        ${notifierCheckboxes(notifiers, digest.notifierIds || [], "data-digest-webhook")}
+      </div>
+      <div class="field">
+        <label>${esc(t("monitor.digestEmailChannels"))}</label>
+        ${notifierCheckboxes(emailNotifiers, digest.emailNotifierIds || [], "data-digest-email")}
+      </div>
+      <div class="btn-row">
+        <button type="submit">${esc(t("monitor.digestSaveSettings"))}</button>
+        <button type="button" class="secondary" id="digest-send-now-btn">${esc(t("monitor.digestSendNow"))}</button>
+      </div>
+    </form>
+  ` : "";
+
+  return `
+    <div class="card">
+      <h2>${esc(t("monitor.digestTitle"))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.digestHint"))}</p>
+      <p style="margin:0">${statusPill}</p>
+      ${lastSentLine}
+      ${adminSection}
+    </div>
+  `;
+}
+
+function attachDigestHandlers(el) {
+  const form = el.querySelector("#digest-form");
+  if (!form) return;
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const cfg = {
+      enabled: f.get("enabled") === "on",
+      cronExpr: f.get("cronExpr").trim(),
+      notifierIds: Array.from(el.querySelectorAll("[data-digest-webhook]:checked")).map((cb) => cb.dataset.digestWebhook),
+      emailNotifierIds: Array.from(el.querySelectorAll("[data-digest-email]:checked")).map((cb) => cb.dataset.digestEmail),
+    };
+    const box = el.querySelector("#digest-msg");
+    try {
+      await api.setDigest(cfg);
+      box.innerHTML = msg("ok", t("monitor.digestSaved"));
+      await renderMonitor(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+
+  const sendNowBtn = el.querySelector("#digest-send-now-btn");
+  if (sendNowBtn) {
+    sendNowBtn.addEventListener("click", async () => {
+      sendNowBtn.disabled = true;
+      const box = el.querySelector("#digest-msg");
+      try {
+        const res = await api.sendDigestNow();
+        box.innerHTML = msg("ok", translateNotice(res.message));
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      } finally {
+        sendNowBtn.disabled = false;
+      }
+    });
+  }
 }
 
 function formatPercent(v) {
@@ -1778,11 +1929,12 @@ async function renderSecurity(el) {
   updateSidebarUser(me);
   const isAdmin = me.role === "admin";
 
-  const [https, vpnStatus, peers, accounts] = await Promise.all([
+  const [https, vpnStatus, peers, accounts, auditLog] = await Promise.all([
     api.httpsSettings().catch(() => ({ enabled: false })),
     api.vpnStatus().catch(() => ({ configured: false })),
     api.vpnPeers().catch(() => []),
     isAdmin ? api.authAccounts().catch(() => []) : Promise.resolve([]),
+    isAdmin ? api.auditLog().catch(() => null) : Promise.resolve(null),
   ]);
 
   el.innerHTML = `
@@ -1864,6 +2016,8 @@ async function renderSecurity(el) {
       <h2>${esc(t("security.vpn"))}</h2>
       ${renderVPNSection(vpnStatus, peers)}
     </div>
+
+    ${isAdmin ? renderAuditLogCard(auditLog) : ""}
   `;
 
   attachPasswordFormHandlers(el);
@@ -1871,6 +2025,44 @@ async function renderSecurity(el) {
   if (isAdmin) attachAccountsHandlers(el);
   attachHTTPSFormHandlers(el);
   attachVPNHandlers(el);
+}
+
+// renderAuditLogCard 是 Phase 18b 新增的稽核紀錄表格,只有 isAdmin 會
+// 被渲染(見上面呼叫端的判斷,跟帳號管理那張卡片是同一個慣例)——
+// RoleViewer 不該看得到其他管理者帳號的操作紀錄。auditLog 為 null 代表
+// 讀取失敗(例如網路問題),顯示跟 update 卡片一致的錯誤提示,而不是
+// 讓整個 Security 頁面因為這一張卡片掛掉。
+function renderAuditLogCard(auditLog) {
+  if (!auditLog) {
+    return `
+    <div class="card">
+      <h2>${esc(t("security.auditLog"))}</h2>
+      <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("security.auditLogLoadError"))}</p>
+    </div>`;
+  }
+
+  const entries = auditLog.entries || [];
+  return `
+    <div class="card">
+      <h2>${esc(t("security.auditLog"))}</h2>
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.auditLogHint"))}</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>${esc(t("security.colTime"))}</th><th>${esc(t("security.colUsername"))}</th><th>${esc(t("security.colAction"))}</th><th>${esc(t("security.colResult"))}</th></tr></thead>
+          <tbody>
+            ${entries.length ? entries.map((e) => `
+              <tr>
+                <td>${esc(formatDateTime(e.at))}</td>
+                <td>${esc(e.username)}</td>
+                <td><code>${esc(e.method)} ${esc(e.path)}</code>${e.detail ? ` — ${esc(e.detail)}` : ""}</td>
+                <td><span class="pill ${e.statusCode < 400 ? "ok" : "warn"}">${esc(String(e.statusCode))}</span></td>
+              </tr>
+            `).join("") : `<tr><td colspan="4" class="empty-state">${esc(t("security.auditLogEmpty"))}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 // attachAccountsHandlers 只在 renderSecurity 判斷目前登入帳號是

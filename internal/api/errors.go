@@ -61,4 +61,8 @@ var (
 	// i18n.js 的 errorMap 負責翻成使用者介面語言,見該檔案開頭的說明。
 	errUpdateNotConfigured     = errors.New("no update manifest url has been configured yet: set one first")
 	errUpdateAlreadyInProgress = errors.New("an update is already being downloaded and applied, please wait")
+
+	// Phase 18a：自我更新一鍵復原(handleSystemUpdateRollback)專用的
+	// sentinel 錯誤。
+	errUpdateNoBackupAvailable = errors.New("no previous version backup is available to roll back to")
 )

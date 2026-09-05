@@ -94,6 +94,10 @@ export const api = {
   createEmailNotifier: (notifier) => request("POST", "/api/v1/monitor/email-notifiers", notifier),
   deleteEmailNotifier: (id) => request("DELETE", `/api/v1/monitor/email-notifiers/${encodeURIComponent(id)}`),
 
+  digest: () => request("GET", "/api/v1/monitor/digest"),
+  setDigest: (cfg) => request("PUT", "/api/v1/monitor/digest", cfg),
+  sendDigestNow: () => request("POST", "/api/v1/monitor/digest/send"),
+
   authStatus: () => request("GET", "/api/v1/auth/status"),
   authSetup: (username, password) => request("POST", "/api/v1/auth/setup", { username, password }),
   authLogin: (username, password, totpCode) => request("POST", "/api/v1/auth/login", { username, password, totpCode }),
@@ -106,6 +110,7 @@ export const api = {
   authAccounts: () => request("GET", "/api/v1/auth/accounts"),
   createAuthAccount: (account) => request("POST", "/api/v1/auth/accounts", account),
   deleteAuthAccount: (username) => request("DELETE", `/api/v1/auth/accounts/${encodeURIComponent(username)}`),
+  auditLog: () => request("GET", "/api/v1/audit/log"),
 
   httpsSettings: () => request("GET", "/api/v1/security/https"),
   setHTTPSSettings: (settings) => request("PUT", "/api/v1/security/https", settings),
@@ -143,6 +148,7 @@ export const api = {
   setSystemUpdateSettings: (manifestUrl) => request("PUT", "/api/v1/system/update/settings", { manifestUrl }),
   checkSystemUpdate: () => request("POST", "/api/v1/system/update/check"),
   applySystemUpdate: () => request("POST", "/api/v1/system/update/apply"),
+  rollbackSystemUpdate: () => request("POST", "/api/v1/system/update/rollback"),
 };
 
 // uploadWithProgress 用 XMLHttpRequest 而不是 fetch 送出上傳請求——這是

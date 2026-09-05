@@ -458,10 +458,27 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       確認復原後 `GET /api/v1/version` 正確回報回舊版本號,而且
       `state.json`(管理者帳號、更新來源設定等)完全沒受影響——因為
       只有執行檔本身被置換,資料目錄從頭到尾沒被動過。這確認了
-      README/`install.sh` 目前記錄的手動降級步驟是可行的。**仍然
-      沒有解決的部分**:目前確實還沒有「一鍵復原」的 API/UI,使用者
-      發現新版本有問題只能照上面這個手動流程做,值得評估要不要在
-      之後的 Phase 補一個「復原到上一個版本」的按鈕。
+      README/`install.sh` 目前記錄的手動降級步驟是可行的。
+- [x] ✅ **Phase 18a:一鍵復原(`POST /api/v1/system/update/rollback`)
+      端到端驗證**——上面手動復原流程驗證過後,把同樣的邏輯做成
+      正式 API/UI 功能(`internal/selfupdate.RollbackToBackup` +
+      `handleSystemUpdateRollback`),然後對著一個真正在跑的 gonasd
+      重新完整驗證一次,這次完全透過 HTTP API、不手動碰檔案系統:
+      啟動真正編譯的 `v1.0.0-test` gonasd → 用 `curl` 呼叫真正的
+      `/api/v1/auth/setup`、`/api/v1/system/update/settings`、
+      `/api/v1/system/update/check`、`/api/v1/system/update/apply`
+      走完一次套用更新(確認同一個 PID、`GET /api/v1/version` 回報
+      `v9.9.9-test`、`GET /api/v1/system/update` 的
+      `backupAvailable` 正確變成 `true`)→ 呼叫真正的
+      `POST /api/v1/system/update/rollback` → 確認同一個 PID 沒變、
+      `GET /api/v1/version` 正確回報回 `v1.0.0-test`、
+      `backupAvailable` 恢復 `false`(`.previous` 已經被消耗)、
+      原本(被復原掉的)`v9.9.9-test` 執行檔被保留成
+      `gonasd.rolled-back-<unix>` 而不是直接刪除(直接執行這份保留
+      檔案的 `-version` 確認內容正確)、兩次重啟之間
+      `state.json`(管理者帳號、更新來源設定)全程沒有遺失,重啟後
+      需要重新登入(session 存在記憶體、不是持久化狀態,這點跟一般
+      重啟 gonasd 的行為一致,不是 bug)。
 - [x] ✅ **大檔案下載**:用一份真實編譯的 gonasd 執行檔、在尾端補上
       隨機資料撐到剛好 100 MiB(附加在 ELF 有效內容之後的資料不影響
       可執行性,補完之後 `-version` 依然正常執行),算出真正的
@@ -481,6 +498,59 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       `internal/api.Server` 新增的 `applyMu`/`applyStatus`、
       `restartRequested` channel 這些新的併發狀態——沒有發現任何
       data race。
+
+## 10. 管理者動作稽核紀錄(對應 Phase 18b,已補上核心機制的真實驗證)
+
+- [x] ✅ 對一個真正在跑的 gonasd 完整走一次:`curl` 完成 first-run
+      setup 拿到 session cookie → 呼叫真正的
+      `POST /api/v1/share/shares` 建立一個共享,確認回應成功
+      (HTTP 200)→ 用同樣的名稱再呼叫一次,確認正確回報衝突
+      (HTTP 409,`a share with that name already exists`)→ 呼叫真正的
+      `GET /api/v1/audit/log`,確認剛剛那兩次操作都被記下來、依時間
+      新到舊排序、狀態碼分別是 200 跟 409 —— 包含失敗的操作也要被記
+      下來,這正是稽核紀錄要回答「管理者嘗試做了什麼、結果如何」的
+      設計目的。中間穿插呼叫了一次單純的 `GET /api/v1/share/shares`
+      查詢,確認它沒有被記進稽核紀錄——單純瀏覽/查詢不算「動作」。
+- [x] ✅ **意外抓到的既有 bug**:新增 `state.State.AuditLog` 欄位時,
+      忘記把它加進 `state.(*State).normalize()`(負責把所有切片欄位
+      的 `nil` 換成空陣列的函式)——`internal/state` 既有的
+      `TestOpen_LoadsPreExistingNullSlices_NormalizesThem` 測試立刻
+      失敗,精準抓到「讀取一份缺這個欄位的舊版 state.json 時,
+      `auditLog` 會被序列化成 `null` 而不是 `[]`」這個問題(前端一律
+      當陣列處理,收到 `null` 會直接掛掉,是 Apps 頁面在更早的 Phase
+      踩過的同一類 bug)。修好之後(補上
+      `if st.AuditLog == nil { st.AuditLog = []AuditEntry{} }`)整個
+      repo 的 `go test ./... -race -count=1` 重新轉綠。這是一個很好的
+      案例,說明「新增欄位時保留既有的防呆測試」本身的價值——不需要
+      額外新寫測試就抓到了這個問題。
+
+## 11. 週期性健康摘要通知(對應 Phase 18c,已補上核心機制的真實驗證)
+
+- [x] ✅ 對一個真正在跑的 gonasd,同時涵蓋三種通知管道的完整流程:
+      啟動一個真正的 Python HTTP 伺服器當 webhook 接收端、一個真正的
+      Python `smtpd`(標準函式庫,雖然已標記為 deprecated 但功能正常)
+      當假 SMTP 伺服器,用 `curl` 建立一個真正的 webhook 通知跟一個
+      真正指向這個假 SMTP 伺服器的 email 通知、外加一個備份工作(還沒
+      執行過,用來驗證摘要內容裡的「還沒有執行過」文字)→ 呼叫真正的
+      `PUT /api/v1/monitor/digest` 設定成把摘要送到這兩個管道 → 呼叫
+      真正的 `POST /api/v1/monitor/digest/send` 立刻送出一次 → 確認:
+      webhook 伺服器真的收到一份 JSON,`kind` 欄位正確是 `"digest"`,
+      `subject`/`message` 內容包含正確的 CPU/記憶體/磁碟使用率數字;
+      SMTP 伺服器真的透過完整的 SMTP 交握(不是 mock)收到一封信,
+      標頭(From/To/Subject/Date)跟純文字內文都正確,內文包含備份
+      工作「還沒有執行過」那一行;daemon 自己的 log 裡也記了一筆
+      `health digest` 訊息;`GET /api/v1/monitor/digest` 的
+      `lastSentAt` 正確更新成剛剛送出的時間。
+- [x] ✅ **停用之後不會殘留背景排程**:先透過 API 啟用一次 digest
+      (`enabled:true`,合法的 cron 表達式),再透過 API 停用
+      (`enabled:false`),然後重新啟動整個 gonasd 程序,確認
+      daemon 啟動的 log 裡沒有任何 digest 排程被拉起來的跡象——跟
+      `internal/security.CertRenewer`「看設定決定要不要啟動」是同一種
+      行為,不是「設定過一次就永遠有個背景 goroutine 醒著」。
+- [x] ✅ **併發/資料競爭掃描**:對整個 repo 跑了一次
+      `go test ./... -race -count=1`,涵蓋這次新增的
+      `internal/api.Server` 的 `digestMu`/`digestScheduler`、
+      `monitor.DigestScheduler` 內部狀態——沒有發現任何 data race。
 
 ## 完成之後
 

@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 17 完成 — gonasd 自我更新機制
+## 目前狀態:Phase 18c 完成 — 週期性健康摘要通知
 
 **Phase 0(專案骨架)**
 
@@ -1338,6 +1338,132 @@ SSH 進機器手動跑 `install.sh`。這個流程本身沒問題,但對一個�
   仍然值得在真機上補一次。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠
   (這輪沒有動到程式碼,只有跑驗證跟補文件)。
+
+**Phase 18a(自我更新一鍵復原)—— 把上面「手動復原流程」正式做成
+API/UI 功能**
+
+- **設計**:`internal/selfupdate.RollbackToBackup(currentExecPath)`是
+  `ApplyUpdate` 的反向操作——把執行檔旁邊的 `.previous` 備份換回
+  目前的執行檔位置。跟 `ApplyUpdate` 共用同一套「原子置換」的思路,
+  但刻意不透過呼叫 `ApplyUpdate(currentExecPath, backupPath)`
+  來實作,因為 `ApplyUpdate` 內部自己會再算一次
+  `currentExecPath+".previous"` 當備份路徑,如果直接複用會跟正要
+  復原的來源檔案位置整個撞在一起。復原前的(可能有問題的)那份
+  執行檔不會被刪除,而是改名成帶時間戳記的
+  `gonasd.rolled-back-<unix秒數>`,多一層安全網——萬一復原的判斷
+  本身是錯的,那份「有問題」的版本還在,不會憑空消失。
+- **API**:新增 `POST /api/v1/system/update/rollback`
+  (`requireAdmin`),跟 `handleSystemUpdateApply` 共用同一個
+  `Server.applyMu`/`applyStatus` 狀態機(復原跟套用不能同時進行,
+  背後理由一樣是「置換執行檔+重啟」不能有兩份同時搶著做),一樣是
+  「立刻回 202、背景執行、結果反映在下一次 GET 回應」的非同步模式。
+  `GET /api/v1/system/update` 新增 `backupAvailable` 欄位(檢查執行檔
+  旁邊有沒有 `.previous` 檔案),Web UI 只在這是 `true` 的時候才顯示
+  「復原到上一個版本」按鈕——而且這個判斷刻意不跟「有沒有設定更新
+  來源網址」綁在一起,因為使用者完全可能先套用過一次更新、之後又把
+  更新來源清空,這種情況下備份還在,復原功能也該繼續可用。
+  `resolveExecPath()` 這段邏輯(找出自己實際執行檔路徑、解開可能的
+  symlink)從原本只寫在 `runApplyUpdate` 裡的內聯程式碼抽成
+  `Server` 的共用方法,三個地方(套用、復原、狀態查詢)共用同一份
+  邏輯,不會慢慢分岔。
+- **驗證**:單元測試涵蓋「沒有備份時回 400」「已經有套用/復原在跑時
+  回 409」,以及一個操作 `t.TempDir()` 真實檔案的端到端測試(確認
+  執行檔內容真的換回備份內容、原內容被保留成
+  `.rolled-back-<unix>`、`.previous` 被正確消耗)。更進一步,對著一個
+  真正在跑的 gonasd 程序(不是測試 harness)完整走過一次「真的編譯
+  兩個不同版本號的執行檔 → 真的用 curl 打 HTTP API 完成一次套用 →
+  再用 curl 打 `POST /api/v1/system/update/rollback` 觸發復原 →
+  確認同一個 PID、`GET /api/v1/version` 正確報回舊版本號、
+  `state.json` 全程沒受影響」的完整流程,細節記在
+  `docs/REAL_HARDWARE_TESTING.md` 的「9. gonasd 自我更新」章節。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./... -race -count=1`
+  全數維持全綠。
+
+**Phase 18b(管理者動作稽核紀錄)—— 「誰動過什麼」的紀錄**
+
+- **設計**:`state.State` 新增 `AuditLog []AuditEntry` 欄位(時間、
+  使用者名稱、HTTP 方法、路徑、狀態碼、選填的一句話摘要),跟其他
+  設定共用同一份 `state.json`,超過 `auditLogCapacity`(500 筆)就從
+  最舊的開始丟,避免無限長大——理由跟 `internal/monitor.History` 的
+  容量上限是同一種考量。刻意只記錄「動作」,不是完整的存取紀錄:
+  `requireAdmin`(`internal/api/auth_handlers.go`)在每一支非 GET 的
+  管理端點執行完之後自動記一筆,單純瀏覽/查詢(GET)不記錄——這是一份
+  給人看「誰改了什麼設定/資料」的稽核紀錄,全部都記反而會把真正重要
+  的操作淹沒在大量查詢紀錄裡。這個設計換來一個好處:新增/修改任何
+  一支 `requireAdmin` 端點都自動被稽核紀錄涵蓋,不需要每支 handler
+  各自手動補一行記錄程式碼,也不會有「忘記幫新端點加稽核紀錄」這種
+  遺漏。失敗的操作(例如刪除不存在的資源回 404、權限不足回 403)一樣
+  會被記下來,連同實際的 HTTP 狀態碼——稽核紀錄要回答的是「管理者
+  嘗試做了什麼、結果如何」,不是只記錄成功的操作。
+- **API/UI**:新增 `GET /api/v1/audit/log`(`requireAdmin`),回傳
+  依時間新到舊排序的紀錄列表;Security 頁面新增一張「稽核紀錄」表格
+  (只有 RoleAdmin 看得到,跟帳號管理那張卡片是同一個慣例),顯示
+  時間、使用者、動作(方法+路徑)、結果狀態碼(400 以上顯示成警示
+  顏色的 pill)。
+- **驗證**:單元測試涵蓋「非 GET 請求成功時記一筆,欄位正確」「GET
+  請求不記錄」「handler 回傳錯誤時一樣要記,狀態碼要對」「
+  GET /api/v1/audit/log 回傳新到舊排序、本身不會把自己記進去」「超過
+  容量上限會從最舊的開始丟」。這輪也意外抓到一個既有的 nil-slice
+  序列化 bug——加了 `AuditLog` 欄位之後,`internal/state` 既有的
+  `TestOpen_LoadsPreExistingNullSlices_NormalizesThem` 測試立刻失敗
+  (新欄位没被加進 `State.normalize()`,舊版 `state.json` 讀回來會是
+  `null` 而不是空陣列),修好之後全數轉綠——這正是這類「所有切片欄位
+  都要 normalize」的測試該抓到的那種問題。另外對一個真正在跑的
+  gonasd 完整走一次:用 `curl` 建立一個共享(200)、重複建立同名共享
+  觸發衝突(409)、呼叫 `GET /api/v1/audit/log` 確認兩筆都被正確記錄
+  (含正確的狀態碼跟新到舊排序),並確認中間穿插的一次單純
+  `GET /api/v1/share/shares` 查詢沒有被記錄進去。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./... -race -count=1`
+  全數維持全綠。
+
+**Phase 18c(週期性健康摘要通知)—— 不用等到告警才知道系統狀況**
+
+- **設計**:`internal/monitor.Event` 新增 `Kind` 欄位(零值
+  `EventKindAlert` 維持既有告警事件的 JSON 格式完全不變,新的
+  `EventKindDigest` 搭配新增的 `Subject`/`Message` 欄位),讓既有的
+  `LogNotifier`/`WebhookNotifier`/`EmailNotifier` 三種通知管道原封不動
+  重複利用來送這種全新性質的內容,不需要另外設計一整套平行的通知
+  管道介面——`WebhookNotifier` 完全不用改(反正就是把整個 `Event`
+  編碼成 JSON 送出去),只有 `LogNotifier.Notify` 跟
+  `buildEmailMessage` 需要依 `Kind` 分流。新增
+  `monitor.BuildDigestEvent(DigestInput)` 組出摘要內容(系統資源、
+  目前觸發中的告警規則、每個備份工作的最近執行結果),以及
+  `monitor.DigestScheduler`——跟 `backup.JobScheduler` 的 cron 排程
+  迴圈是同一套「獨立 goroutine + timer,`Stop()` 保證乾淨結束、
+  `nextFn` 抽成參數方便測試」的骨架,但只支援 cron 一種排程種類(這是
+  全新功能,沒有 Phase 15 之前的固定間隔舊格式需要相容)。
+  `state.DigestConfig`(`Enabled`/`CronExpr`/`NotifierIDs`/
+  `EmailNotifierIDs`/`LastSentAt`)持久化設定,`NotifierIDs`/
+  `EmailNotifierIDs` 刻意重複使用既有的 `state.State.Notifiers`/
+  `EmailNotifiers`(而不是另外設計一套摘要專用的通知管道表單),使用者
+  用核取方塊從已經設定好的管道裡勾選要收摘要的那幾個。
+- **API/UI**:新增 `GET /api/v1/monitor/digest`(`requireAuth`,查詢
+  目前設定跟上次送出時間)、`PUT /api/v1/monitor/digest`
+  (`requireAdmin`,更新設定並立刻重新套用背景排程,不需要重啟
+  gonasd)、`POST /api/v1/monitor/digest/send`(`requireAdmin`,立刻
+  送一次,不等排程下一個週期,同樣是「立刻回 202、背景執行」的模式,
+  刻意允許在完全沒啟用排程的情況下也能呼叫——這是使用者在正式排定
+  排程之前,拿來確認「摘要長什麼樣子、有沒有送達」最自然的操作)。
+  Monitor 頁面新增一張「健康摘要」卡片,RoleViewer 能看到目前狀態
+  (啟用與否、上次送出時間),只有 RoleAdmin 看得到設定表單跟「立即
+  送出」按鈕。
+- **驗證**:單元測試涵蓋 `DigestScheduler`(重複觸發、`Stop()`
+  真的結束 goroutine、`nextFn` 出錯時安全停止)、`BuildDigestEvent`
+  (無告警觸發/有告警觸發兩種內容)、`DigestConfig.Validate`(停用時
+  不檢查 `CronExpr`,啟用時要求合法 cron 語法)、API 層(設定的持久化
+  跟啟動/停止背景排程、一個真正的 `httptest.Server` 當 webhook
+  接收端確認送出的 payload 是 `Kind:"digest"`)。更進一步,對一個真正
+  在跑的 gonasd 完整走一次,同時涵蓋三種通知管道:用 `curl` 建立一個
+  真正的 webhook 通知(指向一個真的在跑的 Python HTTP 伺服器)跟一個
+  真正的 email 通知(指向一個真的在跑的 Python `smtpd` 假 SMTP
+  伺服器,走真正的 SMTP 交握,不是 mock),設定並立刻送出一次摘要,
+  確認 webhook 真的收到內容正確的 JSON、SMTP 伺服器真的收到一封標頭/
+  內文都正確的信(含備份工作「還沒有執行過」的摘要行)、daemon 的 log
+  裡也記了一筆,`GET /api/v1/monitor/digest` 的 `lastSentAt` 正確更新。
+  另外確認停用之後重新啟動 gonasd 不會自動把背景排程拉起來(跟
+  certRenewer 是同一種「看設定決定要不要啟動背景工作」的行為)。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./... -race -count=1`
+  全數維持全綠。
 
 ## 開發
 

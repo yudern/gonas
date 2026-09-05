@@ -12,15 +12,41 @@ import (
 	"time"
 )
 
-// Event 是一條告警規則從「沒觸發」變成「觸發中」、或從「觸發中」變回
-// 「沒觸發」時,交給 Notifier 的內容。Firing=false 代表「解除」通知,
-// 而不是「這條規則本來就沒事」——AlertEngine 只在狀態真的轉換時才會
-// 產生 Event,見下面的說明。
+// EventKind 分辨 Notify 收到的 Event 到底是什麼性質的內容。零值
+// EventKindAlert 維持 Phase 5/Phase 14 就有的「一條告警規則觸發狀態
+// 轉換」語意跟既有 JSON payload 格式完全不變(舊版已經在用的 webhook
+// 接收端不會因為這次改動而收到多出來的、看不懂的必要欄位變動)。
+// EventKindDigest 是 Phase 18c 新增的「週期性健康摘要」——同一組
+// Notifier(LogNotifier/WebhookNotifier/EmailNotifier)能直接重複利用
+// 來送這種完全不同性質的內容,不需要另外設計一整套平行的通知管道
+// 介面,見 digest.go 的說明。
+type EventKind string
+
+const (
+	EventKindAlert  EventKind = ""
+	EventKindDigest EventKind = "digest"
+)
+
+// Event 是交給 Notifier 的通知內容。Kind 為零值(EventKindAlert)時,
+// 意思是「一條告警規則從『沒觸發』變成『觸發中』、或從『觸發中』變回
+// 『沒觸發』」,Firing=false 代表「解除」通知,而不是「這條規則本來就
+// 沒事」——AlertEngine 只在狀態真的轉換時才會產生這種 Event。
+//
+// Kind 為 EventKindDigest 時,Rule/Firing/Value 這三個告警專用的欄位
+// 沒有意義(維持零值),改看 Subject/Message——digest 的內容天生是
+// 「多個不相關指標的摘要」,沒辦法套用告警事件那種「一條規則、一個
+// 數值、一個門檻」的固定欄位表示,直接讓組出 Event 的那一端
+// (BuildDigestEvent)決定要講什麼比較合理,Notifier 只需要知道
+// 「這是一段給人看的標題+內文」。
 type Event struct {
-	Rule   AlertRule `json:"rule"`
-	Firing bool      `json:"firing"`
-	Value  float64   `json:"value"`
+	Kind   EventKind `json:"kind,omitempty"`
+	Rule   AlertRule `json:"rule,omitempty"`
+	Firing bool      `json:"firing,omitempty"`
+	Value  float64   `json:"value,omitempty"`
 	At     time.Time `json:"at"`
+
+	Subject string `json:"subject,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // Notifier 是告警通知的送出介面，讓 AlertEngine 不用知道通知實際上是
@@ -41,6 +67,10 @@ func NewLogNotifier(logger *slog.Logger) *LogNotifier {
 }
 
 func (n *LogNotifier) Notify(_ context.Context, ev Event) error {
+	if ev.Kind == EventKindDigest {
+		n.logger.Info("health digest", "subject", ev.Subject)
+		return nil
+	}
 	if ev.Firing {
 		n.logger.Warn("alert firing", "rule", ev.Rule.Name, "metric", ev.Rule.Metric, "value", ev.Value, "threshold", ev.Rule.Threshold)
 	} else {

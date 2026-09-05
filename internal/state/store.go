@@ -13,10 +13,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/bng147/gonas/internal/appstore"
 	"github.com/bng147/gonas/internal/backup"
+	"github.com/bng147/gonas/internal/cron"
 	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/storage"
@@ -40,6 +43,66 @@ type State struct {
 	WireGuard      *wireguard.Config       `json:"wireGuard,omitempty"`
 	BackupJobs     []backup.Job            `json:"backupJobs"`
 	Update         UpdateConfig            `json:"update"`
+	AuditLog       []AuditEntry            `json:"auditLog"`
+	Digest         DigestConfig            `json:"digest"`
+}
+
+// DigestConfig 是 Phase 18c 新增的週期性健康摘要設定。CronExpr 留空
+// (預設值)代表使用者完全沒有設定過——跟 UpdateConfig.ManifestURL 是
+// 同一種「預設不做任何背景動作」的隱私/最小驚訝設計:Enabled 就算被
+// 設成 true,只要 CronExpr 是空字串,internal/api 就不會啟動任何背景
+// 排程 goroutine。
+//
+// NotifierIDs/EmailNotifierIDs 是要把摘要送去的既有 webhook/email
+// 通知管道 ID 子集合(跟 state.State.Notifiers/EmailNotifiers 是同一批
+// 設定,digest 刻意不另外設計一套平行的通知管道設定表單)——留空
+// 代表「這種類型的管道都不送」,不是「全部都送」,使用者要明確勾選,
+// 避免新增一個 webhook/email 管道時意外也開始收到 digest。LastSentAt
+// 是最近一次成功送出的時間,nil 代表從來沒送過,給 Web UI 顯示用。
+type DigestConfig struct {
+	Enabled          bool       `json:"enabled"`
+	CronExpr         string     `json:"cronExpr,omitempty"`
+	NotifierIDs      []string   `json:"notifierIds,omitempty"`
+	EmailNotifierIDs []string   `json:"emailNotifierIds,omitempty"`
+	LastSentAt       *time.Time `json:"lastSentAt,omitempty"`
+}
+
+// Validate 只在 Enabled 為 true 時要求 CronExpr 是合法的 cron 表達式——
+// 停用時 CronExpr 留著舊值或留空都無所謂(不會有任何背景排程去剖析
+// 它),跟 backup.Schedule.Validate 對 cron 種類排程的檢查邏輯是同一套
+// (直接呼叫 internal/cron.Parse,順便也就此擋掉之後排程執行期間才
+// 發現語法錯誤的可能)。
+func (c DigestConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.CronExpr) == "" {
+		return fmt.Errorf("cronExpr is required when the digest is enabled")
+	}
+	if _, err := cron.Parse(c.CronExpr); err != nil {
+		return fmt.Errorf("invalid cron expression: %w", err)
+	}
+	return nil
+}
+
+// AuditEntry 是 Phase 18b 新增的一筆管理者動作紀錄——「誰、什麼時候、
+// 對哪一支端點做了什麼、結果的 HTTP 狀態碼」。刻意只記錄會改動系統
+// 狀態的動作(HTTP 方法不是 GET 的請求,見
+// internal/api.requireAdmin 包住的紀錄邏輯),單純瀏覽/查詢不記錄——
+// 這是一份「誰動過什麼」的稽核紀錄,不是完整的存取紀錄,兩者用途不同,
+// 全部都記反而會把真正重要的「誰改了設定」淹沒在大量查詢紀錄裡。
+//
+// Detail 是給人看的一句話摘要(例如「刪除共享 media」),由呼叫端
+// (通常是各個 handler 或 requireAdmin 本身)視情況提供;沒有特別
+// 摘要的動作(絕大多數)就只留下方法+路徑本身,前端一樣看得懂發生了
+// 什麼事,不需要每一支 handler 都額外花力氣組一句話。
+type AuditEntry struct {
+	At         time.Time `json:"at"`
+	Username   string    `json:"username"`
+	Method     string    `json:"method"`
+	Path       string    `json:"path"`
+	StatusCode int       `json:"statusCode"`
+	Detail     string    `json:"detail,omitempty"`
 }
 
 // UpdateConfig 是 Phase 17 新增的自我更新設定。ManifestURL 留空(預設值)
@@ -193,6 +256,15 @@ func (st *State) normalize() {
 	}
 	if st.BackupJobs == nil {
 		st.BackupJobs = []backup.Job{}
+	}
+	if st.AuditLog == nil {
+		st.AuditLog = []AuditEntry{}
+	}
+	if st.Digest.NotifierIDs == nil {
+		st.Digest.NotifierIDs = []string{}
+	}
+	if st.Digest.EmailNotifierIDs == nil {
+		st.Digest.EmailNotifierIDs = []string{}
 	}
 }
 

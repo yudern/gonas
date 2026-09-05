@@ -281,6 +281,42 @@ func ApplyUpdate(currentExecPath, verifiedBinaryPath string) (backupPath string,
 	return backupPath, nil
 }
 
+// RollbackToBackup 是 ApplyUpdate 的反向操作:把 "<currentExecPath>.previous"
+// 换回 currentExecPath,讓使用者在套用新版本之後發現有問題時,能一鍵
+// 退回上一個版本,不需要 SSH 進機器手動搬檔案(見
+// internal/api.handleSystemUpdateRollback)。
+//
+// 找不到 .previous 備份檔案時直接回傳錯誤——沒有備份就沒有東西可以
+// 復原,呼叫端(Web UI)應該提前用 GET /api/v1/system/update 判斷有沒有
+// 備份可用,只在有的時候才顯示「復原」按鈕,但這裡仍然防禦性地檢查,
+// 不假設呼叫端一定做對。
+//
+// 目前(有問題的新版本)不會直接被覆蓋掉、而是先搬到一個帶時間戳記的
+// 檔名("<currentExecPath>.rolled-back-<unix秒>")留著,而不是直接刪除
+// ——這樣萬一 .previous 本身也有問題(例如兩個版本都壞、或使用者
+// 復原錯了方向),剛剛復原前的那個檔案還找得回來,不會真的無路可退。
+// 這跟 ApplyUpdate 保留 .previous 備份是同一個「多留一手」的思路。
+func RollbackToBackup(currentExecPath string) (rolledBackFromPath string, err error) {
+	backupPath := currentExecPath + ".previous"
+	if _, statErr := os.Stat(backupPath); statErr != nil {
+		return "", fmt.Errorf("selfupdate: no backup found at %s: %w", backupPath, statErr)
+	}
+
+	rolledBackFromPath = fmt.Sprintf("%s.rolled-back-%d", currentExecPath, time.Now().Unix())
+	if err := os.Rename(currentExecPath, rolledBackFromPath); err != nil {
+		return "", fmt.Errorf("selfupdate: moving current executable aside: %w", err)
+	}
+
+	if err := os.Rename(backupPath, currentExecPath); err != nil {
+		// 復原失敗——盡力把原本的執行檔搬回來,不要讓 gonasd 一個可執行
+		// 檔案都不剩。
+		_ = os.Rename(rolledBackFromPath, currentExecPath)
+		return "", fmt.Errorf("selfupdate: restoring backup: %w", err)
+	}
+
+	return rolledBackFromPath, nil
+}
+
 // Reexec 用新的執行檔內容重新啟動目前這個 process——不是「先結束、
 // 等外部東西(systemd/Docker)再啟動一個新的」,而是透過 POSIX
 // exec(2) 系統呼叫直接在同一個 PID 上換掉整個程式映像檔。這是刻意的

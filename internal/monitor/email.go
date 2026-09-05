@@ -162,21 +162,31 @@ func (n *EmailNotifier) Notify(ctx context.Context, ev Event) error {
 // 告警通知的內容本來就單純,沒有必要為了排版做 HTML 郵件,純文字在任何
 // 郵件用戶端都能正常顯示,也不會有 HTML 郵件常見的跑版/垃圾信過濾問題。
 func buildEmailMessage(cfg EmailConfig, ev Event) string {
-	status := "RESOLVED"
-	if ev.Firing {
-		status = "FIRING"
-	}
-	subject := fmt.Sprintf("[GoNAS %s] %s", status, ev.Rule.Name)
-
+	var subject string
 	var body strings.Builder
-	fmt.Fprintf(&body, "GoNAS alert: %s\n\n", status)
-	fmt.Fprintf(&body, "Rule:      %s\n", ev.Rule.Name)
-	fmt.Fprintf(&body, "Metric:    %s\n", ev.Rule.Metric)
-	if !ev.Rule.Metric.isBoolean() {
-		fmt.Fprintf(&body, "Condition: %s %s %v\n", ev.Rule.Metric, ev.Rule.Comparator, ev.Rule.Threshold)
+
+	if ev.Kind == EventKindDigest {
+		// Digest 郵件的標題/內文已經是組好給人看的文字(見
+		// BuildDigestEvent),這裡不用像告警事件那樣從 Rule/Value 組欄位,
+		// 直接使用 Subject/Message 即可。
+		subject = fmt.Sprintf("[GoNAS] %s", ev.Subject)
+		body.WriteString(ev.Message)
+	} else {
+		status := "RESOLVED"
+		if ev.Firing {
+			status = "FIRING"
+		}
+		subject = fmt.Sprintf("[GoNAS %s] %s", status, ev.Rule.Name)
+
+		fmt.Fprintf(&body, "GoNAS alert: %s\n\n", status)
+		fmt.Fprintf(&body, "Rule:      %s\n", ev.Rule.Name)
+		fmt.Fprintf(&body, "Metric:    %s\n", ev.Rule.Metric)
+		if !ev.Rule.Metric.isBoolean() {
+			fmt.Fprintf(&body, "Condition: %s %s %v\n", ev.Rule.Metric, ev.Rule.Comparator, ev.Rule.Threshold)
+		}
+		fmt.Fprintf(&body, "Value:     %v\n", ev.Value)
+		fmt.Fprintf(&body, "Time:      %s\n", ev.At.Format(time.RFC1123Z))
 	}
-	fmt.Fprintf(&body, "Value:     %v\n", ev.Value)
-	fmt.Fprintf(&body, "Time:      %s\n", ev.At.Format(time.RFC1123Z))
 
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "From: %s\r\n", cfg.From)

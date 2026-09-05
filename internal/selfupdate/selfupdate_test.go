@@ -304,6 +304,68 @@ func TestApplyUpdate_MissingNewBinary_RestoresOriginalAndErrors(t *testing.T) {
 	}
 }
 
+func TestRollbackToBackup_RestoresPreviousAndKeepsRolledBackCopy(t *testing.T) {
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "gonasd")
+	backupPath := currentPath + ".previous"
+
+	if err := os.WriteFile(currentPath, []byte("broken new version"), 0o755); err != nil {
+		t.Fatalf("writing current binary: %v", err)
+	}
+	if err := os.WriteFile(backupPath, []byte("known good old version"), 0o755); err != nil {
+		t.Fatalf("writing backup binary: %v", err)
+	}
+
+	rolledBackFromPath, err := RollbackToBackup(currentPath)
+	if err != nil {
+		t.Fatalf("RollbackToBackup returned error: %v", err)
+	}
+	if rolledBackFromPath == "" {
+		t.Fatal("expected a non-empty rolled-back-from path")
+	}
+
+	gotCurrent, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("reading current path after rollback: %v", err)
+	}
+	if string(gotCurrent) != "known good old version" {
+		t.Errorf("expected current path to hold the restored backup content, got %q", gotCurrent)
+	}
+
+	gotRolledBack, err := os.ReadFile(rolledBackFromPath)
+	if err != nil {
+		t.Fatalf("reading rolled-back-from path: %v", err)
+	}
+	if string(gotRolledBack) != "broken new version" {
+		t.Errorf("expected the rolled-back-from copy to hold the pre-rollback content, got %q", gotRolledBack)
+	}
+
+	if _, err := os.Stat(backupPath); !errors.Is(err, os.ErrNotExist) {
+		t.Error("expected the .previous path to no longer exist after being renamed into place")
+	}
+}
+
+func TestRollbackToBackup_MissingBackup_LeavesCurrentUntouchedAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	currentPath := filepath.Join(dir, "gonasd")
+	if err := os.WriteFile(currentPath, []byte("only version around"), 0o755); err != nil {
+		t.Fatalf("writing current binary: %v", err)
+	}
+
+	_, err := RollbackToBackup(currentPath)
+	if err == nil {
+		t.Fatal("expected an error when no .previous backup exists")
+	}
+
+	got, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatalf("expected current binary untouched and readable, but reading it failed: %v", err)
+	}
+	if string(got) != "only version around" {
+		t.Errorf("expected current binary content unchanged, got %q", got)
+	}
+}
+
 func TestChecker_SkipsCheckWhenManifestURLEmpty(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

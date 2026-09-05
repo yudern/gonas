@@ -270,6 +270,153 @@ func TestHandleSystemUpdateApply_EndToEndSwapsRealFileAndSignalsRestart(t *testi
 	}
 }
 
+// TestHandleSystemUpdateGet_BackupAvailableReflectsPreviousFile 驗證
+// buildSystemUpdateResponse 新增的 BackupAvailable 欄位:沒有
+// ".previous" 檔案時是 false,建立之後變成 true——這是 Web UI 用來
+// 決定要不要顯示「復原到上一個版本」按鈕的依據。
+func TestHandleSystemUpdateGet_BackupAvailableReflectsPreviousFile(t *testing.T) {
+	execDir := t.TempDir()
+	execPath := filepath.Join(execDir, "gonasd")
+	if err := os.WriteFile(execPath, []byte("current"), 0o755); err != nil {
+		t.Fatalf("seeding fake current executable: %v", err)
+	}
+
+	s := newTestServerWithUpdateChecker(t)
+	s.updateExecPathFunc = func() (string, error) { return execPath, nil }
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/update", nil)
+	rec := httptest.NewRecorder()
+	s.handleSystemUpdateGet(rec, req)
+	var resp systemUpdateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.BackupAvailable {
+		t.Error("expected backupAvailable=false with no .previous file present")
+	}
+
+	if err := os.WriteFile(execPath+".previous", []byte("old"), 0o755); err != nil {
+		t.Fatalf("seeding .previous backup: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleSystemUpdateGet(rec, req)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.BackupAvailable {
+		t.Error("expected backupAvailable=true once a .previous file exists")
+	}
+}
+
+func TestHandleSystemUpdateRollback_NoBackupReturnsBadRequest(t *testing.T) {
+	execDir := t.TempDir()
+	execPath := filepath.Join(execDir, "gonasd")
+	if err := os.WriteFile(execPath, []byte("current"), 0o755); err != nil {
+		t.Fatalf("seeding fake current executable: %v", err)
+	}
+
+	s := newTestServerWithUpdateChecker(t)
+	s.updateExecPathFunc = func() (string, error) { return execPath, nil }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/update/rollback", nil)
+	rec := httptest.NewRecorder()
+	s.handleSystemUpdateRollback(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when no .previous backup exists, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSystemUpdateRollback_AlreadyInProgressReturnsConflict(t *testing.T) {
+	execDir := t.TempDir()
+	execPath := filepath.Join(execDir, "gonasd")
+	if err := os.WriteFile(execPath, []byte("current"), 0o755); err != nil {
+		t.Fatalf("seeding fake current executable: %v", err)
+	}
+	if err := os.WriteFile(execPath+".previous", []byte("old"), 0o755); err != nil {
+		t.Fatalf("seeding .previous backup: %v", err)
+	}
+
+	s := newTestServerWithUpdateChecker(t)
+	s.updateExecPathFunc = func() (string, error) { return execPath, nil }
+	s.applyStatus = applyUpdateStatus{Stage: applyStageDownloading, StartedAt: time.Now()}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/update/rollback", nil)
+	rec := httptest.NewRecorder()
+	s.handleSystemUpdateRollback(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 while an apply/rollback is already in progress, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleSystemUpdateRollback_EndToEndRestoresBackupAndSignalsRestart
+// 是 rollback 端點的端到端驗證,對稱於上面 apply 的端到端測試:操作
+// t.TempDir() 底下的真實檔案,確認 (1) 目前執行檔的內容真的變回
+// ".previous" 備份的內容、(2) 原本(可能有問題的)那份執行檔被搬到
+// 一個帶時間戳記的 ".rolled-back-<unix>" 路徑而不是被刪除、(3) 成功
+// 之後 s.restartRequested 收到跟 apply 一樣、帶著 execPath 本身的訊號。
+func TestHandleSystemUpdateRollback_EndToEndRestoresBackupAndSignalsRestart(t *testing.T) {
+	execDir := t.TempDir()
+	execPath := filepath.Join(execDir, "gonasd")
+	brokenContent := []byte("broken new version")
+	goodContent := []byte("known good old version")
+	if err := os.WriteFile(execPath, brokenContent, 0o755); err != nil {
+		t.Fatalf("seeding fake current (broken) executable: %v", err)
+	}
+	if err := os.WriteFile(execPath+".previous", goodContent, 0o755); err != nil {
+		t.Fatalf("seeding .previous backup: %v", err)
+	}
+
+	s := newTestServerWithUpdateChecker(t)
+	s.updateExecPathFunc = func() (string, error) { return execPath, nil }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/update/rollback", nil)
+	rec := httptest.NewRecorder()
+	s.handleSystemUpdateRollback(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case gotPath := <-s.restartRequested:
+		if gotPath != execPath {
+			t.Errorf("expected restart signal to carry the resolved exec path %q, got %q", execPath, gotPath)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a restart signal after rolling back")
+	}
+
+	gotContent, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Fatalf("reading rolled-back executable: %v", err)
+	}
+	if string(gotContent) != string(goodContent) {
+		t.Errorf("expected executable content to be restored to the backup, got %q", gotContent)
+	}
+
+	if _, err := os.Stat(execPath + ".previous"); !os.IsNotExist(err) {
+		t.Errorf("expected .previous to no longer exist after rollback, stat err = %v", err)
+	}
+
+	matches, err := filepath.Glob(execPath + ".rolled-back-*")
+	if err != nil {
+		t.Fatalf("globbing for rolled-back copy: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one .rolled-back-* copy, got %v", matches)
+	}
+	rolledBackContent, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("reading rolled-back copy: %v", err)
+	}
+	if string(rolledBackContent) != string(brokenContent) {
+		t.Errorf("expected rolled-back copy to preserve the broken content, got %q", rolledBackContent)
+	}
+}
+
 func TestHandleSystemUpdateApply_AlreadyInProgressReturnsConflict(t *testing.T) {
 	s := newTestServerWithUpdateChecker(t)
 	if err := s.store.Update(func(st *state.State) error {

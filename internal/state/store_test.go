@@ -285,3 +285,31 @@ func TestOpen_LegacyAdminMissingRole_DefaultsToRoleAdmin(t *testing.T) {
 		t.Errorf("expected the roleless account to default to RoleAdmin, got %+v", admins)
 	}
 }
+
+// TestDigestConfig_Validate 涵蓋 Phase 18c 新增的 DigestConfig.Validate:
+// 停用時完全不檢查 CronExpr(留舊值或留空都可以,因為不會有任何背景
+// 排程去剖析它),啟用時則要求是一個合法的 5 欄位 cron 表達式。
+func TestDigestConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     DigestConfig
+		wantErr bool
+	}{
+		{"disabled with empty cronExpr is fine", DigestConfig{Enabled: false}, false},
+		{"disabled with garbage cronExpr is still fine", DigestConfig{Enabled: false, CronExpr: "not a cron expr"}, false},
+		{"enabled requires a cronExpr", DigestConfig{Enabled: true}, true},
+		{"enabled with invalid cronExpr", DigestConfig{Enabled: true, CronExpr: "not a cron expr"}, true},
+		{"enabled with valid cronExpr", DigestConfig{Enabled: true, CronExpr: "0 8 * * *"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Error("expected an error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+		})
+	}
+}

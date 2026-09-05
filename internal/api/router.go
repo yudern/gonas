@@ -56,6 +56,15 @@ const (
 	monitorHistoryCapacity = 180
 )
 
+// auditLogCapacity 是 Phase 18b 稽核紀錄(state.State.AuditLog)保留的
+// 最大筆數,超過就從最舊的開始丟——理由跟 monitorHistoryCapacity 一樣:
+// 這是一份持續寫進單一 JSON 檔案的紀錄(見 internal/state 套件的
+// 「單一檔案、整份覆寫」設計),沒有上限的話檔案會隨著時間無限長大。
+// 500 筆對一台家用/小型辦公室 NAS 來說,通常已經涵蓋好幾週到幾個月的
+// 管理操作歷史,真的需要更長期的稽核紀錄時,使用者可以自行定期把
+// GET /api/v1/audit/log 的結果匯出保存。
+const auditLogCapacity = 500
+
 // updateCheckInterval 是背景自我更新檢查的週期。版本更新不是分秒必爭
 // 的事(不像 HTTPS 憑證快過期那樣有明確的截止日),6 小時一次已經能讓
 // 使用者在合理時間內在 Web UI 看到「有新版本」的提示,又不會對使用者
@@ -107,6 +116,16 @@ type Server struct {
 	monitorHistory   *monitor.History
 	alertEngine      *monitor.AlertEngine
 	monitorPoller    *monitor.Poller
+
+	// digestScheduler 是 Phase 18c 新增的週期性健康摘要背景排程,
+	// state.State.Digest.Enabled 且 CronExpr 合法時才會真的啟動——跟
+	// certRenewer 一樣是「看設定決定要不要啟動」的背景工作,不像
+	// monitorPoller/updateChecker 那樣一律啟動。digestMu 保護
+	// 「讀取/替換這個欄位」本身(PUT /api/v1/monitor/digest 修改設定後
+	// 需要停掉舊的、視情況啟動新的排程),不能沿用 state.Store 內部的鎖,
+	// 理由跟 backupMu 一樣。
+	digestMu        sync.Mutex
+	digestScheduler *monitor.DigestScheduler
 
 	// backupMu 保護 backupSchedulers —— 這個 map 本身不是持久化狀態的一
 	// 部分(排程 goroutine 的控制代碼不能序列化進 state.json),所以需要
@@ -240,6 +259,14 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		return s.store.Snapshot().Update.ManifestURL
 	}, s.updateHTTPClient)
 
+	// 跟 certRenewer 一樣「看設定決定要不要啟動」——digest 沒設定
+	// (CronExpr 空字串,DigestConfig 的預設零值)或使用者主動停用之前,
+	// 不該憑空多一個背景 goroutine 在跑,細節見 startDigestScheduler
+	// 的說明。
+	if snap := store.Snapshot(); snap.Digest.Enabled && snap.Digest.CronExpr != "" {
+		s.startDigestScheduler(snap.Digest.CronExpr)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
@@ -265,6 +292,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	// 帳號管理(新增/刪除「其他」帳號、列出所有帳號)才是真正「管理 NAS」
 	// 的動作,一律要求 RoleAdmin。
 	mux.HandleFunc("GET /api/v1/auth/accounts", s.requireAdmin(s.handleAuthAccountsList))
+	// Phase 18b:管理者動作稽核紀錄,見 audit_handlers.go 的說明。
+	mux.HandleFunc("GET /api/v1/audit/log", s.requireAdmin(s.handleAuditLogGet))
 	mux.HandleFunc("POST /api/v1/auth/accounts", s.requireAdmin(s.handleAuthAccountsCreate))
 	mux.HandleFunc("DELETE /api/v1/auth/accounts/{username}", s.requireAdmin(s.handleAuthAccountsDelete))
 
@@ -280,6 +309,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("PUT /api/v1/system/update/settings", s.requireAdmin(s.handleSystemUpdateSettingsSet))
 	mux.HandleFunc("POST /api/v1/system/update/check", s.requireAdmin(s.handleSystemUpdateCheck))
 	mux.HandleFunc("POST /api/v1/system/update/apply", s.requireAdmin(s.handleSystemUpdateApply))
+	mux.HandleFunc("POST /api/v1/system/update/rollback", s.requireAdmin(s.handleSystemUpdateRollback))
 
 	mux.HandleFunc("GET /api/v1/vpn/status", s.requireAuth(s.handleVPNStatus))
 	mux.HandleFunc("PUT /api/v1/vpn/interface", s.requireAdmin(s.handleVPNInterfaceSet))
@@ -326,6 +356,10 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/monitor/email-notifiers", s.requireAuth(s.handleMonitorEmailNotifiersList))
 	mux.HandleFunc("POST /api/v1/monitor/email-notifiers", s.requireAdmin(s.handleMonitorEmailNotifiersCreate))
 	mux.HandleFunc("DELETE /api/v1/monitor/email-notifiers/{id}", s.requireAdmin(s.handleMonitorEmailNotifiersDelete))
+	// Phase 18c:週期性健康摘要,見 monitor_digest_handlers.go 的說明。
+	mux.HandleFunc("GET /api/v1/monitor/digest", s.requireAuth(s.handleMonitorDigestGet))
+	mux.HandleFunc("PUT /api/v1/monitor/digest", s.requireAdmin(s.handleMonitorDigestSet))
+	mux.HandleFunc("POST /api/v1/monitor/digest/send", s.requireAdmin(s.handleMonitorDigestSend))
 
 	mux.HandleFunc("GET /api/v1/backup/jobs", s.requireAuth(s.handleBackupJobsList))
 	mux.HandleFunc("POST /api/v1/backup/jobs", s.requireAdmin(s.handleBackupJobsCreate))
@@ -396,6 +430,8 @@ func (s *Server) Close() {
 	if s.updateChecker != nil {
 		s.updateChecker.Stop()
 	}
+
+	s.stopDigestScheduler()
 }
 
 // RestartRequested 回傳一個訊號 channel,self-update 成功把新版執行檔

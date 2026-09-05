@@ -71,8 +71,40 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, errInsufficientPermission)
 			return
 		}
-		next(w, r)
+
+		// Phase 18b:稽核紀錄。只記錄會改動系統狀態的請求(HTTP 方法不是
+		// GET)——requireAdmin 底下少數幾支 GET 端點(例如
+		// GET /api/v1/auth/accounts)是查詢,不是「動作」,見
+		// state.AuditEntry 的說明。用 statusRecorder 包一層
+		// http.ResponseWriter 才能在 next 執行完之後知道它實際回了
+		// 什麼狀態碼——不管成功或失敗(400/403/500 等)都值得留下紀錄,
+		// 「管理者嘗試做了什麼、結果如何」本身就是稽核紀錄要回答的問題,
+		// 不是只記錄成功的操作。
+		if r.Method == http.MethodGet {
+			next(w, r)
+			return
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		s.recordAudit(sess.Username, r.Method, r.URL.Path, rec.status)
 	})
+}
+
+// statusRecorder 包住 http.ResponseWriter,記下實際呼叫 WriteHeader 的
+// 狀態碼——如果 handler 從頭到尾沒呼叫 WriteHeader(直接寫 body),
+// net/http 本身的行為是視同 200,這裡的預設值跟這個行為保持一致。
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if !r.wroteHeader {
+		r.status = status
+		r.wroteHeader = true
+	}
+	r.ResponseWriter.WriteHeader(status)
 }
 
 // findAdmin 在帳號清單裡依使用者名稱找一筆,回傳的是副本——呼叫端如果
