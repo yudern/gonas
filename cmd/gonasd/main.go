@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -126,7 +127,18 @@ func main() {
 		var err error
 		if httpsCfg.Enabled {
 			logger.Info("starting gonasd with https enabled", "certPath", httpsCfg.CertPath)
-			err = srv.ListenAndServeTLS(httpsCfg.CertPath, httpsCfg.KeyPath)
+			// 用 tls.Config.GetCertificate 動態載入憑證,而不是把
+			// certFile/keyFile 路徑直接交給 ListenAndServeTLS——後者只在
+			// listener 建立的當下讀一次憑證,之後 internal/security 背景
+			// 續期(見 api.New 裡啟動 certRenewer 的說明)重新簽出一份新
+			// 憑證,也不會被這個已經在跑的 listener 拿到。GetCertificate
+			// 這個回呼在「每一次」TLS 交握都會被呼叫,讓憑證續期完全
+			// 不需要重啟 gonasd 就能生效——這跟「開/關 HTTPS 本身需要
+			// 重啟」是兩件不同的事,見上面的說明。
+			srv.TLSConfig = &tls.Config{
+				GetCertificate: apiServer.HTTPSCertificateLoader(httpsCfg.CertPath, httpsCfg.KeyPath),
+			}
+			err = srv.ListenAndServeTLS("", "")
 		} else {
 			err = srv.ListenAndServe()
 		}

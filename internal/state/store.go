@@ -87,10 +87,23 @@ func IsValidRole(role string) bool {
 // HTTPS」的意圖記錄 —— 實際切換 gonasd 監聽 HTTP 或 HTTPS 只在程序啟動
 // 時讀取一次(見 cmd/gonasd/main.go),改這個設定之後需要重啟 daemon
 // 才會生效,API 回應會提醒這件事,詳見 internal/api 的說明。
+//
+// Hosts 記錄使用者當初開啟 HTTPS 時填的 SAN 主機名稱/IP(見
+// internal/security.GenerateSelfSignedCert)。Phase 15 之前這個欄位不
+// 存在,憑證簽發完就沒人記得原本填了什麼——這對「憑證快到期時背景自動
+// 重簽」這個新功能是個問題:重簽時如果不知道原本的 hosts,只能退回
+// localhost/127.0.0.1,會讓使用者原本填的區網 IP/DDNS 網域悄悄從新憑證
+// 的 SAN 裡消失。加上這個欄位後,續期時原封不動沿用同一組 hosts。
+// omitempty + 全新欄位:讀到 Phase 15 之前、完全沒有這個欄位的舊
+// state.json 時,Hosts 就是 nil,不需要任何遷移程式碼——只是續期時會
+// 退回 localhost/127.0.0.1(等於「這份憑證最早不是 Phase 15 之後開的
+// HTTPS」的自然結果),使用者只要重新在 Web UI 存一次 HTTPS 設定,
+// Hosts 就會補上。
 type HTTPSConfig struct {
-	Enabled  bool   `json:"enabled"`
-	CertPath string `json:"certPath,omitempty"`
-	KeyPath  string `json:"keyPath,omitempty"`
+	Enabled  bool     `json:"enabled"`
+	CertPath string   `json:"certPath,omitempty"`
+	KeyPath  string   `json:"keyPath,omitempty"`
+	Hosts    []string `json:"hosts,omitempty"`
 }
 
 // UserRecord 是 Web UI 顯示用的使用者中繼資料。真正的帳號存在系統的

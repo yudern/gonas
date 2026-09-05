@@ -1686,13 +1686,14 @@ async function renderSecurity(el) {
         ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
         ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
       </p>
+      ${https.certExpiresAt ? `<p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.certExpiresAt", { date: formatDateTime(https.certExpiresAt) }))} · ${esc(t("security.certAutoRenews"))}</p>` : ""}
       ${https.restartRequiredNotice ? msg("warn", translateNotice(https.restartRequiredNotice)) : ""}
       <div id="https-msg"></div>
       <form class="stacked" id="https-form">
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> ${esc(t("security.enableHttps"))}</label></div>
         <div class="field">
           <label>${esc(t("security.certHosts"))}</label>
-          <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10"></textarea>
+          <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10">${esc((https.hosts || []).join("\n"))}</textarea>
           <div class="hint">${esc(t("security.certHostsHint"))}</div>
         </div>
         <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
@@ -1840,12 +1841,17 @@ function attachHTTPSFormHandlers(el) {
   el.querySelector("#https-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
-    const box = el.querySelector("#https-msg");
     try {
       await api.setHTTPSSettings({ enabled: f.get("enabled") === "on", hosts: linesOf(f.get("hosts")) });
-      box.innerHTML = msg("ok", t("security.httpsSaved"));
+      // 整個安全性頁面重新渲染,而不是只在原地顯示一句「已儲存」——
+      // 這樣剛簽出來的憑證到期日(certExpiresAt)、使用者剛填的 hosts
+      // 才會立刻反映在畫面上,不用使用者自己手動重新整理或切換頁面
+      // 才看得到,尤其是「第一次開啟 HTTPS」這個時間點,使用者最需要
+      // 馬上確認「憑證真的簽出來了、到期日長這樣」。
+      await renderSecurity(el);
+      el.querySelector("#https-msg").innerHTML = msg("ok", t("security.httpsSaved"));
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      el.querySelector("#https-msg").innerHTML = msg("error", err.message);
     }
   });
 }

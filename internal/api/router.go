@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -94,6 +95,11 @@ type Server struct {
 	// 自己的鎖,不能沿用 state.Store 內部的鎖。
 	backupMu         sync.Mutex
 	backupSchedulers map[string]*backup.JobScheduler
+
+	// certRenewer 是 HTTPS 啟用時,背景週期性檢查/續簽自簽 TLS 憑證的
+	// goroutine(見 internal/security.CertRenewer)。HTTPS 沒有啟用時
+	// 維持 nil,New()/Close() 都要檢查 nil 再動作。
+	certRenewer *security.CertRenewer
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -141,6 +147,18 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		if job.Enabled {
 			s.startBackupScheduler(job)
 		}
+	}
+
+	// HTTPS 是不是要開啟只在 cmd/gonasd/main.go 啟動當下決定要不要用
+	// TLS 監聽(見那邊的說明,改設定需要重啟才生效),但「憑證快過期時
+	// 背景自動續簽」是完全獨立的另一件事,不需要等重啟這個機制本身
+	// 存在與否——只要這次啟動當下 HTTPS 是啟用的、憑證檔案路徑也有記
+	// 下來,就把 CertRenewer 一起啟動,讓它跟 monitorPoller、
+	// backupSchedulers 一樣是 New() 啟動、Close() 停止的背景工作。
+	if httpsCfg := store.Snapshot().HTTPS; httpsCfg.Enabled && httpsCfg.CertPath != "" && httpsCfg.KeyPath != "" {
+		validFor, renewBefore, checkInterval := s.httpsCertRenewalPolicy()
+		s.certRenewer = security.NewCertRenewer(logger)
+		s.certRenewer.Start(context.Background(), checkInterval, httpsCfg.CertPath, httpsCfg.KeyPath, httpsCfg.Hosts, validFor, renewBefore)
 	}
 
 	mux := http.NewServeMux()
@@ -281,6 +299,30 @@ func (s *Server) Close() {
 	for _, sched := range schedulers {
 		sched.Stop()
 	}
+
+	if s.certRenewer != nil {
+		s.certRenewer.Stop()
+	}
+}
+
+// HTTPSCertificateLoader 回傳一個可以指定給 tls.Config.GetCertificate
+// 的函式,讓 cmd/gonasd/main.go 啟動 TLS 監聽時不是傳靜態的
+// certFile/keyFile 路徑給 ListenAndServeTLS,而是每次 TLS 交握都透過
+// internal/security.CertStore 動態載入「目前檔案系統上最新」的憑證。
+// 這樣 certRenewer 在背景重新簽發憑證之後,不需要重啟 gonasd、下一次
+// 有人連進來的 TLS 交握就會自動拿到新憑證,徹底做到「憑證續期不用
+// 重啟」——跟「開關 HTTPS 本身需要重啟」是兩件獨立的事,見本檔案
+// New() 裡 certRenewer 啟動邏輯旁的說明。
+func (s *Server) HTTPSCertificateLoader(certPath, keyPath string) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	return security.NewCertStore(certPath, keyPath).GetCertificate
+}
+
+// httpsCertRenewalPolicy 回傳自簽憑證的效期、續期門檻、續期檢查頻率
+// 這三個政策數字(定義在 internal/api/security_handlers.go),讓 New()
+// 啟動 certRenewer 時跟 handleSecurityHTTPSSet 簽發新憑證時,永遠用
+// 同一組數字,不會兩處各自維護一份、之後改一個忘了改另一個。
+func (s *Server) httpsCertRenewalPolicy() (validFor, renewBefore, checkInterval time.Duration) {
+	return httpsCertValidity, httpsCertRenewBefore, httpsCertRenewCheckInterval
 }
 
 // fileManagerRoot 回傳目前檔案管理員該用的根目錄(陣列的 mergerFS

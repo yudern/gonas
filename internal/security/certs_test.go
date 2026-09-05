@@ -1,9 +1,12 @@
 package security
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +14,10 @@ import (
 	"testing"
 	"time"
 )
+
+func discardTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func TestGenerateSelfSignedCert_ParsesAndHasExpectedSANs(t *testing.T) {
 	certPEM, keyPEM, err := GenerateSelfSignedCert([]string{"192.168.1.10", "nas.local"}, 365*24*time.Hour)
@@ -138,6 +145,255 @@ func TestEnsureCertFiles_OnlyCreatesMissingFileIfPartiallyPresent(t *testing.T) 
 	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
 		t.Errorf("generated cert/key files do not form a valid pair: %v", err)
 	}
+}
+
+func TestLoadCertExpiry_MatchesGeneratedValidity(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+	validFor := 10 * 24 * time.Hour
+
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, validFor); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+
+	expiry, err := LoadCertExpiry(certPath)
+	if err != nil {
+		t.Fatalf("LoadCertExpiry returned error: %v", err)
+	}
+
+	want := time.Now().Add(validFor)
+	if expiry.Before(want.Add(-time.Minute)) || expiry.After(want.Add(time.Minute)) {
+		t.Errorf("LoadCertExpiry() = %v, want approximately %v", expiry, want)
+	}
+}
+
+func TestLoadCertExpiry_MissingFile(t *testing.T) {
+	if _, err := LoadCertExpiry(filepath.Join(t.TempDir(), "does-not-exist.crt")); err == nil {
+		t.Error("expected error for missing certificate file, got nil")
+	}
+}
+
+func TestRenewCertIfNeeded_CreatesWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+
+	renewed, err := RenewCertIfNeeded(certPath, keyPath, []string{"localhost"}, 24*time.Hour, time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("RenewCertIfNeeded returned error: %v", err)
+	}
+	if !renewed {
+		t.Error("expected renewed=true when cert files did not exist yet")
+	}
+	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+		t.Errorf("generated cert/key files do not form a valid pair: %v", err)
+	}
+}
+
+// TestRenewCertIfNeeded_NotYetDue_LeavesExistingCertUntouched 是續期邏輯
+// 最核心的行為:憑證還沒進入續期門檻時完全不該動它,不然使用者的瀏覽器
+// 會無緣無故一直跳「憑證變了」的警告。
+func TestRenewCertIfNeeded_NotYetDue_LeavesExistingCertUntouched(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, 365*24*time.Hour); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+	original, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("reading original cert: %v", err)
+	}
+
+	// now + renewBefore is nowhere near the 365-day expiry, so this should
+	// be a no-op.
+	renewed, err := RenewCertIfNeeded(certPath, keyPath, []string{"localhost"}, 365*24*time.Hour, 30*24*time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("RenewCertIfNeeded returned error: %v", err)
+	}
+	if renewed {
+		t.Error("expected renewed=false when the certificate is nowhere near its renewal threshold")
+	}
+
+	after, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("reading cert after RenewCertIfNeeded: %v", err)
+	}
+	if string(original) != string(after) {
+		t.Error("expected certificate file to be untouched when not yet due for renewal")
+	}
+}
+
+// TestRenewCertIfNeeded_PastRenewalThreshold_IssuesNewCert verifies the
+// other half: once "now" is within renewBefore of the certificate's
+// NotAfter (simulated here by using a very short validFor so the freshly
+// generated cert is already within the renewal window), a fresh
+// certificate is issued and the file contents actually change.
+func TestRenewCertIfNeeded_PastRenewalThreshold_IssuesNewCert(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+
+	// Issue a cert valid for only 1 hour.
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, time.Hour); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+	original, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("reading original cert: %v", err)
+	}
+
+	// renewBefore of 2 hours means "now" is already within the renewal
+	// window of a cert that only has 1 hour of validity left.
+	renewed, err := RenewCertIfNeeded(certPath, keyPath, []string{"localhost"}, 365*24*time.Hour, 2*time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("RenewCertIfNeeded returned error: %v", err)
+	}
+	if !renewed {
+		t.Error("expected renewed=true when within the renewal threshold of expiry")
+	}
+
+	after, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatalf("reading cert after renewal: %v", err)
+	}
+	if string(original) == string(after) {
+		t.Error("expected certificate content to change after renewal")
+	}
+
+	// The renewed cert should reflect the new validFor (365 days), not the
+	// original 1-hour validity.
+	expiry, err := LoadCertExpiry(certPath)
+	if err != nil {
+		t.Fatalf("LoadCertExpiry returned error: %v", err)
+	}
+	if time.Until(expiry) < 300*24*time.Hour {
+		t.Errorf("expected renewed cert to be valid for ~365 days, expiry is only %v away", time.Until(expiry))
+	}
+}
+
+func TestRenewCertIfNeeded_AlreadyExpired_IssuesNewCert(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, time.Hour); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+
+	// Simulate checking long after the certificate has already expired.
+	future := time.Now().Add(365 * 24 * time.Hour)
+	renewed, err := RenewCertIfNeeded(certPath, keyPath, []string{"localhost"}, 24*time.Hour, time.Hour, future)
+	if err != nil {
+		t.Fatalf("RenewCertIfNeeded returned error: %v", err)
+	}
+	if !renewed {
+		t.Error("expected renewed=true for an already-expired certificate")
+	}
+}
+
+func TestCertStore_GetCertificate_LoadsAndCaches(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, 24*time.Hour); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+
+	store := NewCertStore(certPath, keyPath)
+	first, err := store.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("GetCertificate returned error: %v", err)
+	}
+	if first == nil {
+		t.Fatal("expected a non-nil certificate")
+	}
+
+	second, err := store.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("second GetCertificate call returned error: %v", err)
+	}
+	// Same underlying *tls.Certificate pointer means the cache was used
+	// instead of re-reading/re-parsing the files from disk.
+	if first != second {
+		t.Error("expected GetCertificate to return the cached certificate when files haven't changed")
+	}
+}
+
+func TestCertStore_GetCertificate_ReloadsAfterFileChanges(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, time.Hour); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+
+	store := NewCertStore(certPath, keyPath)
+	first, err := store.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("GetCertificate returned error: %v", err)
+	}
+
+	// Simulate CertRenewer issuing a fresh cert (mtimes will differ from
+	// the original files since some real time passes between the two
+	// EnsureCertFiles calls, and RenewCertIfNeeded always uses the atomic
+	// write-then-rename path which produces a fresh mtime).
+	time.Sleep(10 * time.Millisecond)
+	renewed, err := RenewCertIfNeeded(certPath, keyPath, []string{"localhost"}, 365*24*time.Hour, 2*time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("RenewCertIfNeeded returned error: %v", err)
+	}
+	if !renewed {
+		t.Fatal("expected the 1-hour cert to be renewed given a 2-hour renewBefore threshold")
+	}
+
+	second, err := store.GetCertificate(nil)
+	if err != nil {
+		t.Fatalf("GetCertificate after renewal returned error: %v", err)
+	}
+	if first == second {
+		t.Error("expected GetCertificate to reload and return a different certificate after the files were renewed")
+	}
+}
+
+func TestCertRenewer_RunsRepeatedlyAndStopsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "gonas.crt")
+	keyPath := filepath.Join(dir, "gonas.key")
+	// Start with a cert that's already within the renewal window relative
+	// to the check the renewer will perform, so every tick renews it.
+	if err := EnsureCertFiles(certPath, keyPath, []string{"localhost"}, time.Millisecond); err != nil {
+		t.Fatalf("EnsureCertFiles returned error: %v", err)
+	}
+
+	r := NewCertRenewer(discardTestLogger())
+	r.Start(context.Background(), 5*time.Millisecond, certPath, keyPath, []string{"localhost"}, 24*time.Hour, time.Hour)
+	defer r.Stop()
+
+	// The immediate startup check should renew right away since the
+	// original cert is already expired (validFor: 1ms).
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var expiry time.Time
+	for time.Now().Before(deadline) {
+		var err error
+		expiry, err = LoadCertExpiry(certPath)
+		if err == nil && time.Until(expiry) > time.Hour {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if time.Until(expiry) <= time.Hour {
+		t.Fatalf("expected CertRenewer to have renewed the cert to a ~24h validity window, expiry is only %v away", time.Until(expiry))
+	}
+
+	r.Stop()
+}
+
+func TestCertRenewer_StopBeforeStart_DoesNotPanic(t *testing.T) {
+	r := NewCertRenewer(discardTestLogger())
+	r.Stop() // never started; must be a safe no-op
 }
 
 // TestGenerateSelfSignedCert_LiveOpenSSLVerification 用這台機器真正的

@@ -1,17 +1,21 @@
 package security
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -102,6 +106,200 @@ func EnsureCertFiles(certPath, keyPath string, hosts []string, validFor time.Dur
 		return fmt.Errorf("writing certificate key file: %w", err)
 	}
 	return nil
+}
+
+// LoadCertExpiry 讀取 certPath 這份 PEM 憑證檔案,回傳它的 NotAfter
+// (到期時間)。獨立成一個小函式,是因為「憑證何時到期」跟「怎麼產生
+// 憑證」是兩件事——RenewCertIfNeeded 靠它決定要不要重簽,之後如果
+// Web UI 想在「HTTPS 設定」頁面直接顯示「憑證還有幾天到期」,也能直接
+// 重用,不用另外剖析一次憑證檔案。
+func LoadCertExpiry(certPath string) (time.Time, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading certificate file: %w", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return time.Time{}, fmt.Errorf("no PEM block found in certificate file %s", certPath)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing certificate %s: %w", certPath, err)
+	}
+	return cert.NotAfter, nil
+}
+
+// RenewCertIfNeeded 是 EnsureCertFiles 的「續期」版本:如果 certPath/
+// keyPath 這對檔案還不存在,行為完全等同 EnsureCertFiles(產生一份全新
+// 自簽憑證);如果已經存在,額外檢查現有憑證是不是快到期了——
+// 「快到期」的定義是 now.Add(renewBefore) 已經超過憑證的 NotAfter,也
+// 就是說在接下來 renewBefore 這段時間裡憑證就會過期。是的話用同一組
+// hosts/validFor 重新簽發、原子覆寫掉舊的 cert/key 檔案;還沒到期就
+// 什麼都不做,回傳 renewed=false。
+//
+// now 抽成參數(而不是函式內部呼叫 time.Now())是為了讓測試能餵一個
+// 「已經超過到期日」的固定時間點,不用真的產生一份效期只有幾毫秒的
+// 憑證再等它過期——跟這個專案其他地方(internal/backup 的
+// nextRunDelay)把「現在時間」抽成參數方便測試是同一個理由。
+//
+// renewed=true 但 err!=nil 的組合不會發生:任何一步失敗都直接回傳
+// renewed=false 跟對應的錯誤,呼叫端(CertRenewer)不需要處理「重簽
+// 一半」的中間狀態——舊的、還沒過期(或已經過期但還能用)的 cert/key
+// 檔案在失敗時完全不會被動到,因為 GenerateSelfSignedCert 產生失敗時
+// 根本還沒開始寫檔案,writeFileAtomically 本身又是先寫暫存檔再
+// rename,不會留下寫一半的檔案。
+func RenewCertIfNeeded(certPath, keyPath string, hosts []string, validFor, renewBefore time.Duration, now time.Time) (renewed bool, err error) {
+	_, certErr := os.Stat(certPath)
+	_, keyErr := os.Stat(keyPath)
+	if certErr != nil || keyErr != nil {
+		if err := EnsureCertFiles(certPath, keyPath, hosts, validFor); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	expiry, err := LoadCertExpiry(certPath)
+	if err != nil {
+		return false, err
+	}
+	if !now.Add(renewBefore).After(expiry) {
+		// 還沒進入續期門檻,現有憑證繼續用。
+		return false, nil
+	}
+
+	certPEM, keyPEM, err := GenerateSelfSignedCert(hosts, validFor)
+	if err != nil {
+		return false, err
+	}
+	if err := writeFileAtomically(certPath, certPEM, 0o644); err != nil {
+		return false, fmt.Errorf("writing renewed certificate file: %w", err)
+	}
+	if err := writeFileAtomically(keyPath, keyPEM, 0o600); err != nil {
+		return false, fmt.Errorf("writing renewed certificate key file: %w", err)
+	}
+	return true, nil
+}
+
+// CertStore 讓一個已經在監聽的 TLS listener 能拿到「目前最新」的憑證,
+// 不需要重啟才能套用 RenewCertIfNeeded 剛剛重新簽發的新憑證——
+// tls.Config.GetCertificate 這個回呼在每次 TLS 交握時都會被呼叫,
+// CertStore 在這裡檢查 cert/key 檔案的修改時間有沒有變,變了才真的
+// 重新讀檔、解析,沒變就直接回傳快取的結果,避免每次 TLS 交握都做一次
+// 沒必要的磁碟 I/O。
+//
+// 這是 Go 生態圈裡處理「TLS 憑證要能不重啟熱更新」的標準寫法(不少
+// 知名的 Go HTTP 伺服器/反向代理都是這樣做),沒有用任何第三方套件。
+type CertStore struct {
+	certPath, keyPath string
+
+	mu                      sync.Mutex
+	cert                    *tls.Certificate
+	certModTime, keyModTime time.Time
+}
+
+// NewCertStore 建立一個指向 certPath/keyPath 的 CertStore。這個呼叫本身
+// 不會立刻讀檔——第一次真正的 TLS 交握呼叫 GetCertificate 時才會讀,
+// 讀取失敗會回傳錯誤讓那次交握失敗,而不是讓 NewCertStore 也需要回傳
+// error(NewCertStore 呼叫的當下,檔案理論上還沒被使用者要求的 HTTPS
+// 開關流程準備好也是合理狀態,不該讓建立 CertStore 這個動作本身失敗)。
+func NewCertStore(certPath, keyPath string) *CertStore {
+	return &CertStore{certPath: certPath, keyPath: keyPath}
+}
+
+// GetCertificate 實作 tls.Config.GetCertificate 需要的簽名,可以直接
+// 指定給 tls.Config{GetCertificate: store.GetCertificate}。
+func (c *CertStore) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	certInfo, err := os.Stat(c.certPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat certificate file: %w", err)
+	}
+	keyInfo, err := os.Stat(c.keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat certificate key file: %w", err)
+	}
+
+	if c.cert != nil && certInfo.ModTime().Equal(c.certModTime) && keyInfo.ModTime().Equal(c.keyModTime) {
+		return c.cert, nil
+	}
+
+	pair, err := tls.LoadX509KeyPair(c.certPath, c.keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading certificate/key pair: %w", err)
+	}
+
+	c.cert = &pair
+	c.certModTime = certInfo.ModTime()
+	c.keyModTime = keyInfo.ModTime()
+	return c.cert, nil
+}
+
+// CertRenewer 背景週期性檢查一份自簽憑證是不是快到期,快到期就用
+// RenewCertIfNeeded 重新簽發——搭配 CertStore 的熱重載,整個「憑證
+// 快過期了、自動換一張新的」流程完全不需要重啟 gonasd。跟
+// internal/backup.JobScheduler、internal/storage.Scheduler 是同樣的
+// 「獨立 goroutine + ticker,Stop() 保證真的結束」骨架,刻意不共用
+// 同一個型別——理由跟那兩個套件開頭的說明一致:各自演化不互相牽動。
+type CertRenewer struct {
+	logger *slog.Logger
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// NewCertRenewer 建立續期器但不會立刻開始跑,需呼叫 Start。
+func NewCertRenewer(logger *slog.Logger) *CertRenewer {
+	return &CertRenewer{logger: logger}
+}
+
+// Start 依 checkInterval 週期性檢查憑證是否需要續期。啟動當下就會先
+// 檢查一次(而不是等第一個 checkInterval 過去才檢查)——如果 gonasd
+// 這次重啟前已經停機了一段時間、憑證早就超過續期門檻甚至已經過期,
+// 使用者不該還要多等一個完整的 checkInterval 才會被自動修好。
+func (r *CertRenewer) Start(ctx context.Context, checkInterval time.Duration, certPath, keyPath string, hosts []string, validFor, renewBefore time.Duration) {
+	ctx, cancel := context.WithCancel(ctx)
+	r.cancel = cancel
+	r.done = make(chan struct{})
+
+	check := func() {
+		renewed, err := RenewCertIfNeeded(certPath, keyPath, hosts, validFor, renewBefore, time.Now())
+		if err != nil {
+			if r.logger != nil {
+				r.logger.Error("checking/renewing self-signed TLS certificate failed", "certPath", certPath, "err", err)
+			}
+			return
+		}
+		if renewed && r.logger != nil {
+			r.logger.Info("renewed self-signed TLS certificate", "certPath", certPath, "validFor", validFor)
+		}
+	}
+
+	go func() {
+		defer close(r.done)
+		check()
+
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				check()
+			}
+		}
+	}()
+}
+
+// Stop 讓續期 goroutine 結束,並等它真的結束才回傳。在還沒呼叫過
+// Start 的情況下是安全的 no-op。
+func (r *CertRenewer) Stop() {
+	if r.cancel == nil {
+		return
+	}
+	r.cancel()
+	<-r.done
 }
 
 // writeFileAtomically 是這個套件自己的原子寫入小工具(先寫暫存檔、

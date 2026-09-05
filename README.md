@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 15 完成 — 備份工作的標準 cron 語法排程
+## 目前狀態:Phase 16 完成 — HTTPS 自簽憑證的自動續期
 
 **Phase 0(專案骨架)**
 
@@ -1095,6 +1095,87 @@ Go module proxy,裝不了。這次補上一個完全自己寫、零第三方依�
   `internal/state` 引用,是既有的死碼,之後真的要接上真機測試時,
   是重複使用這個新 `internal/cron` 套件的好機會,而不是再造一個
   跟 `backup.Schedule`平行的第二套 cron 支援。
+- `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
+
+**Phase 16(HTTPS 自簽憑證的自動續期)—— 按之前列出的優先級清單接續
+處理的下一項**
+
+`internal/security.GenerateSelfSignedCert`/`EnsureCertFiles` 從很早的
+階段就存在,但只有「憑證檔案不存在就簽一份」的邏輯——一旦簽出來,
+不管過了多久都不會再被動到。自簽憑證效期是 2 年(見
+`internal/api/security_handlers.go` 的 `httpsCertValidity`,拉長是
+為了不用每年提醒使用者重新手動信任),對一個「裝了就長期開著跑」的
+家用 NAS 來說,這代表憑證過期只是時間問題,而且過期前完全沒有任何
+自動修復機制——使用者只能等瀏覽器開始跳「憑證已過期」的警告,才會
+發現問題,還得自己想辦法(通常是刪掉憑證檔案、重新走一次開啟 HTTPS
+的流程)才能修好。這次補上完整的背景自動續期機制,讓這件事完全不需要
+使用者介入。
+
+- **`internal/security.LoadCertExpiry`**:讀一份 PEM 憑證檔案、剖析出
+  它的 `NotAfter`(到期時間)。
+- **`internal/security.RenewCertIfNeeded`**:`EnsureCertFiles` 的「續期
+  版」——憑證檔案還不存在時行為完全等同 `EnsureCertFiles`;已經存在時
+  額外檢查「現在時間 + 續期門檻」是不是已經超過憑證到期時間,是的話
+  用同一組 hosts/效期重新簽發、原子覆寫舊檔案,還沒到期就什麼都不做。
+  「現在時間」刻意抽成參數而不是函式內部呼叫 `time.Now()`,測試才能
+  餵一個「已經超過到期日」的固定時間點,不用真的等一份憑證過期。
+- **`internal/security.CertStore`**:讓一個已經在監聽的 TLS listener
+  能拿到「目前最新」的憑證,不需要重啟——`tls.Config.GetCertificate`
+  這個回呼在每次 TLS 交握都會被呼叫,`CertStore` 檢查 cert/key 檔案的
+  修改時間有沒有變,變了才重新讀檔解析,沒變就回傳快取結果,是 Go
+  生態圈裡「TLS 憑證要能不重啟熱更新」的標準寫法,沒有用任何第三方
+  套件。`cmd/gonasd/main.go` 現在把 `certFile`/`keyFile` 路徑直接交給
+  `ListenAndServeTLS` 的舊寫法,改成透過 `apiServer.HTTPSCertificateLoader`
+  取得的 `GetCertificate` 回呼建立 `tls.Config`,`ListenAndServeTLS("",
+  "")` 兩個參數留空——這是續期能夠不重啟生效的關鍵。
+- **`internal/security.CertRenewer`**:跟 `internal/backup.JobScheduler`
+  /`internal/storage.Scheduler` 是同樣的「獨立 goroutine + ticker,
+  `Stop()` 保證真的結束」骨架。每 24 小時檢查一次(啟動當下也會立刻
+  先檢查一次,不用等第一個週期過去——這樣即使 gonasd 這次重啟前已經
+  停機一段時間,憑證早就超過續期門檻,使用者也不用再多等 24 小時才會
+  被自動修好),續期門檻是「距離到期還剩 30 天」。`internal/api.New()`
+  在 HTTPS 已啟用且憑證檔案存在時啟動這個背景工作,`Server.Close()`
+  負責停掉,跟 `monitorPoller`、`backupSchedulers` 是同一套生命週期
+  管理模式。
+- **`state.HTTPSConfig` 新增 `Hosts` 欄位**:Phase 16 之前這個設定
+  只記得憑證檔案路徑,不記得使用者當初填的 SAN 主機名稱/IP——續期時
+  如果不知道原本填了什麼,只能退回 localhost/127.0.0.1,會讓使用者
+  的區網 IP/DDNS 網域悄悄從新憑證的 SAN 消失。加上這個欄位(`omitempty`,
+  對 Phase 16 之前完全沒有這個欄位的舊 `state.json` 友善,續期時退回
+  localhost/127.0.0.1,使用者只要重新存一次 HTTPS 設定就會補上)後,
+  續期時原封不動沿用同一組 hosts。
+- **API 與前端**:`GET/PUT /api/v1/security/https` 的回應新增
+  `certExpiresAt`(RFC 3339)欄位,純粹是給 Web UI 顯示用——安全性
+  頁面的 HTTPS 卡片現在會顯示「憑證到期日:...」加上「到期前 30 天內
+  會自動重新簽發,不需要重啟 gonasd」的說明文字,讓這個背景自動化
+  行為對使用者是看得見、可驗證的,而不是完全無聲的魔法。順手把
+  hosts 輸入框改成會從既有設定預填(之前這個欄位完全沒有被持久化,
+  自然也就沒有東西可以預填)。表單送出成功後現在會整個重新渲染
+  安全性頁面,而不是只在原地顯示一句「已儲存」——這樣剛簽出來的到期日
+  能立刻反映在畫面上,不用使用者自己手動重新整理。三種語言都已翻譯。
+- **真實驗證**:`internal/security` 新增的單元測試涵蓋
+  `RenewCertIfNeeded` 的三種情境(檔案不存在、還沒到期、已到期/快到期)
+  跟 `CertStore`/`CertRenewer` 的重複執行/熱重載/`Stop()` 行為。
+  `internal/api` 新增測試涵蓋 `state.HTTPSConfig.Hosts` 的持久化、
+  `certExpiresAt` 回應欄位、以及 `api.New()`/`Close()` 真的會依 HTTPS
+  是否已啟用啟動/不啟動 `certRenewer`。除了單元測試,也對著一個真正在
+  跑的 `gonasd` 完整走了一次「開啟 HTTPS → 重啟讓它生效 → 用真正的
+  TLS 交握確認憑證序號/到期日 → 不重啟這個 process、直接呼叫
+  `RenewCertIfNeeded` 重新簽發 → 再做一次真正的 TLS 交握,確認同一個
+  還在跑的 process(同一個 PID,沒有重啟)已經在服務新的憑證(序號
+  改變、到期日改成新簽發的效期)」的完整流程,證明「續期不需要重啟」
+  這件事在真正的 TCP/TLS 連線層級成立,不是只在 Go 測試框架裡自己
+  跟自己驗證。也用 Playwright 在三種語言下驗證安全性頁面的到期日
+  顯示、hosts 欄位預填在儲存後立刻可見(修正了原本「儲存成功但畫面
+  沒有立刻更新,要重新整理才看得到」的問題)。**明確記錄的限制**:
+  背景續期的「檢查頻率」(24 小時)跟「續期門檻」(30 天)這兩個數字
+  目前是寫死的常數,沒有開放使用者調整,也沒有真機上跑滿一個完整
+  續期週期(需要真的等憑證進入 30 天倒數,單元測試已經用可注入的
+  時間參數涵蓋這個邏輯本身,但沒有涵蓋「gonasd 真的連續跑了將近 2 年」
+  這種時間尺度);另外,關閉再重新開啟 HTTPS 這個「開關本身」仍然
+  維持 Phase 4 就有的既有設計,需要重啟 gonasd 才會生效,這次刻意
+  不改動這個決定,只讓「已經開著的 HTTPS,憑證續期」這一件事不需要
+  重啟。
 - `gofmt`/`go vet`/`go build ./...`/`go test ./...` 全部維持全綠。
 
 ## 開發
