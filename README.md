@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 7 完成 — 備份與快照
+## 目前狀態:Phase 8 完成 — 安裝與封裝
 
 **Phase 0(專案骨架)**
 
@@ -378,10 +378,71 @@ btrfs/ZFS 快照(GoNAS 刻意不綁定特定檔案系統)。
   Playwright 對著真的在跑的 `gonasd` 完整截圖備份頁(空清單、新增後、
   執行後顯示成功狀態、展開快照清單),瀏覽器主控台沒有任何 JS 錯誤。
 
+**Phase 8(安裝與封裝,`internal/doctor` + `build/install.sh` + `build/uninstall.sh`)**
+
+- `internal/doctor`:GoNAS 依賴的選用外部指令(`lsblk`、`smartctl`、`mergerfs`、
+  `snapraid`、`useradd`/`userdel`/`chpasswd`/`groupadd`、`smbd`/`testparm`/
+  `smbcontrol`/`smbpasswd`、`exportfs`、`wg`/`wg-quick`、`rsync`)一次性檢查,
+  只用 `exec.LookPath`(不實際執行任何指令 —— 「裝了沒有」跟「能不能正常運作」
+  是兩件事,後者留給使用者實際點下去某個功能時,由各自的 handler 回報)。
+  4 個單元測試,透過在 `t.TempDir()` 寫假的可執行 shell script 並整個換掉
+  `PATH` 來控制「找不找得到」,不依賴這台機器實際裝了什麼。
+- `gonasd` 新增兩個一次性旗標(印完東西就結束,不啟動 daemon):
+  - `-version`:印版本/commit/建置時間/GOOS/GOARCH,不用整個啟動 daemon
+    再打 `/api/v1/version`
+  - `-check-deps`:印 `internal/doctor` 的檢查報告,`install.sh` 裝完會
+    自動跑一次,讓使用者馬上知道這台機器還缺哪些選用工具
+- `build/install.sh` / `build/uninstall.sh`(純 POSIX `/bin/sh`,不用 bash
+  ——這樣在用 dash 當 `/bin/sh` 的精簡 distro 上也能跑,已用 `dash -n` 跟
+  `sh -n` 驗證語法):
+  - 同時支援兩種佈局:`make release` 產出的 tarball(執行檔跟
+    `install.sh` 同一層)跟原始碼 checkout(`build/install.sh` 往上層找
+    `dist/gonasd-linux-$ARCH`),也支援 `-bin <path>` 明確指定執行檔
+  - 用 `uname -m` 判斷 x86_64/aarch64 → amd64/arm64,不支援的架構直接
+    報錯並提示可以用 `-bin`
+  - 冪等:重複執行(升級)不會覆蓋 `/etc/gonas/gonas.env`(管理員可能已
+    手動改過監聽位址/資料目錄),但執行檔跟 systemd unit 每次都覆蓋成
+    最新版本
+  - **systemd 偵測**:只有在 `/run/systemd/system` 目錄存在(代表 systemd
+    真的是 PID 1)且找得到 `systemctl` 時才做 `daemon-reload`/`enable`/
+    `restart`;偵測不到就優雅跳過,印出手動啟動指令,而不是讓整支
+    script 中止在「執行檔明明已經裝好了」的狀態 —— 這台開發沙盒本身就是
+    這種環境(`systemctl` 這個指令在,但 `/run/systemd/system` 不存在),
+    兩條路徑都已在這裡實測跑過(systemd 路徑是暫時建立
+    `/run/systemd/system` 目錄、用假的 `systemctl` script 攔截呼叫驗證
+    參數正確,測完立刻還原,不影響這台機器本身的狀態)
+  - `uninstall.sh` 預設只移除執行檔跟 systemd unit,保留
+    `/etc/gonas`(設定)跟 `/var/lib/gonas`(帳號/儲存池/備份工作/
+    WireGuard 金鑰等狀態)——跟 `apt remove` vs `apt purge` 的慣例一致；
+    要整個刪乾淨要加 `--purge` 並手動輸入 `yes` 確認
+  - `build/systemd/gonas.service` 加了
+    `EnvironmentFile=-/etc/gonas/gonas.env`(前面的 `-` 表示檔案不存在時
+    不報錯),管理員要改監聽位址/資料目錄只要編輯這個檔案,不用碰
+    unit file 本身
+- `Makefile` 新增 `release` target:跑完 `build-all` 之後,把 amd64/arm64
+  兩份執行檔分別跟 `install.sh`/`uninstall.sh`/`gonas.service` 一起打包成
+  `dist/release/gonas-$(VERSION)-linux-{amd64,arm64}.tar.gz`,使用者下載
+  解壓後 `sudo ./install.sh` 就能裝,不需要自己有 Go 環境
+- 已在這台機器上(root、真實檔案系統,但 systemd 不是 PID 1)完整跑過
+  端到端驗證,而不只是讀程式碼判斷邏輯對不對:`make release` 產出兩份
+  tarball → 解壓其中一份、`./install.sh` 裝起來 → 確認執行檔、
+  `/etc/gonas/gonas.env`、`/var/lib/gonas` 都正確建立、systemd 偵測正確
+  跳過並印出手動啟動指令 → 手動啟動裝好的執行檔,對 `/api/v1/health`、
+  `/api/v1/version` 送真的 HTTP 請求確認可用 → 在 `gonas.env` 裡手動加
+  自訂的監聽位址,重新執行 `install.sh` 確認冪等(檔案不被覆蓋、安裝
+  摘要正確反映自訂值)→ `uninstall.sh`(預設)確認執行檔被刪、設定/
+  資料目錄保留 → 重裝一次、`uninstall.sh --purge` 確認兩個目錄都真的
+  被刪除 → 額外測了原始碼 checkout 佈局(`build/install.sh` + `dist/`)、
+  非 root 執行會被擋、`-bin` 明確指定路徑、完全找不到執行檔時的錯誤
+  訊息、以及用假 `/run/systemd/system` + 假 `systemctl` script 攔截驗證
+  「systemd 真的在跑」那條路徑會呼叫正確的 `daemon-reload`/`enable`/
+  `restart`/`stop`/`disable` 參數。全部測完已還原這台機器到測試前的
+  乾淨狀態(移除所有測試裝上去的檔案跟暫時建立的 `/run/systemd/system`
+  目錄)。
+
 尚未實作(依路線圖排序,接下來的 Phase):
 
-1. 安裝與封裝 — `install.sh`
-2. 實機測試與強化
+1. 實機測試與強化
 
 ## 開發
 
@@ -404,14 +465,42 @@ curl -s localhost:8291/api/v1/version | jq
 啟動後,瀏覽器打開 `http://<主機位址>:8291/` 就是 Web 管理介面(內嵌在執行檔裡,
 不需要另外部署前端)。
 
-## 部署(之後 Phase 8 會做成 install.sh,目前先手動)
+## 部署
+
+打包 release tarball(amd64 + arm64 各一份,含 `install.sh`/`uninstall.sh`/
+`gonas.service`):
 
 ```sh
-sudo install -m 0755 dist/gonasd-linux-amd64 /usr/local/bin/gonasd   # ARM 機器改用 -linux-arm64
-sudo install -m 0644 build/systemd/gonas.service /etc/systemd/system/gonas.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now gonas
+make release
+# 產出 dist/release/gonas-<version>-linux-amd64.tar.gz
+#      dist/release/gonas-<version>-linux-arm64.tar.gz
 ```
+
+在目標機器上解壓、安裝(要 root;會自動判斷 amd64/arm64):
+
+```sh
+tar xzf gonas-<version>-linux-amd64.tar.gz
+cd gonas-<version>-linux-amd64
+sudo ./install.sh
+```
+
+`install.sh` 會把執行檔裝到 `/usr/local/bin/gonasd`、建立
+`/etc/gonas/gonas.env`(監聽位址/資料目錄的覆寫檔,重複安裝/升級不會
+覆蓋)跟 `/var/lib/gonas`;如果這台機器 systemd 真的是 PID 1,會順便裝
+`gonas.service` 並開機自動啟動,不是的話會印出手動啟動的指令。裝完會
+自動跑一次 `gonasd -check-deps`,列出這台機器還缺哪些選用工具
+(mergerFS/SnapRAID/Samba/NFS/WireGuard/rsync)。
+
+移除:
+
+```sh
+sudo ./uninstall.sh          # 只移除執行檔跟 systemd unit,保留設定與資料
+sudo ./uninstall.sh --purge  # 連 /etc/gonas 跟 /var/lib/gonas 一起刪除(會要求輸入 yes 確認)
+```
+
+如果沒有下載 release tarball、是直接從原始碼安裝,`build/install.sh` 跟
+`build/uninstall.sh` 也可以直接跑(`make build-all` 之後,會自動去
+`dist/` 底下找對應架構的執行檔)。
 
 ## 授權
 

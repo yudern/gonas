@@ -5,19 +5,41 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/bng147/gonas/internal/api"
 	"github.com/bng147/gonas/internal/config"
+	"github.com/bng147/gonas/internal/doctor"
 	"github.com/bng147/gonas/internal/version"
 )
 
 func main() {
+	// -check-deps 跟 -version 都是「印完東西就結束,不啟動 daemon」的
+	// 一次性指令 ——install.sh 安裝完會自動跑一次 -check-deps,讓使用者
+	// 立刻知道這台機器還缺哪些選用的外部工具(見 internal/doctor 套件
+	// 說明);-version 是給打包/除錯時快速確認「裝到的到底是哪個版本」
+	// 用的,不用啟動整個 daemon 再呼叫 /api/v1/version。
+	checkDeps := flag.Bool("check-deps", false, "檢查選用的外部工具(mergerfs、snapraid、samba、nfs、wireguard-tools、rsync 等)是否已安裝,不啟動 daemon")
+	showVersion := flag.Bool("version", false, "印出版本資訊,不啟動 daemon")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("gonasd %s (commit %s, built %s, %s/%s)\n", version.Version, version.Commit, version.BuildDate, runtime.GOOS, runtime.GOARCH)
+		return
+	}
+	if *checkDeps {
+		doctor.Report(os.Stdout, doctor.Run())
+		return
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))

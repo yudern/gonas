@@ -17,6 +17,11 @@ RestartSec=3s
 User=root
 Environment=GONAS_LISTEN_ADDR=:8291
 Environment=GONAS_DATA_DIR=/var/lib/gonas
+# install.sh 會建立 /etc/gonas/gonas.env(如果還不存在),裡面兩個變數的
+# 註解掉的預設值。管理員要改監聽位址或資料目錄時,編輯那個檔案就好,
+# 不用碰這個 unit file(避免 `dpkg`/未來套件更新或重新執行 install.sh 時
+# 覆蓋掉手動修改)。前面加 "-" 表示檔案不存在時 systemd 不會報錯。
+EnvironmentFile=-/etc/gonas/gonas.env
 
 # 基本強化:仍允許裝置/掛載操作,但阻擋一些不必要的攻擊面。
 NoNewPrivileges=true
