@@ -1,0 +1,30 @@
+[Unit]
+Description=GoNAS status console (tty1)
+Documentation=https://github.com/bng147/gonas
+# 跟 gonas.service 一樣掛在 network-online.target 之後不是必要條件——
+# 這支腳本自己會處理「還沒有網路位址」的情況（顯示提示文字而不是空白
+# 畫面），所以不需要等網路才啟動，但排在後面能讓「開機後第一次畫面
+# 顯示」更常見的情況下已經有位址可以顯示。
+After=systemd-user-sessions.service getty@tty1.service plymouth-quit-wait.service network-online.target
+After=rc-local.service
+Conflicts=getty@tty1.service
+
+[Service]
+ExecStart=/usr/local/sbin/gonas-console
+Restart=always
+RestartSec=1
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+# 跟一般 getty 一樣用 tty1 本身當控制終端機，不需要另外配置 PAM/utmp
+# 登入紀錄——這支程序不是一個登入 session，只是佔用 tty1 顯示畫面，
+# 跟 plymouth 的開機動畫在同一個 tty 上顯示的方式類似。
+KillMode=process
+IgnoreSIGPIPE=no
+SendSIGHUP=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -12,7 +12,7 @@ LDFLAGS := -s -w \
 DIST := dist
 RELEASE_DIR := $(DIST)/release
 
-.PHONY: build build-amd64 build-arm64 build-all release run clean vet fmt
+.PHONY: build build-amd64 build-arm64 build-all release run clean vet fmt iso iso-amd64 iso-arm64
 
 ## build: 編譯給目前這台機器用的 binary(開發用)
 build:
@@ -60,6 +60,20 @@ vet:
 
 fmt:
 	gofmt -l -s .
+
+## iso-amd64: 產生 x86_64 的 GoNAS 開機即用安裝映像檔(需要真正的網路
+## 連線去抓官方 Debian netinst ISO，還有 xorriso/wget——這個開發沙盒
+## 沒有這些條件，這個 target 設計成在使用者自己的機器或 CI 上執行，
+## 見 build/appliance/README.md)。
+iso-amd64: release
+	build/appliance/build-iso.sh amd64 $(VERSION)
+
+## iso-arm64: 同上，產生 aarch64(樹莓派4/5、多數 SBC)版本的映像檔。
+iso-arm64: release
+	build/appliance/build-iso.sh arm64 $(VERSION)
+
+## iso: 兩個架構的映像檔都做一次。
+iso: iso-amd64 iso-arm64
 
 clean:
 	rm -rf $(DIST) devdata

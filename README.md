@@ -6,7 +6,7 @@
 
 完整技術路線圖(架構圖 + Phase 0–9 建置順序 + 技術選型說明)見專案交付時附上的路線圖文件。
 
-## 目前狀態:Phase 18c 完成 — 週期性健康摘要通知
+## 目前狀態:Phase 19 設計完成(未在沙盒驗證)— GoNAS 開機即用映像檔
 
 **Phase 0(專案骨架)**
 
@@ -1465,6 +1465,90 @@ API/UI 功能**
 - `gofmt`/`go vet`/`go build ./...`/`go test ./... -race -count=1`
   全數維持全綠。
 
+**Phase 19(GoNAS 開機即用映像檔)—— 讓「開機就是 GoNAS」而不是
+「Debian 上套一層殼」**
+
+- **需求背景**:先前的安裝路徑(`build/install.sh` + release
+  tarball)假設使用者已經有一台裝好 Debian 的機器,是「軟體安裝」的
+  體驗。使用者明確要求要有第二條路徑:一台全新機器,插上安裝媒體、
+  開機、裝完重開機,使用者感覺到的是「這是一台 NAS 開機」,不是
+  「這是一台裝了 NAS 軟體的 Debian」——同時要求既有的軟體安裝路徑
+  必須完整保留、不能受影響。
+- **設計決策**:採用「重新包裝官方 Debian netinst ISO」而不是從零
+  用 debootstrap/live-build 建 rootfs,理由見下方「這個 Phase 完全
+  沒有在這個沙盒裡驗證過」一節——後者在目前的沙盒環境裡連前置的
+  套件下載都做不到,而且不管在哪個環境建置,「重新包裝官方 ISO」
+  都比「自建 rootfs」風險更低、更容易維持跟上游 Debian 安全更新
+  同步。底層架構全部放在新增的 `build/appliance/` 目錄:
+  - `preseed.cfg`:Debian Installer 的自動應答檔(依官方 Installation
+    Guide 附錄 B 撰寫),自動化語系/網路(DHCP)/套件來源(只用媒體
+    本身,不連網)/時區/建立 `gonasadmin` 這組緊急維運用 sudo 帳號
+    (跟 GoNAS 自己的 Web 介面帳號系統完全獨立,見
+    `internal/state.AdminAccount`)——磁碟分割唯獨保留了最後一道
+    「真的要清空這顆碟嗎」的確認畫面,不預先自動確認,因為 NAS 機器
+    通常還接著使用者的資料/同位碟,選錯碟自動清空的後果太嚴重。
+  - `late-command.sh`:安裝完成、重開機前,在目標系統 chroot 環境
+    裡執行,做三件事——呼叫既有、完全不修改的 `build/install.sh`
+    裝 gonasd 本體(跟軟體安裝路徑用同一份腳本,只是換人執行);
+    佈署 `overlay/` 下的 tty1 狀態主控台服務,取代預設的登入提示
+    (tty2 以後維持正常 Debian 登入,保留一個「找一台真機除錯」的
+    管道);品牌化 hostname/`/etc/motd`/`/etc/issue`/
+    `/etc/os-release` 的 `NAME`/`PRETTY_NAME`(刻意不動 `ID`/
+    `ID_LIKE`,避免 apt 或未來自我更新的平台判斷邏輯誤判)/GRUB 選單
+    標題。
+  - `overlay/usr/local/sbin/gonas-console` +
+    `gonas-console.service`:取代 tty1 的 `gonas-console.service`
+    (`Conflicts=getty@tty1.service`)每 5 秒重新整理一次,顯示 ASCII
+    art 品牌、版本(讀 `gonasd -version`)、目前偵測到的所有 IPv4
+    位址各一行 `http://<ip>:8291`——這就是使用者選的「精簡狀態畫面」
+    路線(相對於「簡易文字選單」的另一個選項)。
+  - `build-iso.sh`:下載官方 Debian netinst ISO、用 `xorriso
+    -osirrox` 解開、把上面幾個檔案跟已經交叉編譯好的 gonasd release
+    tarball 塞進去、修改開機選單參數讓 preseed 自動套用、用
+    `xorriso ... -boot_image any replay` 重新包裝成新的可開機 ISO
+    (Debian wiki 記載的「RepackBootableISO」標準做法)。已經接到
+    `Makefile` 的 `make iso-amd64`/`make iso-arm64`/`make iso`。
+  - 刻意**不**在安裝過程自動裝 mergerfs/snapraid/samba/docker.io/
+    nfs-common/wireguard-tools/rsync 這些 GoNAS 的選用外部相依套件
+    ——這些套件不在官方 netinst ISO 內附的套件集裡,裝機時要另外連網
+    下載會讓「離線、單一 ISO」的設計目標破功,而且跟 `internal/doctor`
+    package 一貫「絕不自動安裝選用相依套件、一律讓使用者自己決定」
+    的設計哲學一致,開機後透過 Web 介面 Doctor 頁面補裝即可。
+- **這個 Phase 完全沒有在這個開發沙盒裡驗證過,這裡誠實說明原因跟
+  證據**:直接測試確認這個沙盒的網路出口對所有 OS 套件鏡像都是
+  全面擋下,不是只擋 Debian——`curl https://deb.debian.org/...`
+  收到 `403`,連沙盒自己的 Ubuntu 24.04 執行 `apt-get update` 都對
+  `archive.ubuntu.com`/`security.ubuntu.com`/`download.docker.com`
+  三個來源全部收到 `403 Forbidden`(查過代理設定的允許清單,裡面
+  完全沒有任何 OS 套件鏡像網域)。這代表這個沙盒裡沒有任何辦法下載
+  官方 Debian ISO,也沒有辦法安裝/使用 `xorriso`、更不用說
+  `qemu-system-x86_64`/`qemu-system-aarch64` 做開機測試。因此:
+  - `build-iso.sh`、`preseed.cfg`、`late-command.sh` 全部只做過
+    POSIX 語法檢查(`sh -n`)跟人工再三覆閱(檔案裡到處是解釋「為什麼
+    這樣寫」的中文註解,方便日後覆閱跟除錯),**沒有**真正跑過
+    debian-installer、**沒有**真正產生或開機測試過一份 ISO。
+  - 唯一真正在沙盒裡執行測試過的部分,是 `gonas-console` 這支獨立的
+    shell script 本身的邏輯(不透過 ISO 開機,單獨執行驗證):一次在
+    PATH 上沒有 `gonasd` 時正確顯示「unknown」版本跟「尚未偵測到網路
+    連線」,一次搭配一個真的編譯出來、帶 `-ldflags` 版本字串的
+    `gonasd` 時正確顯示偵測到的版本。
+  - 完整的「如何在有網路的機器/CI 上建置、如何在 QEMU/VirtualBox 裡
+    開機驗證整個安裝流程」步驟寫在
+    `build/appliance/README.md`——**任何人在真正把 ISO 燒到硬體之前,
+    都必須先照那份文件走完虛擬機開機驗證**,這一點不能跳過,原因跟
+    軟體版安裝路徑不同:軟體版裝壞了頂多是這次安裝失敗,映像檔版
+    如果 preseed 的磁碟分割邏輯有問題,理論上有清空錯誤磁碟的風險
+    (雖然已經刻意保留了寫入前的確認畫面,見上面的設計說明)。
+  - 這個「設計完成、邏輯上自認正確、但沒有端到端驗證」的狀態,誠實
+    地反映在這裡的狀態列文字裡(而不是寫成「Phase 19 完成」)——跟
+    Phase 17 文件裡對 systemd 常駐監督範圍的誠實揭露是同一種態度。
+- 沒有修改任何 Go 原始碼(這整個 Phase 只新增了 `build/appliance/`
+  底下的 shell/preseed/systemd unit 檔案跟 `Makefile` 的三個新
+  target),`gofmt`/`go vet`/`go build ./...`/
+  `go test ./... -race -count=1` 重新跑過一次,結果跟 Phase 18c
+  完成時完全一樣、全數維持全綠(預期中的結果,因為沒有觸碰任何
+  `.go` 檔案)。
+
 ## 開發
 
 需要 Go 1.22 以上(本機驗證於 go1.24.7)。
@@ -1522,6 +1606,24 @@ sudo ./uninstall.sh --purge  # 連 /etc/gonas 跟 /var/lib/gonas 一起刪除(�
 如果沒有下載 release tarball、是直接從原始碼安裝,`build/install.sh` 跟
 `build/uninstall.sh` 也可以直接跑(`make build-all` 之後,會自動去
 `dist/` 底下找對應架構的執行檔)。
+
+### 開機即用映像檔(appliance ISO)
+
+如果目標是一台全新機器,想要「插上安裝媒體開機,裝完就是一台
+GoNAS」而不是先手動裝好 Debian 再跑 `install.sh`,可以改用
+`build/appliance/` 底下的工具產生一份客製化的 Debian netinst ISO:
+
+```sh
+make iso-amd64     # 只做 x86_64
+make iso-arm64     # 只做 arm64(樹莓派 4/5、多數 SBC)
+make iso           # 兩個都做
+```
+
+**這條路徑目前只完成了設計跟撰寫,還沒有在任何環境裡建置或開機測試
+過**(這個開發沙盒的網路完全連不到任何套件鏡像,細節見上面「Phase 19」
+段落跟 `build/appliance/README.md`)。使用前務必先讀完
+`build/appliance/README.md`,並依該文件在虛擬機(QEMU/VirtualBox)
+裡完整驗證過安裝流程,才能燒到真實硬體上——這不是可以跳過的步驟。
 
 ## 授權
 

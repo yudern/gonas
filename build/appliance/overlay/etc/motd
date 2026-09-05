@@ -1,0 +1,12 @@
+
+歡迎使用 GoNAS — 這台機器是專屬的 NAS 系統。
+Welcome to GoNAS — this machine is a dedicated NAS appliance.
+
+所有設定請透過瀏覽器連到 Web 介面完成；tty1 的狀態畫面會顯示網址。
+All configuration is done through the web UI — the status screen on
+tty1 shows the address to connect to.
+
+底層是 Debian GNU/Linux，這個 shell 給進階疑難排解使用。
+Under the hood this runs on Debian GNU/Linux; this shell is here for
+advanced troubleshooting.
+

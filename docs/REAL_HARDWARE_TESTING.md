@@ -552,6 +552,68 @@ bug(複製到不存在的目的資料夾時洩漏伺服器路徑並回 500,已�
       `internal/api.Server` 的 `digestMu`/`digestScheduler`、
       `monitor.DigestScheduler` 內部狀態——沒有發現任何 data race。
 
+## 12. GoNAS 開機即用映像檔(對應 Phase 19,完全尚未驗證)
+
+- [ ] **建置流程本身**(`build/appliance/build-iso.sh`):沒有在任何
+      環境裡真的執行過。這個開發沙盒的網路出口對所有 OS 套件鏡像都是
+      全面擋下的——不只是 `deb.debian.org`(`curl -m 8
+      https://deb.debian.org/debian/dists/stable/Release` 回傳
+      `curl: (56) CONNECT tunnel failed, response 403`),連這個沙盒
+      自己的 Ubuntu 24.04 執行 `apt-get update` 都對
+      `archive.ubuntu.com`/`security.ubuntu.com`/
+      `download.docker.com` 全部收到 `403 Forbidden`(查過代理服務的
+      允許清單,裡面沒有任何 OS 套件鏡像網域)——所以這個沙盒裡沒有
+      任何辦法下載官方 Debian netinst ISO,也沒有辦法安裝
+      `xorriso`/`qemu-system-x86_64`/`qemu-system-aarch64`。需要一台
+      有真正網路連線的機器或 CI 執行 `make iso-amd64`/
+      `make iso-arm64`,確認能成功產出 `.iso`/`.sha256` 檔案。
+- [ ] **`preseed.cfg` 能不能被真正的 debian-installer 正確解析、
+      自動跑完整個安裝不卡在非預期的問答畫面**:完全沒有驗證過,只做
+      過人工覆閱跟對照 Debian 官方 Installation Guide 附錄 B 的語法。
+      需要在 QEMU/VirtualBox 裡開機測試(步驟見
+      `build/appliance/README.md`「如何驗證」一節),確認除了刻意保留
+      的磁碟寫入確認畫面之外,不會停在任何其他問題上。
+- [ ] **`late-command.sh` 在真正的 debian-installer `in-target` chroot
+      環境裡執行是否成功**:完全沒有驗證過。需要確認
+      `build/install.sh`(既有、未修改的軟體安裝腳本)在這個環境下能
+      正常執行完、`systemctl enable gonas-console.service`/
+      `systemctl mask getty@tty1.service` 在 chroot 環境裡的行為符合
+      預期(chroot 環境裡呼叫 `systemctl` 有時候會因為沒有真正在跑的
+      init 而只更新 unit 檔案的符號連結、不會立刻生效,這是正常的,
+      重開機後才會真正生效,但這一點沒有實際確認過)。
+- [x] ✅ **`overlay/usr/local/sbin/gonas-console` 腳本本身的邏輯**
+      (不透過 ISO 開機,單獨執行這支 shell script 驗證):在這個沙盒
+      裡直接執行過兩次——一次 PATH 上完全沒有 `gonasd` 時,正確顯示
+      版本「unknown」跟「尚未偵測到網路連線」;一次 PATH 上有一個
+      真的編譯出來(`-ldflags -X .../version.Version=dev`)的
+      `gonasd` 時,正確透過 `gonasd -version` 抓到版本字串「dev」並
+      顯示出來。這是這個 Phase 目前唯一一項真正執行驗證過的部分。
+- [ ] **tty1 主控台實際在真正開機的系統上取代 getty 是否成功**:完全
+      沒有驗證過,需要在 QEMU 裡完整跑完安裝、重開機後直接觀察
+      tty1 畫面確認。
+- [ ] **重開機後 GRUB 選單品牌化、`hostnamectl`/`/etc/os-release`/
+      `/etc/motd` 品牌化是否生效**:完全沒有驗證過。
+- [ ] **所有 shell/preseed 檔案的語法檢查**:已完成——`sh -n` 對
+      `build-iso.sh`/`late-command.sh`/`gonas-console` 全部通過(這個
+      沙盒沒有 `shellcheck` 可用,無法做更深入的靜態分析,已確認
+      `which shellcheck` 找不到、也沒有辦法安裝)。這只確認語法合法,
+      不代表邏輯/行為正確。
+- [ ] **arm64 映像檔的開機測試**:上面所有項目都還沒對 amd64 驗證過,
+      arm64(需要 `qemu-system-aarch64` + UEFI 韌體)更是完全沒有嘗試
+      過,細節見 `build/appliance/README.md`。
+
+這整個 Phase 的狀態誠實地是「設計完成、邏輯上自認正確、依照 Debian
+官方文件撰寫,但沒有任何一項端到端驗證」,跟上面「9. gonasd
+自我更新」一節裡「沒有在真正由 systemd 監督的安裝方式底下驗證過」的
+誠實揭露是同一種態度——寧可清楚列出「還沒驗證」的清單,也不要做一個
+看起來像驗證過、實際上沒有真正驗證的假測試。完整的建置/驗證步驟見
+`build/appliance/README.md`。
+
+沒有修改任何 `.go` 檔案(只新增了 `build/appliance/` 底下的
+shell/preseed/systemd unit 檔案,跟 `Makefile` 的三個新 target),
+`gofmt`/`go vet`/`go build ./...`/`go test ./... -race -count=1`
+重新確認過一次,結果跟這個 Phase 之前完全一樣、全數維持全綠。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
