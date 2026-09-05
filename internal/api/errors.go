@@ -27,4 +27,6 @@ var (
 	errPeerNameExists         = errors.New("a wireguard peer with that name already exists")
 	errPeerNameRequired       = errors.New("peer name is required")
 	errPeerAllowedIPsEmpty    = errors.New("at least one allowed IP/CIDR is required")
+
+	errBackupJobNotFound = errors.New("no backup job with that id")
 )

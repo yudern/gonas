@@ -127,12 +127,12 @@ func TestSnapshot_FreshStore_SlicesMarshalAsEmptyArraysNotNull(t *testing.T) {
 		t.Fatalf("marshaling fresh snapshot: %v", err)
 	}
 
-	for _, field := range []string{`"shares":null`, `"exports":null`, `"users":null`, `"installedApps":null`, `"alertRules":null`, `"notifiers":null`} {
+	for _, field := range []string{`"shares":null`, `"exports":null`, `"users":null`, `"installedApps":null`, `"alertRules":null`, `"notifiers":null`, `"backupJobs":null`} {
 		if strings.Contains(string(encoded), field) {
 			t.Errorf("fresh state marshaled with %s, want an empty array `[]` — this is exactly the bug that crashed the Apps page: %s", field, encoded)
 		}
 	}
-	for _, field := range []string{`"shares":[]`, `"exports":[]`, `"users":[]`, `"installedApps":[]`, `"alertRules":[]`, `"notifiers":[]`} {
+	for _, field := range []string{`"shares":[]`, `"exports":[]`, `"users":[]`, `"installedApps":[]`, `"alertRules":[]`, `"notifiers":[]`, `"backupJobs":[]`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Errorf("expected %s in marshaled fresh state, got: %s", field, encoded)
 		}
@@ -146,7 +146,7 @@ func TestSnapshot_FreshStore_SlicesMarshalAsEmptyArraysNotNull(t *testing.T) {
 // 裡、繼續讓之後的 API 回應把 null 傳給前端。
 func TestOpen_LoadsPreExistingNullSlices_NormalizesThem(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	raw := `{"shares":null,"exports":null,"users":null,"installedApps":null,"alertRules":null,"notifiers":null}`
+	raw := `{"shares":null,"exports":null,"users":null,"installedApps":null,"alertRules":null,"notifiers":null,"backupJobs":null}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("writing seed state file: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestOpen_LoadsPreExistingNullSlices_NormalizesThem(t *testing.T) {
 	}
 
 	snap := s.Snapshot()
-	if snap.Shares == nil || snap.Exports == nil || snap.Users == nil || snap.InstalledApps == nil || snap.AlertRules == nil || snap.Notifiers == nil {
+	if snap.Shares == nil || snap.Exports == nil || snap.Users == nil || snap.InstalledApps == nil || snap.AlertRules == nil || snap.Notifiers == nil || snap.BackupJobs == nil {
 		t.Fatalf("expected Open to normalize null slice fields loaded from disk, got %+v", snap)
 	}
 

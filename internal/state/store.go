@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/bng147/gonas/internal/appstore"
+	"github.com/bng147/gonas/internal/backup"
 	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/storage"
@@ -36,6 +37,7 @@ type State struct {
 	Admin         *AdminAccount           `json:"admin,omitempty"`
 	HTTPS         HTTPSConfig             `json:"https"`
 	WireGuard     *wireguard.Config       `json:"wireGuard,omitempty"`
+	BackupJobs    []backup.Job            `json:"backupJobs"`
 }
 
 // AdminAccount 是 Web 管理介面唯一的登入帳號(跟 share.User 那種系統/
@@ -118,6 +120,9 @@ func (st *State) normalize() {
 	// Apps 頁面當初那個 nil slice bug。
 	if st.WireGuard != nil && st.WireGuard.Peers == nil {
 		st.WireGuard.Peers = []wireguard.PeerConfig{}
+	}
+	if st.BackupJobs == nil {
+		st.BackupJobs = []backup.Job{}
 	}
 }
 

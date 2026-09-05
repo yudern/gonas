@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
+	"github.com/bng147/gonas/internal/backup"
 	"github.com/bng147/gonas/internal/docker"
 	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/security"
@@ -61,6 +63,12 @@ type Server struct {
 	monitorHistory   *monitor.History
 	alertEngine      *monitor.AlertEngine
 	monitorPoller    *monitor.Poller
+
+	// backupMu 保護 backupSchedulers —— 這個 map 本身不是持久化狀態的一
+	// 部分(排程 goroutine 的控制代碼不能序列化進 state.json),所以需要
+	// 自己的鎖,不能沿用 state.Store 內部的鎖。
+	backupMu         sync.Mutex
+	backupSchedulers map[string]*backup.JobScheduler
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -72,13 +80,14 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	}
 
 	s := &Server{
-		logger:    logger,
-		startedAt: time.Now(),
-		runner:    storage.NewExecRunner(),
-		docker:    docker.NewClient(""),
-		store:     store,
-		dataDir:   dataDir,
-		sessions:  security.NewSessionManager(sessionTTL),
+		logger:           logger,
+		startedAt:        time.Now(),
+		runner:           storage.NewExecRunner(),
+		docker:           docker.NewClient(""),
+		store:            store,
+		dataDir:          dataDir,
+		sessions:         security.NewSessionManager(sessionTTL),
+		backupSchedulers: make(map[string]*backup.JobScheduler),
 	}
 
 	// 監控用的磁碟路徑預設是 "/"(還沒設定 pool 前至少能看到系統碟的
@@ -97,6 +106,16 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 
 	s.monitorPoller = monitor.NewPoller(logger, s.monitorCollector, s.monitorHistory, monitorPollInterval, s.onMonitorSample)
 	s.monitorPoller.Start(context.Background())
+
+	// 啟動時把既有的、標記成 Enabled 的備份工作重新掛回排程 —— daemon
+	// 重啟不該讓使用者原本設定好的排程默默停擺,得手動重新觸發一次才會
+	// 發現。跟 monitor 的 AlertEngine/Notifier 不同,備份排程沒有「重建」
+	// 的概念(每個 Job 都是獨立的 goroutine),所以這裡直接逐一 Start。
+	for _, job := range store.Snapshot().BackupJobs {
+		if job.Enabled {
+			s.startBackupScheduler(job)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
@@ -160,6 +179,12 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/monitor/notifiers", s.requireAuth(s.handleMonitorNotifiersCreate))
 	mux.HandleFunc("DELETE /api/v1/monitor/notifiers/{id}", s.requireAuth(s.handleMonitorNotifiersDelete))
 
+	mux.HandleFunc("GET /api/v1/backup/jobs", s.requireAuth(s.handleBackupJobsList))
+	mux.HandleFunc("POST /api/v1/backup/jobs", s.requireAuth(s.handleBackupJobsCreate))
+	mux.HandleFunc("DELETE /api/v1/backup/jobs/{id}", s.requireAuth(s.handleBackupJobsDelete))
+	mux.HandleFunc("POST /api/v1/backup/jobs/{id}/run", s.requireAuth(s.handleBackupJobsRun))
+	mux.HandleFunc("GET /api/v1/backup/jobs/{id}/snapshots", s.requireAuth(s.handleBackupJobsSnapshots))
+
 	mux.Handle("/", webUIHandler())
 
 	return s, withLogging(logger, mux), nil
@@ -181,6 +206,14 @@ func (s *Server) HTTPSConfig() state.HTTPSConfig {
 func (s *Server) Close() {
 	if s.monitorPoller != nil {
 		s.monitorPoller.Stop()
+	}
+
+	s.backupMu.Lock()
+	schedulers := s.backupSchedulers
+	s.backupSchedulers = make(map[string]*backup.JobScheduler)
+	s.backupMu.Unlock()
+	for _, sched := range schedulers {
+		sched.Stop()
 	}
 }
 

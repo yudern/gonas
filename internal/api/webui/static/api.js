@@ -100,4 +100,10 @@ export const api = {
   vpnPeers: () => request("GET", "/api/v1/vpn/peers"),
   addVPNPeer: (peer) => request("POST", "/api/v1/vpn/peers", peer),
   deleteVPNPeer: (id) => request("DELETE", `/api/v1/vpn/peers/${encodeURIComponent(id)}`),
+
+  backupJobs: () => request("GET", "/api/v1/backup/jobs"),
+  createBackupJob: (job) => request("POST", "/api/v1/backup/jobs", job),
+  deleteBackupJob: (id) => request("DELETE", `/api/v1/backup/jobs/${encodeURIComponent(id)}`),
+  runBackupJob: (id) => request("POST", `/api/v1/backup/jobs/${encodeURIComponent(id)}/run`),
+  backupJobSnapshots: (id) => request("GET", `/api/v1/backup/jobs/${encodeURIComponent(id)}/snapshots`),
 };

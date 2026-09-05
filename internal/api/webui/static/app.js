@@ -14,6 +14,7 @@ const routes = {
   users: renderUsers,
   monitor: renderMonitor,
   security: renderSecurity,
+  backup: renderBackup,
 };
 
 // 跟後端 internal/api.monitorPollInterval 一致，純粹用來在頁面文字上
@@ -1122,4 +1123,170 @@ async function refreshPeerList(el) {
   el.querySelector("#vpn-peer-count").textContent = `用戶端(${peers.length})`;
   el.querySelector("#vpn-peers-list").innerHTML = renderPeerRows(peers);
   attachPeerDeleteHandlers(el);
+}
+
+// ---------- 備份 ----------
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function describeSchedule(sched) {
+  return `每 ${sched.everyHours} 小時,從 ${pad2(sched.hourOfDay)}:${pad2(sched.minuteOfHour)} 開始`;
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+async function renderBackup(el) {
+  const jobs = await api.backupJobs().catch(() => []);
+
+  el.innerHTML = `
+    <h1>備份</h1>
+    <p class="page-subtitle">用 rsync 加硬連結輪替(跟 rsnapshot、Time Machine 是同一套技巧)把來源目錄備份到另一個位置,保留最近幾份快照;沒有變更的檔案在磁碟上只佔一份空間。需要主機上已安裝 <code>rsync</code>。</p>
+
+    <div class="card">
+      <h2>備份工作(${jobs.length})</h2>
+      <div id="backup-jobs-list">${renderBackupJobRows(jobs)}</div>
+      <div id="backup-msg"></div>
+      <form class="stacked" id="backup-form" style="margin-top:16px">
+        <div class="field"><label>名稱</label><input type="text" name="name" placeholder="每日備份" required></div>
+        <div class="field"><label>來源路徑</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
+        <div class="field"><label>目的地路徑</label><input type="text" name="destPath" placeholder="/mnt/backup" required></div>
+        <div class="field"><label>保留份數</label><input type="number" name="retentionCount" value="7" min="1" required></div>
+        <div class="field"><label>執行間隔(小時)</label><input type="number" name="everyHours" value="24" min="1" required></div>
+        <div class="field"><label>起始時刻(小時:分鐘)</label>
+          <div style="display:flex;gap:8px">
+            <input type="number" name="hourOfDay" value="3" min="0" max="23" style="width:90px" required>
+            <input type="number" name="minuteOfHour" value="0" min="0" max="59" style="width:90px" required>
+          </div>
+        </div>
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> 啟用排程</label></div>
+        <div class="btn-row"><button type="submit">新增備份工作</button></div>
+      </form>
+    </div>
+  `;
+
+  attachBackupHandlers(el);
+}
+
+function renderBackupJobRows(jobs) {
+  if (!jobs.length) return `<p class="empty-state">還沒有設定備份工作。</p>`;
+  return jobs.map((j) => renderBackupJobRow(j)).join("");
+}
+
+function renderBackupJobRow(j) {
+  let statusPill = `<span class="pill neutral">尚未執行</span>`;
+  let errorMsg = "";
+  if (j.lastRun) {
+    if (j.lastRun.success) {
+      statusPill = `<span class="pill ok">上次成功 · ${esc(formatDateTime(j.lastRun.finishedAt))}</span>`;
+      if (j.lastRun.error) errorMsg = msg("warn", j.lastRun.error);
+    } else {
+      statusPill = `<span class="pill danger">上次失敗 · ${esc(formatDateTime(j.lastRun.finishedAt))}</span>`;
+      errorMsg = msg("error", j.lastRun.error || "未知錯誤");
+    }
+  }
+  return `
+    <div class="rule-row" data-job-row="${esc(j.id)}">
+      <div class="rule-main">
+        <span class="pill ${j.enabled ? "ok" : "neutral"}">${j.enabled ? "已啟用" : "已停用"}</span>
+        <div>
+          <div class="rule-name">${esc(j.name)}</div>
+          <div class="rule-cond">${esc(j.sourcePath)} → ${esc(j.destPath)} · 保留 ${j.retentionCount} 份 · ${esc(describeSchedule(j.schedule))}</div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin:0">
+        ${statusPill}
+        <button class="secondary" data-run-job="${esc(j.id)}">立即執行</button>
+        <button class="secondary" data-view-snapshots="${esc(j.id)}">快照</button>
+        <button class="secondary" data-del-job="${esc(j.id)}">刪除</button>
+      </div>
+    </div>
+    ${errorMsg}
+    <div id="snapshots-${esc(j.id)}" class="snapshots-panel" hidden></div>
+  `;
+}
+
+function attachBackupHandlers(el) {
+  el.querySelector("#backup-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = el.querySelector("#backup-msg");
+    const job = {
+      name: f.get("name").trim(),
+      sourcePath: f.get("sourcePath").trim(),
+      destPath: f.get("destPath").trim(),
+      retentionCount: Number(f.get("retentionCount")),
+      enabled: f.get("enabled") === "on",
+      schedule: {
+        everyHours: Number(f.get("everyHours")),
+        hourOfDay: Number(f.get("hourOfDay")),
+        minuteOfHour: Number(f.get("minuteOfHour")),
+      },
+    };
+    try {
+      await api.createBackupJob(job);
+      box.innerHTML = msg("ok", "備份工作已新增。");
+      await renderBackup(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+
+  attachBackupJobRowHandlers(el);
+}
+
+function attachBackupJobRowHandlers(el) {
+  el.querySelectorAll("[data-run-job]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "執行中…";
+      try {
+        const res = await api.runBackupJob(btn.dataset.runJob);
+        el.insertAdjacentHTML("afterbegin", msg("ok", res.message));
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        btn.disabled = false;
+        btn.textContent = "立即執行";
+      }
+    });
+  });
+
+  el.querySelectorAll("[data-del-job]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("確定要刪除這個備份工作嗎?已經備份好的快照不會被刪除,但排程會停止。")) return;
+      try {
+        await api.deleteBackupJob(btn.dataset.delJob);
+        await renderBackup(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+      }
+    });
+  });
+
+  el.querySelectorAll("[data-view-snapshots]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.viewSnapshots;
+      const panel = el.querySelector(`#snapshots-${CSS.escape(id)}`);
+      if (!panel.hidden) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      panel.innerHTML = `<p class="loading">載入中…</p>`;
+      try {
+        const snapshots = await api.backupJobSnapshots(id);
+        panel.innerHTML = snapshots.length
+          ? `<ul class="snapshot-list">${snapshots.map((s) => `<li><code>${esc(s.name)}</code> · ${esc(formatDateTime(s.createdAt))}</li>`).join("")}</ul>`
+          : `<p class="empty-state">還沒有任何成功的快照。</p>`;
+      } catch (err) {
+        panel.innerHTML = msg("error", err.message);
+      }
+    });
+  });
 }
