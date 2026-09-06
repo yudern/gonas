@@ -426,6 +426,24 @@ if [ -f "$EXTRACT_DIR/isolinux/isolinux.cfg" ]; then
     # 不相容問題的其中一個現場。
     gonas_sed_inplace 's/^timeout .*/timeout 50/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
 fi
+# 第十八輪覆閱(使用者實測用 Parallels 在 arm64 上開機)才抓到的問題:
+# 上面這段從第七輪覆閱寫下來到現在,一直只處理 `isolinux.cfg`——這是
+# amd64 專屬的檔案,arm64 官方 ISO 是 EFI-only,根本沒有這個檔案(跟
+# 這一輪前面「找開機選單設定檔」那個 bug 是同一個原因)。使用者實際
+# 用 Parallels 開機、拍照回報看到的畫面,是標準的 GRUB 選單卡在那邊
+# 等按鍵,不會自動開始安裝——「開機不用人工介入就自動走完全自動安裝」
+# 這個目標,從第七輪修完 isolinux 那一刻起,就從來沒有真的在 arm64 上
+# 生效過,因為 grub.cfg 根本沒被同一段邏輯處理到。grub.cfg 用的是
+# GRUB2 的 `set timeout=N`(單位:秒)語法,跟 isolinux.cfg 的
+# `timeout N`(單位:1/10 秒)是兩種完全不同的格式,不能套用同一條
+# sed 規則,需要另外處理。逐一套用在 $CFG_LIST 裡列出的每個檔案上,
+# 不是只挑 `boot/grub/grub.cfg` 這一個固定路徑——理由跟上面找設定檔
+# 那段一樣:不同版本的目錄結構可能不同,對著整份清單逐一嘗試,沒有
+# `set timeout=` 這一行的檔案,這條 sed 規則本來就不會有任何動作
+# (no-op),不會誤傷到其他內容。
+while read -r cfgfile; do
+    gonas_sed_inplace 's/^set timeout=.*/set timeout=5/' "$cfgfile" || true
+done < "$CFG_LIST"
 
 # --- 6. 重新計算 checksum 清單、重新包裝 -------------------------------
 echo "==> recomputing md5sum.txt"
