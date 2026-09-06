@@ -81,6 +81,9 @@ jobs:
       - name: test-portable-sed.sh(sed -i 跨 GNU/BSD 相容包裝邏輯的離線回歸測試)
         run: sh build/appliance/test-portable-sed.sh
 
+      - name: test-find-boot-menu-cfgs.sh(find 多個起始路徑、其中一個不存在時,在 set -e 底下不能讓腳本沉默死掉的離線回歸測試)
+        run: sh build/appliance/test-find-boot-menu-cfgs.sh
+
   # 第十七輪覆閱抓到的問題:build-iso.sh 跟 lib/patch-boot-menu.sh 原本
   # 直接呼叫 `sed -i`/`sha256sum`/`md5sum`,這些是 GNU coreutils 工具,
   # 在 ubuntu-latest 這種 Linux runner 上到處都有,完全不會暴露這個問題
@@ -125,3 +128,6 @@ jobs:
 
       - name: test-portable-sed.sh(在真正的 BSD sed 底下驗證 -i.bak 這個寫法真的可行)
         run: sh build/appliance/test-portable-sed.sh
+
+      - name: test-find-boot-menu-cfgs.sh(macOS 的 BSD find 底下驗證同一個 set -e 陷阱也不會發生)
+        run: sh build/appliance/test-find-boot-menu-cfgs.sh

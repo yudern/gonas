@@ -121,6 +121,7 @@ sh build/appliance/test-gpg-verify.sh
 sh build/appliance/test-detect-arch.sh
 sh build/appliance/test-portable-checksum.sh
 sh build/appliance/test-portable-sed.sh
+sh build/appliance/test-find-boot-menu-cfgs.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
@@ -137,9 +138,15 @@ test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
 `sed -i`,macOS 內建的 BSD 版本這幾個指令要不是不存在、要不是語法
 不一樣,已經改成會自動判斷環境的版本)應該分別看到 4 個跟 3 個
 `PASS`,以及 `==> all portable-checksum test cases passed`/
-`==> all portable-sed test cases passed`。
+`==> all portable-sed test cases passed`;第六支(第十八輪覆閱新增
+——就是你這次實測 `make iso-arm64` 撞到「patching boot menu configs
+之後 make 直接印 Error 1、沒有任何錯誤訊息」的那個問題:`find` 找
+isolinux/grub 設定檔時,如果 isolinux 目錄不存在(arm64 官方 ISO
+本來就沒有這個目錄),`find` 自己的 exit code 在 `set -e` 底下會讓
+整支腳本沉默死掉)應該看到 3 個 `PASS` 跟
+`==> all find-boot-menu-cfgs test cases passed`。
 如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用往下做,
-先確認拿到的程式碼是完整的。這五支測試也已經寫進
+先確認拿到的程式碼是完整的。這六支測試也已經寫進
 `.github/workflows/ci.yml`(而且特地也在 macOS 的 GitHub Actions
 runner 上跑一次,不是只在 Linux 上跑),如果你把這個 repo 推到
 GitHub,之後每次 push/PR 都會自動跑一次,不用每次都記得手動執行。

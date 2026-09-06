@@ -70,6 +70,9 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 「command not found」中止。`gonas_sha256sum`/`gonas_md5sum` 是修好
 # 之後的版本,理由/實作見 lib/portable-checksum.sh 開頭的說明。
 . "$SCRIPT_DIR/lib/portable-checksum.sh"
+# 第十八輪覆閱(使用者實測 arm64 建置)抓到的問題:找開機選單設定檔的
+# `find` 呼叫,理由/實作見 lib/find-boot-menu-cfgs.sh 開頭的說明。
+. "$SCRIPT_DIR/lib/find-boot-menu-cfgs.sh"
 
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
@@ -355,7 +358,18 @@ APPEND_MARKER="gonas/preseed.cfg"
 # ——這個版本的 while 迴圈是在目前的 shell 裡執行、不是子行程，裡面
 # 設的變數在迴圈結束後還讀得到。
 CFG_LIST="$WORK_DIR/boot-menu-cfgs.list"
-find "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" -type f \( -name '*.cfg' -o -name 'txt.cfg' \) 2>/dev/null > "$CFG_LIST"
+# 第十八輪覆閱(使用者實測 arm64 建置)才抓到的問題:`find` 同時給兩個
+# 起始路徑,如果其中一個根本不存在(arm64 的官方 ISO 是 EFI-only,
+# 本來就沒有 isolinux/ 目錄,這是上面註解早就講過的正常情況),`find`
+# 本身仍然會正確找到另一個路徑底下的檔案,但 exit code 因為那個
+# 「路徑不存在」的錯誤還是非 0——在這支腳本一開頭就設定的 `set -eu`
+# 底下,這會讓整支腳本立刻中止,而且是在下面「找到幾個設定檔」那行
+# echo 都還沒印出來之前就死掉,螢幕上不會有任何一行看得懂的錯誤訊息,
+# 只會看到 `make: *** [iso-arm64] Error 1`。已抽成
+# lib/find-boot-menu-cfgs.sh 的 gonas_find_boot_menu_cfgs(),裡面
+# 用 `|| true` 吃掉這個 exit code——真正「有沒有找到任何設定檔」的
+# 判斷,交給下面這個既有、訊息更清楚的 `[ "$CFG_COUNT" = "0" ]` 檢查。
+gonas_find_boot_menu_cfgs "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" "$CFG_LIST"
 CFG_COUNT="$(wc -l < "$CFG_LIST" | tr -d ' ')"
 echo "==> found $CFG_COUNT boot menu config file(s) to patch"
 if [ "$CFG_COUNT" = "0" ]; then
