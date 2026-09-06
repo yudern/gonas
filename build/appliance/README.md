@@ -381,3 +381,33 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   REAL_HARDWARE_TESTING.md` 的「第六輪覆閱」段落。除了這兩塊,ISO
   建置、preseed 自動安裝、late-command 品牌化的其餘部分,全部等待
   使用者在有網路的機器上建置、並在虛擬機裡開機測試後才算數。
+- **`late-command.sh`/`install.sh` 這兩個「直接被當成執行檔呼叫」的
+  進入點,原本依賴 ISO 上的執行位元有沒有活著留下來——第十三輪覆閱
+  抓到 `build-iso.sh` 忘記把 `lib/` 目錄塞進 ISO 那個 bug之後,第
+  十四輪回頭多想一步,發現另一個同一類、還沒被驗證過的風險**:
+  `build-iso.sh` 是先載入官方 base.iso、再用 xorriso 的 `-map` 疊加
+  修改過的目錄樹,新加進去的檔案(`late-command.sh`、
+  `release-$ARCH/install.sh`)的 Unix 執行位元,能不能正確透過 Rock
+  Ridge 擴充屬性保留到最終的 ISO 9660 檔案系統上,取決於 xorriso 的
+  行為細節,這個開發沙盒裝不了 xorriso,完全沒辦法實際驗證。與其賭
+  這個假設一定成立(賭錯的症狀會跟前面 `lib/` 沒塞進去那個 bug 幾乎
+  一模一樣:機器裝完只是一台陽春 Debian,差別只在失敗訊息從
+  「找不到 lib/detect-arch.sh」換成「Permission denied」),第十四輪
+  已經把這兩個進入點都改成明確用 `sh 檔案路徑` 執行(`preseed.cfg`
+  的 `late_command` 呼叫 `sh /cdrom/gonas/late-command.sh`,
+  `late-command.sh` 內部呼叫 `sh ./install.sh`),完全不依賴執行位元
+  有沒有被保留下來,只需要檔案讀得到就能跑——這是一個防禦性修正,
+  不管 Rock Ridge 屬性實際上有沒有問題都不會有副作用,但真正「執行
+  位元到底有沒有被正確保留」這件事本身,到目前為止還是純推導,沒有
+  真的建一次 ISO 驗證過。
+- **appliance 這條安裝路徑裝完之後,`uninstall.sh` 不會留在系統上**
+  ——這是第十四輪從「裝完之後留下什麼給使用者」這個角度回頭檢查才
+  發現的落差:「軟體版」安裝路徑的使用者本來就手動下載/解壓縮過
+  release tarball,`uninstall.sh` 自然留在自己電腦的某個目錄裡;但
+  appliance 這條路徑,release tarball 只存在於安裝媒體上,
+  `preseed.cfg` 設定了裝完會退出安裝媒體,原本裝好的系統上完全沒有
+  這個檔案。已經修正:`late-command.sh` 現在會在裝完 gonasd 之後,
+  順手把 `uninstall.sh` 複製一份到 `/usr/local/share/gonas/
+  uninstall.sh`,之後想解除安裝直接
+  `sudo /usr/local/share/gonas/uninstall.sh` 就好,不需要重新找回
+  當初的安裝媒體。

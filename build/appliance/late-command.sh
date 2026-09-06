@@ -9,7 +9,10 @@
 #
 #   1. 安裝 gonasd 本體（複用既有的 build/install.sh，軟體安裝邏輯
 #      完全不重寫一份——appliance 映像檔跟「使用者自己在 Debian 上裝
-#      GoNAS」用的是同一套安裝腳本，差別只在誰、什麼時候執行它）。
+#      GoNAS」用的是同一套安裝腳本，差別只在誰、什麼時候執行它），
+#      並把 uninstall.sh 留一份在系統上（見下面 1.6 節），因為
+#      appliance 這條路徑裝完之後安裝媒體會被退出，不像「軟體版」
+#      安裝路徑那樣使用者手上自然留著一份 release tarball。
 #   2. 佈署 tty1 狀態主控台（gonas-console.service）取代預設的登入
 #      提示，這是使用者選的「開機後精簡狀態畫面」路線。
 #   3. 品牌化：主機名稱、/etc/motd、/etc/issue、/etc/os-release 的
@@ -74,12 +77,24 @@ log "target architecture: $ARCH"
 # 所以這裡直接呼叫同一份 install.sh，不需要網路連線 —— 這也是為什麼
 # 這個 ISO 可以做到「離線安裝」，不像一般 debian-installer netinst
 # 映像那樣還需要在安裝過程連網抓套件。
+#
+# 用 `sh ./install.sh` 明確指定直譯器，不用 `./install.sh` 靠執行位元
+# 觸發——理由跟 preseed.cfg 的 late_command 改成 `sh
+# /cdrom/gonas/late-command.sh` 一樣(第十三輪覆閱抓到 lib/ 沒塞進 ISO
+# 那個 bug之後,順著多想一步發現的另一個潛在風險):這個檔案是透過
+# xorriso 重新包裝進 ISO 9660 檔案系統的,執行位元能不能活著留下來,
+# 取決於 xorriso 有沒有正確套用 Rock Ridge 擴充屬性,這件事這個沙盒
+# 完全沒辦法驗證——與其賭這個假設一定成立,不如讓這裡也完全不依賴
+# 執行位元,只需要檔案讀得到就能跑。判斷式也對應改成 `-f`(檔案存在)
+# 而不是 `-x`(檔案存在且可執行),不然就算真的改用 `sh` 執行,前面的
+# `-x` 檢查還是可能因為執行位元遺失而誤判「找不到 install.sh」,兩處
+# 要一起改才有意義。
 RELEASE_DIR="$GONAS_DIR/release-$ARCH"
-if [ -x "$RELEASE_DIR/install.sh" ]; then
+if [ -f "$RELEASE_DIR/install.sh" ]; then
     log "installing gonasd from $RELEASE_DIR"
-    ( cd "$RELEASE_DIR" && ./install.sh )
+    ( cd "$RELEASE_DIR" && sh ./install.sh )
 else
-    log "WARNING: $RELEASE_DIR/install.sh not found or not executable — gonasd was NOT installed. This ISO was built incorrectly."
+    log "WARNING: $RELEASE_DIR/install.sh not found — gonasd was NOT installed. This ISO was built incorrectly."
     exit 1
 fi
 
@@ -120,6 +135,38 @@ if [ -f "$GONAS_UNIT_SRC" ] && command -v systemctl >/dev/null 2>&1; then
     fi
 else
     log "WARNING: $GONAS_UNIT_SRC not found or systemctl unavailable — could not confirm gonas.service is enabled for boot"
+fi
+
+# --- 1.6. 把 uninstall.sh 留一份在系統上 ---------------------------
+# 這是回頭檢查「appliance 這條路徑裝完之後,使用者手上到底剩下什麼」
+# 時發現的另一個落差:「軟體版」安裝路徑(使用者自己在一台既有的
+# Debian 機器上手動下載/解壓縮 release tarball、跑 install.sh)的
+# 使用者,release tarball(裡面含 uninstall.sh)自然留在他們自己電腦
+# 的某個目錄裡,事後想解除安裝隨時找得到;但 appliance 這條路徑,
+# release tarball 只存在於安裝媒體(USB/光碟映像)上的
+# `/cdrom/gonas/release-$ARCH/`,而 preseed.cfg 設定了
+# `cdrom-detect/eject boolean true`,安裝完成、重開機之後這份安裝
+# 媒體邏輯上已經被退出——裝好的系統本身完全沒有 uninstall.sh 這個
+# 檔案,使用者除非剛好留著、記得重新插上/掛載當初那支安裝隨身碟並
+# 精確找到同一個路徑,不然日後想解除安裝 GoNAS 根本無從下手,只能
+# 手動一項一項回想 install.sh 到底改了系統的哪些地方。這在前 13 輪
+# 覆閱裡完全沒被提過,是純粹「裝完之後留下什麼給使用者」這個角度才
+# 會想到的落差。
+#
+# 解法:裝完 gonasd 之後,順手把 uninstall.sh 複製一份到系統上一個
+# 固定、好記的位置。這裡才是真正把檔案寫到目標系統(已經裝好、開機
+# 之後會用的那個 ext4 之類的真實檔案系統),不是留在 ISO 9660 上,
+# `chmod` 設的執行位元不會有前面 install.sh/late-command.sh 那兩處
+# 改成用 `sh` 執行的顧慮(Rock Ridge 屬性有沒有正確保留),這裡直接
+# `chmod 0755` 就是可靠的。
+UNINSTALL_DEST_DIR=/usr/local/share/gonas
+if [ -f "$RELEASE_DIR/uninstall.sh" ]; then
+    mkdir -p "$UNINSTALL_DEST_DIR"
+    cp "$RELEASE_DIR/uninstall.sh" "$UNINSTALL_DEST_DIR/uninstall.sh"
+    chmod 0755 "$UNINSTALL_DEST_DIR/uninstall.sh"
+    log "uninstall.sh saved to $UNINSTALL_DEST_DIR/uninstall.sh for later use (the install media may not be available after this point)"
+else
+    log "WARNING: $RELEASE_DIR/uninstall.sh not found — no persistent copy could be saved; uninstalling later will require re-mounting the original install media"
 fi
 
 # --- 2. tty1 狀態主控台 -------------------------------------------

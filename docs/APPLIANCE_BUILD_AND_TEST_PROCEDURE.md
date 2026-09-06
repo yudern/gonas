@@ -206,6 +206,10 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
    - `hostnamectl`:主機名稱應該顯示 `gonas`。
    - `cat /etc/os-release`:`PRETTY_NAME` 應該顯示
      `GoNAS (Debian GNU/Linux)`。
+   - `ls -l /usr/local/share/gonas/uninstall.sh`:應該存在,而且有
+     執行權限(這是第十四輪覆閱補上的——appliance 裝完之後安裝媒體
+     會被退出,系統上原本完全沒有 `uninstall.sh` 可以用,現在
+     `late-command.sh` 會順手留一份在這裡)。
 5. 重開機一次(`sudo reboot`),確認 tty1 的狀態畫面在下一次開機一樣
    會自動出現,不需要每次都手動介入。
 6. 額外測「開機當下沒有網路」的情境:把 QEMU 指令裡的
@@ -214,6 +218,21 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
    這是第四輪覆閱修的問題,值得專門測一次確認。
 
 以上六項全部通過,代表 Phase 19 這條路徑的核心功能都如預期運作。
+
+**額外特別留意這一項(第十四輪新加,目前風險評估最高)**:如果第 3
+項(`gonasadmin` 登入強制改密碼)或步驟 6 這裡的
+`/usr/local/share/gonas/uninstall.sh` 檢查失敗、或整台機器開機後
+根本不是 GoNAS 的樣子(看起來像一台單純裝了 SSH 的陽春 Debian)——
+先檢查 `journalctl -b -1` 或 `/etc/motd` 裡有沒有
+`[gonas-late-command]` 開頭的 log、或 `GoNAS late-command.sh
+failed` 這則備援訊息,尤其留意有沒有出現 `Permission denied`:
+第十四輪把 `late-command.sh`/`install.sh` 這兩個直接被安裝程式呼叫
+的進入點都改成用 `sh 檔案路徑` 執行,理由是懷疑 xorriso 重新包裝
+ISO 的過程可能沒有正確保留這兩個檔案的 Unix 執行位元(Rock Ridge
+擴充屬性的細節,這個沙盒完全沒辦法驗證),如果你真的看到相關的
+`Permission denied` 訊息,代表這個懷疑是對的,務必把完整訊息帶
+回來——這會是這個 Phase 目前唯一一個「理論推導出問題、但修法本身
+也還沒被真正驗證過」的地方。
 
 ## 步驟 8(可選):arm64 映像檔
 
