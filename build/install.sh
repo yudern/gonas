@@ -70,13 +70,33 @@ esac
 
 # ---- 3. 找到要安裝的執行檔 --------------------------------------------
 # 允許用 -bin <path> 明確指定(例如自己交叉編譯、或路徑跟預設佈局不同時)。
+#
+# 這裡用 `-f`(檔案存在)判斷,不是 `-x`(檔案存在且可執行)——這是
+# 第十九輪覆閱(使用者實測 arm64 安裝、整台機器裝完卻是一台陽春 Debian)
+# 抓到的**根本原因**:appliance 這條安裝路徑,install.sh 是從 ISO 9660
+# 檔案系統上跑的(late-command.sh 在 in-target chroot 裡 `sh
+# /cdrom/gonas/release-$ARCH/install.sh`),而 xorriso 把檔案重新包裝進
+# ISO 時,Unix 執行位元能不能被保留取決於 Rock Ridge 擴充屬性有沒有
+# 正確套用——這件事整個專案早就決定「不能信任」(late-command.sh、
+# preseed.cfg 的 late_command 都因此改成用 `sh <路徑>` 執行,不靠執行
+# 位元),但當時漏掉了 install.sh 內部「用 `-x` 找 gonasd 執行檔」這
+# 一處:ISO 上的 gonasd 執行位元一旦遺失,`[ -x gonasd ]` 就判斷為
+# 「找不到」,SRC_BIN 變成空的,install.sh 直接印「找不到 gonasd 執行檔」
+# 並 `exit 1`——而 late-command.sh 是用 `set -e` 呼叫 install.sh 的,
+# install.sh 一非零退出,late-command.sh 就在第一步整個中止,後面
+# 安裝服務、換品牌、強制改密碼、留 uninstall.sh 全部不會執行,結果就是
+# 使用者看到的「裝完開機,卻是一台什麼都沒品牌化的陽春 Debian」。
+# 用 `-f` 只判斷檔案「存在且讀得到」就好——install.sh 下面第 4 步複製
+# 完執行檔本來就會自己 `chmod 0755`(見 TMP_BIN 那一段),根本不需要
+# 來源檔案本身帶著執行位元,所以放寬成 `-f` 完全不影響安裝正確性,
+# 只是不再被那個「ISO 上執行位元有沒有活著」的不可靠假設卡住。
 SRC_BIN=""
 if [ "$1" = "-bin" ] && [ -n "$2" ]; then
 	SRC_BIN="$2"
-elif [ -x "$SCRIPT_DIR/gonasd" ]; then
+elif [ -f "$SCRIPT_DIR/gonasd" ]; then
 	# release tarball 佈局:執行檔跟 install.sh 放在同一層。
 	SRC_BIN="$SCRIPT_DIR/gonasd"
-elif [ -x "$SCRIPT_DIR/../dist/gonasd-linux-$ARCH" ]; then
+elif [ -f "$SCRIPT_DIR/../dist/gonasd-linux-$ARCH" ]; then
 	# 原始碼 checkout 佈局:build/install.sh 往上一層找 dist/。
 	SRC_BIN="$SCRIPT_DIR/../dist/gonasd-linux-$ARCH"
 fi

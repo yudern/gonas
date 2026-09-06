@@ -1669,6 +1669,97 @@ install.sh 上主動修過的「執行位元能不能被信任」這個原則,�
 「使用者實際動手測」不是形式上的最後一步、而是這整個 Phase 唯一能
 真正驗證這幾段邏輯的方式的原因。
 
+**第十九輪(使用者實測:安裝流程一路跑完、機器開機到 `gonas login:`
+了,但整台機器是一台「陽春 Debian」——沒有品牌畫面、沒有 gonas.service
+、沒有強制改密碼、沒有 SSH、沒有 uninstall.sh,`/etc/motd` 直接寫著
+`GoNAS late-command.sh failed`)。這一輪抓到的是整個 Phase 19 到目前
+為止「後果最嚴重、卻也最單純」的根本 bug,外加一個從一開始就存在的
+設計矛盾。**
+
+- [x] **根本 bug:`build/install.sh` 用 `[ -x gonasd ]`(執行位元)
+      找執行檔,ISO 上執行位元遺失就判定「找不到」→ `exit 1` →
+      late-command.sh 整個中止**。診斷過程:`/etc/motd` 明白寫著
+      late-command.sh failed,而 late-command.sh 的第 1 步就是
+      `( cd "$RELEASE_DIR" && sh ./install.sh )`,且整支腳本是
+      `set -e`——install.sh 只要非零退出,late-command.sh 就在第一步
+      中止,後面「裝服務、換品牌、強制改密碼、留 uninstall.sh」全部
+      不會執行,完全符合使用者看到的症狀(一台什麼都沒品牌化的
+      Debian)。再往 install.sh 裡看:第 3 步找執行檔用的是
+      `elif [ -x "$SCRIPT_DIR/gonasd" ]`——這正是整個專案從第十三/
+      十四輪起就一路在修、也已經反覆強調「不能信任」的那個
+      「ISO 上 Rock Ridge 執行位元會不會被保留」的假設:late-command.sh
+      的呼叫、preseed 的 late_command、Makefile 的 build-iso.sh 呼叫
+      全都因此改成不依賴執行位元,卻獨獨漏掉了 install.sh **內部**這一處
+      ——這是「同一個坑,在一個地方修好了,卻沒檢查專案裡所有踩得到
+      同一個坑的地方」的又一次現形,而且這次漏掉的那一處剛好是整條
+      安裝鏈的第一步,一失敗就骨牌式地讓後面全部沒執行。修法:改成
+      `[ -f ... ]`(只判斷檔案存在可讀)——install.sh 第 4 步複製完
+      執行檔本來就會自己 `chmod 0755`,根本不需要來源檔案帶著執行位元,
+      放寬成 `-f` 完全不影響安裝正確性。同時在 build-iso.sh 把 gonasd
+      也一起加進「建置時 chmod +x」那行(純防禦,實際不依賴)。
+- [x] **設計矛盾:「完全離線安裝」跟「裝完就有 SSH」在 netinst 光碟上
+      本來就不可能同時成立,使用者選擇用「模式一」解決**。查 Debian
+      官方文件確認:netinst 光碟官方定義就只含「裝 base 系統的最小
+      套件」,`ssh-server`(tasksel 工作集)跟 `sudo`(套件)都不在
+      裡面,正常安裝要連網去鏡像站抓——但 preseed 設了
+      `apt-setup/use_mirror false`(完全離線)。結果原本 preseed 裡的
+      `tasksel ... ssh-server` 跟 `pkgsel/include sudo`「從第一天就不
+      可能在離線情況下成功」,裝完的系統既沒有 SSH server、gonasadmin
+      也沒有可用的 sudo。使用者明確選了「模式一」:不靠安裝時連網,
+      而是在「建置 ISO 的機器上(本來就要連網抓 netinst)」預先把
+      openssh-server / sudo 及其相依 .deb 打包進 ISO,再由
+      late-command.sh 在目標系統離線 `dpkg -i`。實作:
+      - 新增 `lib/deb-closure.sh`:純邏輯,解析 Debian 的 Packages
+        索引、算出種子套件(openssh-server、sudo)的相依封閉集,但排除
+        Priority required/important(debootstrap 建的 base 一定已有這
+        兩個優先級的所有套件),正確處理 `|` 替代相依、版本限制
+        `(>= x)`、架構修飾 `:any`、以及虛擬套件 Provides。這是整個
+        模式一裡唯一能在這個沙盒離線端對端驗證的部分。
+      - 新增 `test-deb-closure.sh`:用手寫的假 Packages 資料涵蓋上述
+        每一種邊界情況,11 個案例全過;而且驗證過它有鑑別力(把排除
+        清單清空,被排除的 required/important 套件就會如預期出現)。
+      - `build-iso.sh` 新增 4.5 節:建置時從 deb.debian.org 抓
+        `dists/stable/main/binary-<arch>/Packages.gz`,算封閉集,把每個
+        .deb 下載進 ISO 的 `gonas/debs/`。整段 best-effort:抓不到就
+        印警告繼續、不讓建置失敗;可用 GONAS_SKIP_OFFLINE_PACKAGES=1
+        整段跳過。checksum 工具沿用第十七輪的可攜包裝,解壓用
+        `gzip -dc`(macOS/Linux 都有)。
+      - `late-command.sh` 新增 1.7 節:在目標系統離線
+        `dpkg -i /cdrom/gonas/debs/*.deb`,enable ssh,補一次
+        `usermod -aG sudo gonasadmin`。**整段刻意做成 best-effort、
+        每個可能失敗的指令都用 `if`/`|| true` 包起來,絕對不會用
+        `set -e` 拖垮整支腳本**——這正是記取這一輪根本 bug 的教訓:
+        選用功能(SSH)不該有能力用「一失敗就骨牌式中止」的方式害到
+        核心功能(gonasd 本體 + Web 介面 + tty 主控台)。
+      - `preseed.cfg`:tasksel 移除 `ssh-server`、移除
+        `pkgsel/include sudo`(兩者改由打包的 .deb 離線安裝);保留
+        `standard`(離線裝不起來會被靜默略過,但保留著,萬一日後改成
+        允許連網就會正常裝)。
+      - CI 兩個 job(Linux、macOS)都加了 test-deb-closure.sh。
+- [x] **這一輪的驗證邊界要說清楚**:`-x`→`-f` 這個根本修正、跟
+      deb-closure 的封閉集邏輯,都在沙盒裡驗證過了(前者是明確的因果
+      推理 + 這一整個專案早就確立的「不信任執行位元」原則的直接套用,
+      後者有 11 個案例的單元測試撐著);但「模式一」真正下載 .deb、
+      在真實目標系統 `dpkg -i` 那些 I/O 步驟,這個沙盒沒辦法端對端測
+      (連不上 deb.debian.org、也不能真的建 ISO / 跑安裝)。所以這一輪
+      交付之後,還是要靠使用者重新建置 + 重新安裝一次:預期這次裝完
+      重開機會看到 GoNAS 品牌畫面、gonas.service 正常跑、tty2 登入
+      gonasadmin 會被強制改密碼、而且能 SSH 進去、gonasadmin 能 sudo。
+      任何一項不如預期,一樣把畫面/log 帶回來。
+
+這一輪最值得記錄的教訓,跟前幾輪是同一條線的延伸,但更尖銳:**這台
+機器「裝完卻是陽春 Debian」的根本原因,是一個早就被辨識出來、也已經
+在好幾個地方修過的 bug 類別(不能信任 ISO 執行位元),卻獨獨漏在
+install.sh 內部那一行——而且那一行剛好是整條安裝鏈的第一步。** 知道
+一個 bug 類別存在、甚至已經修過它好幾次,都不等於已經把專案裡每一個
+踩得到它的地方都找出來了;真正保證「同類 bug 不再回歸」的,不是
+「記得這個坑」,而是像這一輪把 deb-closure 抽成有單元測試的函式那樣,
+把邏輯變成可以被自動化盯著的東西。至於那個「離線 vs SSH」的設計矛盾,
+提醒的是另一件事:有些矛盾不是實作 bug,是需求本身沒想清楚——netinst
+「最小光碟 + 連網補完」的本質,跟「完全離線安裝」是直接衝突的,這種
+衝突再多輪程式碼審查也審不出來,只有真的把整條路走到底(裝完、發現
+SSH 不在)才會逼出來。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

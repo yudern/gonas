@@ -169,6 +169,52 @@ else
     log "WARNING: $RELEASE_DIR/uninstall.sh not found — no persistent copy could be saved; uninstalling later will require re-mounting the original install media"
 fi
 
+# --- 1.7. (模式一:離線 SSH)安裝打包進 ISO 的 .deb --------------------
+# build-iso.sh 的 4.5 節(見那裡的說明)會在「建置 ISO 的機器上(有
+# 網路)」預先把 openssh-server 及其相依套件的 .deb 抓下來、放進 ISO
+# 的 gonas/debs/。這裡在目標系統的 in-target chroot 裡直接 `dpkg -i`
+# 這些本地檔案,安裝當下完全不需要網路——這就是這個 appliance 能同時
+# 做到「安裝過程完全離線」跟「裝完就有 SSH 可以用」的方法。
+#
+# 整段刻意做成 best-effort,絕對不能讓它中止整個 late-command.sh:
+# SSH 是選用便利功能,不是 appliance 的核心(核心是上面已經裝好的
+# gonasd 本體 + Web 介面 + 下面的 tty 主控台)。這一點是第十九輪覆閱
+# 特別記取的教訓——這支腳本用 `set -e`,之前就是因為第 1 步 install.sh
+# 一失敗、整支腳本連品牌化都沒做就中止,才害整台機器變成陽春 Debian;
+# 選用功能更不該有能力用同樣的方式拖垮整支腳本,所以這裡每一個可能
+# 失敗的指令都明確用 `if`/`|| true` 包起來,不受 `set -e` 影響。
+DEBS_DIR="$GONAS_DIR/debs"
+if [ -d "$DEBS_DIR" ] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
+    log "installing bundled offline packages (SSH server + deps) from $DEBS_DIR"
+    # 一次把全部 .deb 交給 dpkg -i,讓它自己排相依設定順序;base 已經
+    # 裝好的相依會被視為已滿足。有些套件(例如 openssh-server)的
+    # postinst 在這種「沒有真正在跑的 systemd、裝置節點可能不完整」的
+    # chroot 環境裡不一定能完全設定完成,所以失敗時再補一次
+    # `dpkg --configure -a`,還是失敗也只記警告、不中止。
+    if dpkg -i "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
+        log "bundled offline packages installed"
+    else
+        dpkg --configure -a >/dev/null 2>&1 || true
+        log "WARNING: 'dpkg -i' on bundled packages reported problems; if SSH does not work after first boot, run 'sudo dpkg --configure -a'"
+    fi
+    # 確保 SSH 服務開機自動啟動(openssh-server 的 postinst 通常已經
+    # enable 過,這裡再補一次確保;ssh / sshd 兩種 unit 名稱都試一下)。
+    if systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null; then
+        log "ssh service enabled for boot"
+    else
+        log "WARNING: could not confirm the ssh service is enabled for boot — check with 'systemctl is-enabled ssh' after first boot"
+    fi
+    # 確保 gonasadmin 真的在 sudo 群組裡:preseed 的 user-setup 會在建立
+    # 帳號時把它加進 `sudo` 群組(base-passwd 內建這個群組,所以即使
+    # sudo 套件當時還沒裝,群組本身也存在、加得進去),這裡在 sudo 套件
+    # 離線裝好之後再 `usermod -aG` 補一次確保,冪等、失敗也不影響。
+    if command -v usermod >/dev/null 2>&1; then
+        usermod -aG sudo gonasadmin 2>/dev/null || true
+    fi
+else
+    log "no bundled offline packages found under $DEBS_DIR — this image was built without offline package bundling (SSH server will not be preinstalled; install it later with network access via 'apt install openssh-server')"
+fi
+
 # --- 2. tty1 狀態主控台 -------------------------------------------
 OVERLAY_DIR="$GONAS_DIR/overlay"
 if [ -d "$OVERLAY_DIR" ]; then

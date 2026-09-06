@@ -122,6 +122,7 @@ sh build/appliance/test-detect-arch.sh
 sh build/appliance/test-portable-checksum.sh
 sh build/appliance/test-portable-sed.sh
 sh build/appliance/test-find-boot-menu-cfgs.sh
+sh build/appliance/test-deb-closure.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
@@ -144,7 +145,10 @@ test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
 isolinux/grub 設定檔時,如果 isolinux 目錄不存在(arm64 官方 ISO
 本來就沒有這個目錄),`find` 自己的 exit code 在 `set -e` 底下會讓
 整支腳本沉默死掉)應該看到 3 個 `PASS` 跟
-`==> all find-boot-menu-cfgs test cases passed`。
+`==> all find-boot-menu-cfgs test cases passed`;第七支(第十九輪覆閱
+新增,「模式一:離線 SSH」的核心——算 openssh-server / sudo 的相依
+封閉集、決定要打包哪些 .deb 進 ISO 的邏輯)應該看到 11 個 `PASS` 跟
+`==> all deb-closure test cases passed`。
 如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用往下做,
 先確認拿到的程式碼是完整的。這六支測試也已經寫進
 `.github/workflows/ci.yml`(而且特地也在 macOS 的 GitHub Actions
@@ -331,6 +335,12 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
      執行權限(這是第十四輪覆閱補上的——appliance 裝完之後安裝媒體
      會被退出,系統上原本完全沒有 `uninstall.sh` 可以用,現在
      `late-command.sh` 會順手留一份在這裡)。
+   - `systemctl is-enabled ssh`:應該是 `enabled`(第十九輪「模式一:
+     離線 SSH」新增——openssh-server 是在建置 ISO 時預先打包進去、
+     安裝時離線 `dpkg -i` 上去的,不需要安裝過程連網)。接著從你的
+     Mac 用 `ssh gonasadmin@<這台機器的IP>` 應該連得進來。
+   - `sudo -v` 或 `sudo id`:gonasadmin 應該能用 sudo(sudo 這個套件
+     同樣是離線打包安裝的,gonasadmin 也已經被加進 sudo 群組)。
 5. 重開機一次(`sudo reboot`),確認 tty1 的狀態畫面在下一次開機一樣
    會自動出現,不需要每次都手動介入。
 6. 額外測「開機當下沒有網路」的情境:把 QEMU 指令裡的

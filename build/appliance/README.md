@@ -307,11 +307,27 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   (讀真正的 Debian 鏡像站目錄列表確認檔名格式),還沒有被使用者
   實際重跑一次 `make iso-arm64` 確認修好,見
   `docs/REAL_HARDWARE_TESTING.md` 第十八輪的記錄。
-- 安裝過程完全離線(只吃光碟/USB 媒體本身內附的套件),所以不會在
-  裝機時自動安裝 mergerfs/snapraid/samba/docker.io/nfs-common/
-  wireguard-tools/rsync 這些 GoNAS 的「選用」外部相依套件——開機、
-  機器有網路之後,透過 Web 介面的 Doctor 頁面(或手動 `apt install`)
-  補裝,效果跟軟體版安裝路徑完全一樣。
+- 安裝過程完全離線(不連網抓套件),所以不會在裝機時自動安裝
+  mergerfs/snapraid/samba/docker.io/nfs-common/wireguard-tools/rsync
+  這些 GoNAS 的「選用」外部相依套件——開機、機器有網路之後,透過
+  Web 介面的 Doctor 頁面(或手動 `apt install`)補裝,效果跟軟體版
+  安裝路徑完全一樣。
+- **「完全離線安裝」跟「裝完就有 SSH / sudo 可以用」在 netinst 光碟上
+  本來是直接衝突的,用「模式一」解決(第十九輪覆閱)**:netinst 光碟
+  官方定義就只含「裝 base 系統的最小套件」,`openssh-server`(SSH
+  server)跟 `sudo` 都不在裡面,正常安裝要連網抓——但這個 appliance
+  設定了完全離線安裝。解法是在「建置 ISO 的機器上(本來就要連網抓
+  netinst)」預先把 openssh-server / sudo 及其相依 `.deb` 打包進 ISO
+  的 `gonas/debs/`(見 `build-iso.sh` 4.5 節與 `lib/deb-closure.sh`),
+  再由 `late-command.sh` 在目標系統離線 `dpkg -i`(見 late-command.sh
+  1.7 節)。整段是 best-effort——抓不到套件或某個 .deb 下載失敗,只會
+  少了 SSH,不會讓 ISO 建置或 appliance 核心功能(gonasd + Web 介面
+  + tty 主控台)壞掉;設定 `GONAS_SKIP_OFFLINE_PACKAGES=1` 可以整段
+  跳過。想多打包別的套件,設 `GONAS_APPLIANCE_SEED_PACKAGES`(空白
+  分隔)。**注意這只在文件/單元測試層面驗證過封閉集邏輯(見
+  `test-deb-closure.sh`),真正下載 .deb + 在目標系統 dpkg -i 還需要
+  使用者實際建置 + 安裝一次確認,見 docs/REAL_HARDWARE_TESTING.md
+  第十九輪。**
 - 沒有做 Secure Boot 簽章相關處理,規劃上假設目標機器的韌體允許
   一般(非簽章)開機或已關閉 Secure Boot。
 - **這個 appliance「開機直接看到 GoNAS 品牌畫面」的整套體驗,是建立在

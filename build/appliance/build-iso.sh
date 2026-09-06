@@ -73,6 +73,11 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 第十八輪覆閱(使用者實測 arm64 建置)抓到的問題:找開機選單設定檔的
 # `find` 呼叫,理由/實作見 lib/find-boot-menu-cfgs.sh 開頭的說明。
 . "$SCRIPT_DIR/lib/find-boot-menu-cfgs.sh"
+# 第十九輪覆閱「模式一:離線 SSH」——算 openssh-server 相依封閉集、
+# 決定要打包哪些 .deb 進 ISO 的核心邏輯,見 lib/deb-closure.sh 開頭的
+# 說明。真正的下載步驟在下面 4.5 節,是 best-effort(失敗只記警告、
+# 不會讓整個建置或 appliance 壞掉)。
+. "$SCRIPT_DIR/lib/deb-closure.sh"
 
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
@@ -311,7 +316,12 @@ mkdir -p "$GONAS_ON_ISO/release-$ARCH" "$GONAS_ON_ISO/overlay"
 echo "==> embedding gonasd release tarball and appliance overlay"
 tar -xzf "$RELEASE_TARBALL" -C "$GONAS_ON_ISO/release-$ARCH" --strip-components=1
 cp "$SCRIPT_DIR/late-command.sh" "$GONAS_ON_ISO/late-command.sh"
-chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh"
+# 這裡設執行位元純粹是「如果 xorriso/Rock Ridge 真的保留得住,那就順便
+# 帶著」的防禦性做法——實際的安裝路徑完全不依賴它(late-command.sh 用
+# `sh` 呼叫、install.sh 用 `-f` 找 gonasd,見各自檔案的說明),第十九輪
+# 覆閱把 gonasd 也一起加進來,理由同上:多帶一層保險,少一個「萬一哪天
+# 又改回依賴執行位元」的隱患。
+chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh" "$GONAS_ON_ISO/release-$ARCH/gonasd" 2>/dev/null || true
 cp -a "$SCRIPT_DIR/overlay/." "$GONAS_ON_ISO/overlay/"
 cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 # late-command.sh 第十三輪覆閱之後會 `. `一份 lib/detect-arch.sh 來源
@@ -327,6 +337,78 @@ cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 # 關係一致。
 mkdir -p "$GONAS_ON_ISO/lib"
 cp -a "$SCRIPT_DIR/lib/." "$GONAS_ON_ISO/lib/"
+
+# --- 4.5 (模式一:離線 SSH)把 openssh-server 及其相依 .deb 打包進 ISO ---
+# netinst 光碟官方定義就只含「裝 base 系統的最小套件」,openssh-server
+# 這種東西不在裡面,正常安裝流程要連網去鏡像站抓——但這個 appliance
+# 的設計是「安裝過程完全離線」(preseed.cfg 的 apt-setup/use_mirror
+# false)。矛盾的解法(使用者選的「模式一」):在「建置 ISO 的這台機器
+# 上(本來就需要網路去抓 netinst ISO)」順便把 openssh-server 以及它
+# 需要的所有相依套件的 .deb 抓下來、放進 ISO 的 gonas/debs/,之後
+# late-command.sh 在目標系統裡直接 `dpkg -i` 這些本地檔案,安裝當下
+# 完全不需要網路。
+#
+# 整段是 best-effort:抓不到套件索引、或某個 .deb 下載失敗,都只印警告
+# 繼續,不讓整個 ISO 建置失敗——SSH 是選用便利功能,不是 appliance
+# 的核心(核心是 gonasd 本體 + Web 介面 + tty 主控台,那些完全不依賴
+# 這一步)。設定 GONAS_SKIP_OFFLINE_PACKAGES=1 可以整段跳過。
+if [ -n "${GONAS_SKIP_OFFLINE_PACKAGES:-}" ]; then
+    echo "==> GONAS_SKIP_OFFLINE_PACKAGES set — skipping offline package bundling (SSH will NOT be preinstalled)"
+else
+    # 套件鏡像跟前面抓 netinst ISO 的 cdimage.debian.org 是兩個不同的
+    # 東西:cdimage 放的是「光碟映像」,套件本身在一般的 apt 鏡像
+    # (deb.debian.org/debian)。suite 用 `stable`——deb.debian.org 上
+    # `dists/stable` 永遠指向目前的穩定版,跟前面 `debian-cd/current/`
+    # 抓到的 netinst 是同一個穩定版,兩者版本一致(穩定版內只有 ABI
+    # 相容的安全性更新,不會動到 openssh-server 相依的 base 函式庫的
+    # 主版本,所以就算鏡像上的 openssh-server 比 ISO 的 base 稍新也裝
+    # 得起來)。都可以用環境變數覆寫。
+    DEB_MIRROR="${GONAS_DEBIAN_PKG_MIRROR:-https://deb.debian.org/debian}"
+    DEB_SUITE="${GONAS_DEBIAN_SUITE:-stable}"
+    # 預設打包 openssh-server(遠端管理)跟 sudo(gonasadmin 被加進
+    # sudo 群組,但 sudo 這個指令本身也不在 netinst 光碟裡,一樣要
+    # 離線打包才能用)。可用環境變數覆寫成別的清單。
+    SEED_PACKAGES="${GONAS_APPLIANCE_SEED_PACKAGES:-openssh-server sudo}"
+    DEBS_DIR="$GONAS_ON_ISO/debs"
+    PKG_INDEX_URL="$DEB_MIRROR/dists/$DEB_SUITE/main/binary-$DEBIAN_ARCH_DIR/Packages.gz"
+
+    echo "==> (offline SSH) fetching package index $PKG_INDEX_URL"
+    if wget -q -O "$WORK_DIR/Packages.gz" "$PKG_INDEX_URL" 2>/dev/null && \
+       gzip -dc "$WORK_DIR/Packages.gz" > "$WORK_DIR/Packages" 2>/dev/null; then
+        # gzip -dc 在 GNU 跟 macOS(BSD)底下都存在、行為一致,不需要
+        # 額外的相容性包裝(不像 xz 在 stock macOS 上沒有)。
+        mkdir -p "$DEBS_DIR"
+        CLOSURE_LIST="$WORK_DIR/deb-closure.list"
+        echo "==> (offline SSH) computing dependency closure for: $SEED_PACKAGES"
+        # 排除 required/important——debootstrap 建的 base 一定已經有這兩個
+        # 優先級的所有套件,不需要我們再打包一份,見 lib/deb-closure.sh。
+        # shellcheck disable=SC2086
+        gonas_deb_closure "$WORK_DIR/Packages" "required,important" $SEED_PACKAGES > "$CLOSURE_LIST" 2>"$WORK_DIR/deb-closure.err" || true
+        if [ -s "$WORK_DIR/deb-closure.err" ]; then
+            sed 's/^/    /' "$WORK_DIR/deb-closure.err" >&2
+        fi
+        _deb_ok=0
+        _deb_fail=0
+        while IFS= read -r _relpath; do
+            [ -n "$_relpath" ] || continue
+            _out="$DEBS_DIR/$(basename "$_relpath")"
+            if wget -q -O "$_out" "$DEB_MIRROR/$_relpath" 2>/dev/null; then
+                _deb_ok=$((_deb_ok + 1))
+            else
+                echo "    WARNING: failed to download $DEB_MIRROR/$_relpath — SSH may be incomplete" >&2
+                rm -f "$_out"
+                _deb_fail=$((_deb_fail + 1))
+            fi
+        done < "$CLOSURE_LIST"
+        echo "==> (offline SSH) bundled $_deb_ok package(s) into $DEBS_DIR ($_deb_fail failed)"
+        if [ "$_deb_ok" = "0" ]; then
+            echo "    WARNING: no packages were bundled — the installed system will NOT have a preinstalled SSH server" >&2
+            rmdir "$DEBS_DIR" 2>/dev/null || true
+        fi
+    else
+        echo "    WARNING: could not fetch/decompress the package index from $PKG_INDEX_URL — skipping offline package bundling; SSH will NOT be preinstalled. (set GONAS_DEBIAN_PKG_MIRROR to a reachable mirror, or GONAS_SKIP_OFFLINE_PACKAGES=1 to silence this)" >&2
+    fi
+fi
 
 # --- 5. 修改開機選單:自動套用 preseed、品牌化標題 ---------------------
 # 不同 Debian 版本的 isolinux/grub 選單檔案結構偶爾會變(例如選單項目
