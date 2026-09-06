@@ -189,6 +189,12 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
    gonas-console.service` 跟 `journalctl -u gonas-console` 找原因。
 3. **瀏覽器能不能連到 Web 介面** —— 在 host 機器(或另一台虛擬機)
    瀏覽器打開 tty1 顯示的網址,應該會看到 GoNAS 的首次設定畫面。
+   建議額外測一次「開機當下沒有網路」的情境(QEMU 的話開機時先不接
+   `-netdev`,或實體機先不插網路線):tty1 應該要**立刻**顯示畫面
+   (內容是「尚未偵測到網路連線」),而不是空白畫面等半天——如果是
+   黑畫面卡住不動,代表 `gonas-console.service` 的開機排序又不小心
+   被某個網路相關的 target 卡住了(這正是這一輪覆閱修掉的問題,見
+   `docs/REAL_HARDWARE_TESTING.md` Phase 19 段落的「第四輪覆閱」)。
 4. **`gonasd` 是不是真的用 systemd 常駐、而且開機自動啟動有沒有生效**
    —— tty2 登入後 `systemctl status gonas`(unit 名稱是 `gonas`,不是
    `gonasd`),應該是 `active (running)`;另外務必額外確認
