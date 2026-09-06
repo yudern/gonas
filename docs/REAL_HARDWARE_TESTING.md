@@ -1266,6 +1266,49 @@ verify-gpg-signature.sh`、`test-gpg-verify.sh` 跟文件),`gofmt`/
 `go vet`/`go build ./...`/三支 `test-*.sh`(`test-gpg-verify.sh` 現在
 是 6 個案例)全數維持全綠。
 
+**第十六輪(使用者再次要求「繼續查」):這一輪換了好幾個完全不同的
+角度重新檢查,誠實地說——沒有找到新的問題**。檢查過的方向包括:
+
+- `install.sh` 最後一行在 in-target chroot 裡也會執行的
+  `gonasd -check-deps`,會不會因為 chroot 環境沒有真正在跑的 systemd
+  而卡住或行為異常——回頭讀 `internal/doctor/doctor.go` 的
+  `Run()` 確認它只用 `exec.LookPath` 找指令在不在 `$PATH` 上,完全
+  不會真的執行任何外部指令(包括 `systemctl`),沒有卡住的風險,這是
+  一開始懷疑、後來讀程式碼排除掉的假警報。
+- `internal/selfupdate.Checker` 的背景自動檢查更新 goroutine 是否會在
+  appliance 這種「刻意保持離線」的安裝路徑上,違背原則地自動發出網路
+  請求——讀 `internal/api/router.go`(`s.updateChecker.Start(...)`
+  那段)跟 `internal/selfupdate/selfupdate.go` 的 `Checker.Start`
+  確認:背景 goroutine 一律啟動沒錯,但每次檢查前都會先讀
+  `state.Update.ManifestURL`,空字串(全新安裝、使用者從未在 Web UI
+  設定過更新來源的預設狀態)時直接 return,不會真的發任何 HTTP
+  請求——程式碼行為跟旁邊註解講的完全一致,不是又一次「註解講一回事
+  、程式碼做另一回事」。
+- `gonas.service` 的 `After=network-online.target`
+  `Wants=network-online.target`,在一台沒裝 `systemd-networkd`/
+  `NetworkManager` 的最小化 Debian 安裝上,`network-online.target`
+  可能沒有任何東西真正提供「等到網路就緒」的保證——重新確認過這
+  不影響 gonasd 本身能不能正常監聽(監聽 `0.0.0.0` 不需要網路介面已經
+  設好位址),而且 `gonas-console.service` 本身已經妥善處理「還沒有
+  網路位址」的顯示情境(第四輪覆閱修的),所以就算這個 target 的
+  「等待」語意不完整,也不影響功能,只是排序上的保證比看起來的弱,
+  不是新問題。
+- `/etc/os-release`/`/etc/hosts` 的 sed 替換規則、`gonas-console` 的
+  `ip -4 -o addr` 輸出解析管線、`Makefile` 的 `VERSION` 在 `release`
+  跟 `iso-*` 兩個 target 之間是否可能不一致、`.gitignore` 有沒有
+  意外擋掉新加的 `lib/*.sh` 檔案、CI 的 `find build -name '*.sh'` 有沒有
+  涵蓋到所有新檔案——逐一檢查過,都沒有問題。
+
+沒有做任何程式碼變更,`go test ./... -race -count=1` 額外完整跑過一次
+確認全綠(這是這一輪唯一新做的驗證動作,前面幾輪都只跑到
+`gofmt`/`go vet`/`go build`,沒有跑完整測試套件)。老實說明:這一輪
+純粹是排除法,確認幾個「看起來可疑」的地方讀完程式碼之後其實都沒事,
+不代表已經找完所有問題,只代表用目前這些角度暫時想不到新的——這個
+沙盒能做的靜態審查,邊際報酬已經很低,再往下大概率是在同一批邏輯裡
+反覆確認,真正還沒被驗證過的東西(執行位元保留、真正的官方 GPG 簽章
+驗證、preseed 在真正 debian-installer 環境裡的行為),都需要使用者
+實際跑一次建置 + 安裝才會有答案。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
