@@ -96,6 +96,43 @@ else
     echo "PASS: exit 0 without 'Good signature' -> correctly treated as not verified (exit code alone is not trusted)"
 fi
 
+# --- 案例 3.5: 確認函式真的把呼叫 gpg 時的語系釘死成 C -------------------
+# 第十五輪覆閱抓到的問題:gpg 的 `Good signature` 訊息會被 gettext 翻譯,
+# 如果建置這支腳本的人自己的機器語系不是英文(而且裝了對應的 gnupg
+# 翻譯包),真正的 gpg 印出來的會是翻譯過的字串,上面 grep 永遠不會
+# 命中,即使簽章完全正確也會被判定為「驗證失敗」。這個開發沙盒只裝了
+# C/C.utf8/POSIX 這幾種語系,沒辦法直接裝一個有翻譯包的語系重現這個
+# 症狀本身,但可以驗證修法本身有沒有生效:用一個會檢查自己收到的
+# LC_ALL/LANGUAGE 是不是 "C" 的假 gpg,如果不是就故意印出一句「假裝
+# 被翻譯過」的訊息(不含 "Good signature" 這幾個字)、如果是才印出真正
+# 的 "Good signature"——呼叫這支測試案例之前,刻意先把外層(測試腳本
+# 執行時的)LC_ALL/LANGUAGE 設成一個不是 "C" 的假值,確保如果
+# gonas_verify_gpg_signature 沒有主動覆寫成 C,這個假 gpg 收到的就會是
+# 那個假值,測試就會抓到。
+cat > "$FAKE_BIN_DIR/gpg" <<'EOF'
+#!/bin/sh
+if [ "$LC_ALL" = "C" ] && [ "$LANGUAGE" = "C" ]; then
+    echo "gpg: Good signature from \"Debian Archive Automatic Signing Key\"" >&2
+else
+    # 模擬「語系被翻譯過,訊息不是英文」的情況——用一個明顯不是
+    # "Good signature" 的字串代表被翻譯過的訊息,不需要真的裝一份
+    # gnupg 的翻譯包來重現(這裡的重點是驗證呼叫端有沒有正確覆寫語系
+    # 環境變數,不是驗證 gettext 翻譯機制本身)。
+    echo "gpg: [SIMULATED NON-ENGLISH LOCALE] LC_ALL=${LC_ALL:-unset} LANGUAGE=${LANGUAGE:-unset} — Signatur korrekt von ..." >&2
+fi
+exit 0
+EOF
+chmod +x "$FAKE_BIN_DIR/gpg"
+LOG3B="$TEST_WORK_DIR/case3b.log"
+PATH="$FAKE_BIN_DIR:$PATH"
+if LC_ALL=xx_XX.UTF-8 LANGUAGE=xx_XX gonas_verify_gpg_signature "$SIG_FILE" "$DATA_FILE" "$KEYRING_FILE" "$LOG3B"; then
+    echo "PASS: gonas_verify_gpg_signature forces LC_ALL/LANGUAGE=C for the gpg call, regardless of the caller's own locale"
+else
+    echo "FAIL: gonas_verify_gpg_signature did not force an English locale for gpg — a non-English build machine would treat every valid signature as invalid, log:" >&2
+    sed 's/^/    | /' "$LOG3B" >&2
+    FAIL=1
+fi
+
 # --- 案例 4(可選,需要真的裝 gpg): 用一把當場產生的真測試金鑰,走
 # 一次真正的簽章/驗證,不是只用假的 gpg 執行檔模擬控制流程 -----------
 # 這是第十輪覆閱時額外補上的:前面 3 個案例只驗證「假設 gpg 這樣

@@ -34,7 +34,27 @@ gonas_verify_gpg_signature() {
     # "Good signature" 這個字串,兩個條件都成立才算數。`--verify` 的
     # 輸出預設是寫到 stderr,這裡用 2>&1 把 stdout/stderr 都導進同一份
     # log 檔,方便呼叫端事後檢查完整內容。
-    if gpg --no-default-keyring --keyring "$_vgs_keyring" --verify "$_vgs_sig" "$_vgs_data" >"$_vgs_log" 2>&1; then
+    #
+    # 第十五輪覆閱抓到的問題:`gpg` 的 `--verify` 訊息是會被
+    # gettext/語系翻譯的——`gpg: Good signature from ...` 這句話只有在
+    # 英文(或沒有對應翻譯包的)語系底下才會真的是這幾個字,如果建置
+    # 這支腳本的人的機器語系是德文/法文/日文/中文之類且裝了對應的
+    # gnupg 翻譯包,gpg 印出來的會是翻譯過的字串(例如德文是
+    # "Korrekte Signatur von ..."),上面這行 `grep -q "Good signature"`
+    # 就永遠不會命中——結果是:即使簽章跟金鑰完全正確,這個函式也會
+    # 一律回報「驗證失敗」,而 build-iso.sh 把 GPG 驗證失敗當成硬性
+    # 中止條件,對一個特地設定 GONAS_DEBIAN_KEYRING、想多做這一層驗證
+    # 的使用者來說,會是一個完全摸不著頭緒、看起來像金鑰或簽章本身有
+    # 問題、但其實只是機器語系不是英文的假錯誤。這個開發沙盒只裝了
+    # C/C.utf8/POSIX 這幾種語系,沒辦法直接裝一個有翻譯包的語系實際
+    # 重現(所以沒辦法像 GPG 驗證邏輯本身那樣「真的用一把金鑰整個跑一次
+    # 觀察到症狀」),但 gnupg 的訊息會被 gettext 翻譯這件事本身是
+    # GnuPG 行之有年、有文件可查的既有行為,不是憑空猜測。修法很直接:
+    # 呼叫 gpg 之前明確把 LC_ALL/LANGUAGE 都釘死成 C,強制它輸出英文
+    # 訊息,不管使用者機器本身的語系設定是什麼——這只影響這一次呼叫的
+    # 環境變數,不會動到呼叫端(build-iso.sh/test-gpg-verify.sh)或
+    # 使用者 shell 本身的語系設定。
+    if LC_ALL=C LANGUAGE=C gpg --no-default-keyring --keyring "$_vgs_keyring" --verify "$_vgs_sig" "$_vgs_data" >"$_vgs_log" 2>&1; then
         if grep -q "Good signature" "$_vgs_log"; then
             return 0
         fi

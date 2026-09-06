@@ -65,8 +65,11 @@ sh build/appliance/test-detect-arch.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
-passed`;第二支應該看到 5 個 `PASS`(其中第 4、5 個案例會用一把真的
-臨時 GPG 金鑰簽章/驗證,不是純粹的假 `gpg`)跟 `==> all gpg-verify
+passed`;第二支應該看到 6 個 `PASS`(其中一個案例驗證「呼叫 gpg 時有
+沒有強制用英文語系」——gpg 的驗證訊息會被翻譯,建置機器語系不是英文
+的話,沒有這個強制設定會讓每一次驗證都被誤判成失敗,見
+`lib/verify-gpg-signature.sh` 的說明;另外兩個案例會用一把真的臨時
+GPG 金鑰簽章/驗證,不是純粹的假 `gpg`)跟 `==> all gpg-verify
 test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
 `dpkg --print-architecture` 不可用而 fallback 到 `uname -m` 的對應表)
 應該看到 6 個 `PASS` 跟 `==> all detect-arch test cases passed`。
