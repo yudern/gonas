@@ -1,0 +1,127 @@
+#!/bin/sh
+# test-boot-menu-patch.sh 是 lib/patch-boot-menu.sh 的離線回歸測試。
+#
+# 這支腳本完全不需要網路、xorriso、qemu，也不需要任何一個真正的
+# Debian ISO——它只是拿幾份「仿照真實 Debian isolinux/grub.cfg 格式
+# 手寫出來」的假設定檔，餵給 build-iso.sh 實際會用到的同一份
+# gonas_patch_boot_menu_file() 函式(來源自 lib/patch-boot-menu.sh，
+# 不是複製貼上的另一份程式碼)，然後檢查結果是否符合預期。
+#
+# 這個測試存在的理由:build-iso.sh 裡原本的 grub "---" 注入邏輯，
+# 曾經連續兩輪(先假設 "---" 一定在行尾，後來改成「行尾前可以有空白」)
+# 都被人工覆閱誤判為「看起來沒問題」，直到真的寫了這種仿真測試資料
+# 去跑，才發現真實的 grub.cfg 常見格式是 `--- quiet`("---" 後面接著
+# 別的核心參數，不是行尾也不是只有空白)，兩輪的假設都是錯的。這是
+# build/appliance/ 目錄裡目前唯一一段真的有可執行測試證據支持的邏輯
+# ——把當時的手動測試過程整理成這支固定下來、可以重複執行的腳本，
+# 之後不管是改 lib/patch-boot-menu.sh 還是換了 Debian 版本格式，都能
+# 立刻重新驗證，不必再手動重新寫一次測試資料。
+#
+# 用法(在有 /bin/sh、sed、grep 的任何機器/CI 上都能跑，不需要網路):
+#   sh build/appliance/test-boot-menu-patch.sh
+#
+# 執行成功會印出每個案例的 PASS，並以 exit code 0 結束；任何一個案例
+# 沒有命中預期結果，會印出 FAIL 訊息並以非 0 結束。
+#
+# 注意:這支腳本只驗證「開機選單參數注入」這一小段邏輯本身，*不*
+# 涵蓋 build-iso.sh 其餘部分(下載/解開/xorriso 重新包裝真正的 ISO)
+# ——那些部分需要網路跟外部工具，在這個開發沙盒裡完全沒有辦法執行，
+# 詳見 build-iso.sh 檔案開頭與 README.md 的說明。
+
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/patch-boot-menu.sh"
+
+TEST_WORK_DIR="$(mktemp -d /tmp/gonas-boot-menu-test.XXXXXX)"
+trap 'rm -rf "$TEST_WORK_DIR"' EXIT
+
+APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+APPEND_MARKER="gonas/preseed.cfg"
+
+FAIL=0
+
+# 檢查一個檔案是否包含 APPEND_MARKER，並回報 PASS/FAIL。
+assert_injected() {
+    _case_name="$1"
+    _file="$2"
+    if grep -q "$APPEND_MARKER" "$_file" 2>/dev/null; then
+        echo "PASS: $_case_name"
+    else
+        echo "FAIL: $_case_name — expected to find '$APPEND_MARKER' in patched output, but did not. Actual content:" >&2
+        sed 's/^/    | /' "$_file" >&2
+        FAIL=1
+    fi
+}
+
+# --- 案例 1: isolinux 的 "append ..." 一行式參數列 ---------------------
+CASE1="$TEST_WORK_DIR/case1-isolinux-append.cfg"
+cat > "$CASE1" <<'EOF'
+label install
+	menu label ^Install
+	kernel /install.amd/vmlinuz
+	append vga=788 initrd=/install.amd/initrd.gz --- quiet
+EOF
+gonas_patch_boot_menu_file "$CASE1" "$APPEND_EXTRA"
+assert_injected "isolinux append line" "$CASE1"
+
+# --- 案例 2: grub.cfg，"---" 後面接著其他核心參數(最常見的真實格式) ---
+CASE2="$TEST_WORK_DIR/case2-grub-dashes-then-params.cfg"
+cat > "$CASE2" <<'EOF'
+menuentry "Install" {
+	set background_color=black
+	linux	/install.amd/vmlinuz vga=788 --- quiet
+	initrd	/install.amd/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE2" "$APPEND_EXTRA"
+assert_injected "grub '--- quiet' (params after triple-dash)" "$CASE2"
+
+# --- 案例 3: grub.cfg，"---" 後面只有空白(行尾前留白，之前誤判為安全的情境) ---
+CASE3="$TEST_WORK_DIR/case3-grub-dashes-trailing-space.cfg"
+cat > "$CASE3" <<'EOF'
+menuentry "Install" {
+	linux	/install.amd/vmlinuz vga=788 ---
+	initrd	/install.amd/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE3" "$APPEND_EXTRA"
+assert_injected "grub '---' with only trailing whitespace" "$CASE3"
+
+# --- 案例 4: grub.cfg，"---" 是這一行最後的東西，什麼都不接(模擬 arm64/EFI 常見格式) ---
+CASE4="$TEST_WORK_DIR/case4-grub-bare-dashes.cfg"
+cat > "$CASE4" <<'EOF'
+menuentry "Install" {
+	linux	/install.amd/vmlinuz vga=788 ---
+	initrd	/install.amd/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE4" "$APPEND_EXTRA"
+assert_injected "grub bare '---' with nothing after it" "$CASE4"
+
+# --- 案例 5: 品牌化字樣有沒有真的被換掉(不影響安裝行為,但至少確認邏輯有跑) ---
+CASE5="$TEST_WORK_DIR/case5-branding.cfg"
+cat > "$CASE5" <<'EOF'
+menu title Debian GNU/Linux installer
+label install
+	menu label ^Install Debian
+	kernel /install.amd/vmlinuz
+	append vga=788 ---
+EOF
+gonas_patch_boot_menu_file "$CASE5" "$APPEND_EXTRA"
+if grep -q 'GoNAS Installer' "$CASE5" && grep -q 'Install GoNAS' "$CASE5" && ! grep -q 'Debian GNU/Linux installer' "$CASE5"; then
+    echo "PASS: branding text replaced"
+else
+    echo "FAIL: branding text was not replaced as expected. Actual content:" >&2
+    sed 's/^/    | /' "$CASE5" >&2
+    FAIL=1
+fi
+
+echo
+if [ "$FAIL" = "0" ]; then
+    echo "==> all boot-menu-patch test cases passed"
+    exit 0
+else
+    echo "==> one or more boot-menu-patch test cases FAILED — see above" >&2
+    exit 1
+fi

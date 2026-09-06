@@ -46,6 +46,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORK_DIR="$(mktemp -d /tmp/gonas-iso-build.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
+# 「幫一份 isolinux/grub 開機選單設定檔插入 preseed 自動安裝參數」這段
+# 邏輯獨立成 lib/patch-boot-menu.sh,理由是這是整個 build/appliance/
+# 目錄裡少數幾段完全不需要真的連網、可以在沙盒/CI 環境裡直接拿假資料
+# 驗證的邏輯——來源(source)進來而不是複製貼上一份,這樣這支正式建置
+# 腳本跟 test-boot-menu-patch.sh(離線回歸測試)才會共用同一份邏輯，
+# 不會出現「測試跑的是一份可能跟正式邏輯不同步的複製品」這種情況。
+. "$SCRIPT_DIR/lib/patch-boot-menu.sh"
+
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
 
@@ -183,24 +191,65 @@ echo "==> patching boot menu configs to auto-load the GoNAS preseed"
 # 会跳出來要人工回答,不算「完全零互動」,但對一份還沒有實機驗證過
 # 的 preseed 來說，這是刻意要接受的取捨。
 APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# 拿來事後驗證「真的注入成功了嗎」的一小段獨特字串——不會跟 ISO 裡
+# 其他既有內容重複，之後可以直接 grep 這個字串確認注入是否生效。
+APPEND_MARKER="gonas/preseed.cfg"
 
-find "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" -type f \( -name '*.cfg' -o -name 'txt.cfg' \) 2>/dev/null | while read -r cfgfile; do
-    # isolinux 語法用 "append ..." 這一行帶核心參數；grub.cfg 用
-    # "linux ... ---" 這種格式，"---" 之後才是要交給核心的額外參數。
-    if grep -q '^[[:space:]]*append ' "$cfgfile" 2>/dev/null; then
-        sed -i "s#^\([[:space:]]*append .*\)\$#\\1 $APPEND_EXTRA#" "$cfgfile"
+# 原本這裡是 `find ... | while read ...; do ... done`——這是一個真的
+# 會咬人的 POSIX shell 陷阱:管線右邊的指令(這裡是 while 迴圈)在
+# dash/大多數 /bin/sh 底下是跑在一個子行程裡，迴圈裡面設定的變數
+# (例如底下要用來計數的 PATCHED_COUNT)離開迴圈之後就消失了，父行程
+# 完全看不到。改用 `find ... > 檔案` 再 `while read ... < 檔案` 的寫法
+# ——這個版本的 while 迴圈是在目前的 shell 裡執行、不是子行程，裡面
+# 設的變數在迴圈結束後還讀得到。
+CFG_LIST="$WORK_DIR/boot-menu-cfgs.list"
+find "$EXTRACT_DIR/isolinux" "$EXTRACT_DIR/boot/grub" -type f \( -name '*.cfg' -o -name 'txt.cfg' \) 2>/dev/null > "$CFG_LIST"
+CFG_COUNT="$(wc -l < "$CFG_LIST" | tr -d ' ')"
+echo "==> found $CFG_COUNT boot menu config file(s) to patch"
+if [ "$CFG_COUNT" = "0" ]; then
+    # 不管是 amd64 還是 arm64(EFI-only,理論上沒有 isolinux 目錄，但
+    # 應該還是有 boot/grub 底下的 .cfg),一份正常的 netinst ISO
+    # 不可能完全沒有任何 boot menu 設定檔——找不到任何一個，代表這個
+    # 版本的官方 ISO 目錄結構跟這支腳本原本假設的不一樣(例如 Debian
+    # 之後改版換了路徑),而不是「這個架構本來就沒有」。與其在這裡
+    # 沉默地跳過、產出一份「preseed 沒有真的被注入、開機後會整個掉回
+    # 手動安裝流程」卻毫無錯誤訊息的 ISO,不如直接中止,逼人回頭確認
+    # 這個架構實際的 ISO 目錄結構。
+    echo "error: no boot menu config files found under isolinux/ or boot/grub/ — the ISO's directory layout may not match what this script expects for $ARCH; refusing to produce a silently-broken (non-autoinstalling) ISO" >&2
+    exit 1
+fi
+
+while read -r cfgfile; do
+    # 實際的比對/插入邏輯在 lib/patch-boot-menu.sh 的
+    # gonas_patch_boot_menu_file() 裡——這裡不再重複貼一份。那裡的
+    # 註解記錄了為什麼 grub 的 "---" 不能假設是行尾(真的拿仿真 Debian
+    # grub.cfg 格式的測試資料跑過,行尾假設會漏掉 `--- quiet` 這種常見
+    # 格式,已修正),以及為什麼要獨立成函式庫檔案(讓
+    # test-boot-menu-patch.sh 能跟這支正式建置腳本共用同一份邏輯,不會
+    # 測試/正式兩份程式碼慢慢跑掉)。
+    gonas_patch_boot_menu_file "$cfgfile" "$APPEND_EXTRA"
+done < "$CFG_LIST"
+
+# 驗證注入真的生效了——上面兩條 sed 規則各自都可能因為某個 Debian
+# 版本的檔案格式跟預期不一樣而完全沒命中(例如 grub.cfg 的 "---" 前後
+# 格式又變了),沒命中的話 sed 不會報任何錯，就會產出一份「看起來
+# 建置成功、實際上開機後不會自動套用 preseed」的 ISO。與其只靠人在
+# QEMU 裡開機才發現，這裡直接在建置階段就檢查:找到的設定檔裡，
+# 至少要有一個真的包含剛剛注入的字串，不然就中止,不繼續往下包裝。
+# 逐行用 while 讀檔案清單(不是把 `$(cat ...)` 直接展開成命令列參數)
+# ,避免萬一檔名裡有空白/萬用字元被 shell 誤解析。
+INJECTED=0
+while read -r cfgfile; do
+    if grep -q "$APPEND_MARKER" "$cfgfile" 2>/dev/null; then
+        INJECTED=1
+        break
     fi
-    # 容忍 "---" 後面可能還有空白字元(不同 grub.cfg 產生器有時候會留下
-    # 尾端空白)——原本只用 \$ 錨定行尾,遇到這種情況會整條規則不命中、
-    # 靜默地什麼都不做(sed 對沒匹配到的規則不會報錯),等於 preseed
-    # 根本沒被套用卻毫無錯誤訊息，所以這裡改成容許尾端空白的版本。
-    if grep -q '	linux ' "$cfgfile" 2>/dev/null || grep -q '^[[:space:]]*linux ' "$cfgfile" 2>/dev/null; then
-        sed -i "s#\(---\)[[:space:]]*\$#$APPEND_EXTRA \\1#" "$cfgfile"
-    fi
-    # 選單標題品牌化——把看得到的 "Debian GNU/Linux installer" 字樣換成
-    # "GoNAS Installer"，純粹是顯示文字，不影響實際安裝行為。
-    sed -i 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian/Install GoNAS/g' "$cfgfile" || true
-done
+done < "$CFG_LIST"
+if [ "$INJECTED" != "1" ]; then
+    echo "error: failed to inject the GoNAS preseed boot parameter into any boot menu config file — the sed patterns in this script no longer match this Debian release's isolinux/grub.cfg format. The resulting ISO would silently fall back to a fully manual install with no error at boot time. Refusing to continue; inspect the files listed in $CFG_LIST by hand and update the sed patterns above." >&2
+    exit 1
+fi
+echo "==> confirmed the GoNAS preseed boot parameter was injected successfully"
 
 # 縮短選單等待時間——這是「安裝媒體」的開機選單(裝完系統之後的
 # GRUB 選單品牌化/等待時間是 late-command.sh 在目標系統裡處理的，

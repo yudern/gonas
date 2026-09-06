@@ -104,6 +104,20 @@ build/appliance/build-iso.sh arm64 1.2.3
 下載幾百 MB;`dist/` 整個目錄已經在 `.gitignore` 裡,快取不會被誤
 commit 進版本控制。
 
+**在跑真正的建置之前,建議先跑一次快速、完全不需要網路的離線檢查**:
+
+```
+sh build/appliance/test-boot-menu-patch.sh
+```
+
+這只驗證「開機選單參數注入」這一小段邏輯本身(用假的 isolinux/grub
+設定檔測試,幾秒鐘跑完),不會碰到網路、xorriso、真正的 Debian
+ISO——不能取代下面「如何驗證」一節真正的 QEMU/VirtualBox 端到端
+測試,但可以在完整建置(需要下載幾百 MB 的官方 ISO、跑 xorriso)之前,
+先確認這段最容易因為 Debian 版本格式變動而壞掉的邏輯還是好的,尤其是
+改過 `build/appliance/lib/patch-boot-menu.sh` 之後,或者換了
+`GONAS_DEBIAN_RELEASE` 想升級到不同的 Debian 版本之後。
+
 整個流程做的事(細節見 `build-iso.sh` 裡逐段的中文註解):
 
 1. 確認/建置 `dist/release/gonas-<version>-linux-<arch>.tar.gz`(沒有
@@ -264,8 +278,22 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   真的會正確跳出「密碼已過期,請設定新密碼」的提示,而不是連線失敗)。
   如果你的使用情境更看重免密碼、直接用 SSH 公鑰登入,還是建議自己
   另外佈署公鑰、關閉密碼登入。
-- 到目前為止,唯一在這個開發沙盒裡真正執行驗證過的部分,只有
+- 到目前為止,在這個開發沙盒裡真正執行驗證過的部分有兩塊:
   `overlay/usr/local/sbin/gonas-console` 這支 shell script 本身的
   邏輯(見上面「這個目錄裡的東西在目前這個開發沙盒裡完全沒有執行
-  過」一節)。ISO 建置、preseed 自動安裝、late-command 品牌化,全部
-  等待使用者在有網路的機器上建置、並在虛擬機裡開機測試後才算數。
+  過」一節);以及開機選單參數注入的邏輯,已經獨立成
+  `lib/patch-boot-menu.sh`,並且有一支固定下來、可重複執行的離線
+  回歸測試 `test-boot-menu-patch.sh`(不需要網路,任何有 `/bin/sh`
+  的機器都能跑:`sh build/appliance/test-boot-menu-patch.sh`)。這支
+  測試本身在建置這幾份腳本的過程中就抓到兩個真的存在、光靠人工覆閱
+  兩輪都沒發現的 bug:(1)grub.cfg 的 `---` 分隔字元後面常常還接著
+  `quiet` 這類參數,不是行尾,原本假設行尾的注入規則會完全沒命中;
+  (2)拿來判斷「這一行是不是 grub 的 linux 開機參數列」的 grep guard
+  原本寫成比對字面空白鍵,但真實的 grub.cfg 是用 tab 字元分隔
+  `linux` 跟核心路徑的,guard 判斷為「不是」,底下真正做注入的 sed
+  就整段被跳過,結果是開機參數完全沒被修改卻沒有任何錯誤訊息——這
+  兩個都已經修好,而且用 5 種仿真格式的測試資料驗證過,見
+  `test-boot-menu-patch.sh` 檔案開頭的完整說明跟 `docs/
+  REAL_HARDWARE_TESTING.md` 的「第六輪覆閱」段落。除了這兩塊,ISO
+  建置、preseed 自動安裝、late-command 品牌化的其餘部分,全部等待
+  使用者在有網路的機器上建置、並在虛擬機裡開機測試後才算數。
