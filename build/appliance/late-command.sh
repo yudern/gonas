@@ -14,6 +14,8 @@
 #      提示，這是使用者選的「開機後精簡狀態畫面」路線。
 #   3. 品牌化：主機名稱、/etc/motd、/etc/issue、/etc/os-release 的
 #      PRETTY_NAME、GRUB 開機選單標題。
+#   4. 強制 gonasadmin 這組緊急備援帳號的預設密碼在第一次登入時就要
+#      被換掉，而不是只在文件裡提醒使用者自己記得改。
 #
 # 重要：這支腳本目前完全沒有在真正的 Debian 安裝程式環境裡執行過
 # （這個開發沙盒的網路白名單擋掉了 deb.debian.org，連 apt-get update
@@ -181,6 +183,28 @@ if [ -f /etc/default/grub ]; then
     fi
     update-grub 2>/dev/null || grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || \
         log "WARNING: could not regenerate grub.cfg automatically; verify manually on first boot"
+fi
+
+# --- 4. 強制第一次登入就要換掉 gonasadmin 的預設密碼 -----------------
+# preseed.cfg 裡 `gonasadmin` 帳號的密碼是寫死的明文佔位密碼
+# (`gonas-change-me-now`),原本只在文件裡提醒「正式使用前務必自己
+# 改掉」,但機器一開機、只要接上網路,這組密碼透過 SSH 就是立刻
+# 可以被嘗試的——「文件提醒」跟「技術上強制」是兩回事,重新覆閱時
+# 覺得這裡值得做得更確實一點,而且做法完全沒有副作用:用
+# `chage -d 0` 把這個帳號的密碼「上次變更日期」設成第 0 天,這是
+# shadow/passwd 工具鏈的標準做法(等同 `passwd --expire`),效果是
+# 系統會判定這組密碼已經過期,下一次不管是透過 SSH 還是 tty2 主控台
+# 登入,都會先被要求立刻設一組新密碼才能拿到 shell——不會擋掉正常的
+# 第一次登入,只是把「换掉预设密码」從一個使用者可能忘記做的提醒,
+# 變成一個做不到就進不去 shell 的強制步驟。
+if command -v chage >/dev/null 2>&1; then
+    if chage -d 0 gonasadmin 2>/dev/null; then
+        log "gonasadmin password marked as expired — first login will require setting a new password"
+    else
+        log "WARNING: 'chage -d 0 gonasadmin' failed — the default placeholder password will NOT be forced to change on first login, change it manually as soon as possible"
+    fi
+else
+    log "WARNING: 'chage' not available — could not force a password change on first login for gonasadmin"
 fi
 
 log "GoNAS appliance branding complete."

@@ -256,8 +256,14 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
 - `gonasadmin` 這組 Unix 帳號的預設密碼寫死在 `preseed.cfg` 裡
   (`gonas-change-me-now`),純粹是給「緊急 SSH/主控台除錯」用的
   備援管道,跟 GoNAS 自己的 Web 介面帳號系統完全無關(見
-  `internal/state.AdminAccount`)——正式使用前務必自行修改這組密碼,
-  或考慮改成佈署 SSH 公鑰、關閉密碼登入。
+  `internal/state.AdminAccount`)。`late-command.sh` 會用
+  `chage -d 0 gonasadmin` 把這組密碼標記成已過期,第一次登入(不管是
+  SSH 還是 tty2)都會被強制要求先設一組新密碼才能拿到 shell——這一步
+  是重新覆閱時額外補上的,不是只在文件裡提醒使用者自己記得改,但這個
+  強制機制本身也還沒有實際驗證過(需要確認 SSH 客戶端在互動式連線下
+  真的會正確跳出「密碼已過期,請設定新密碼」的提示,而不是連線失敗)。
+  如果你的使用情境更看重免密碼、直接用 SSH 公鑰登入,還是建議自己
+  另外佈署公鑰、關閉密碼登入。
 - 到目前為止,唯一在這個開發沙盒裡真正執行驗證過的部分,只有
   `overlay/usr/local/sbin/gonas-console` 這支 shell script 本身的
   邏輯(見上面「這個目錄裡的東西在目前這個開發沙盒裡完全沒有執行
