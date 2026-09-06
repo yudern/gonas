@@ -941,6 +941,39 @@ shell 腳本跟函式庫檔案),`gofmt`/`go vet`/`go build ./...`/
 `gofmt`/`go vet`/`go build ./...` 重新確認過一次,結果跟這個 Phase
 之前完全一樣、全數維持全綠。
 
+**第九輪覆閱額外發現、已修正的項目**——這一輪是先把整個 Phase 19 的
+「還沒驗證清單」重新列一次(交給使用者看有沒有遺漏),過程中重新逐行
+檢查每一個變數的來源,抓到一個一直存在、之前八輪都沒特別注意到的
+命名不一致:
+
+- [ ] **`late-command.sh` 判斷架構的 fallback 算出來的值,格式跟其他
+      地方用的完全不一樣**:`ARCH="$(dpkg --print-architecture
+      2>/dev/null || uname -m)"` 這一行,主要路徑(`dpkg
+      --print-architecture` 成功)算出來的是 Debian 慣用的架構名稱
+      ("amd64"/"arm64"),跟 `build-iso.sh` 建立的目錄名稱
+      ("release-amd64"/"release-arm64")完全對得起來;但如果 `dpkg`
+      這個指令因為某種原因不可用,fallback 用的 `uname -m` 回傳的是
+      核心/硬體慣用的名稱("x86_64"/"aarch64")——實際在這個開發沙盒
+      機器上執行 `uname -m` 得到的就是 "x86_64",親自驗證過。一旦這個
+      fallback 真的被觸發,算出來的 `$ARCH` 會讓
+      `$RELEASE_DIR="$GONAS_DIR/release-$ARCH"` 指向一個不存在的目錄
+      (例如 `release-x86_64` 而不是 `release-amd64`),導致
+      `late-command.sh` 判定「找不到 install.sh,這個 ISO 建置錯誤」
+      直接中止——但其實只是這一行本身的 fallback 寫錯,不是真的建置
+      有問題。在一個裝好的 Debian in-target chroot 裡,`dpkg` 幾乎不
+      可能不存在(它本身就是這個系統的一部分),所以這條路徑實際被
+      觸發的機率極低,但「幾乎不會發生」不代表寫錯也沒關係——已經
+      修成 fallback 分支額外把 `uname -m` 的輸出對應回 Debian 的架構
+      命名(`x86_64 -> amd64`、`aarch64`/`arm64 -> arm64`,其他值維持
+      原樣並印出警告),用假資料實際測過這個對應表產生的結果都正確。
+      同時把 `log()` 函式的定義往前移到這段邏輯之前,因為 fallback
+      分支需要能在這裡就印警告,原本 `log()` 是定義在 `$ARCH` 這行
+      之後,順序反過來會沒辦法用。
+
+沒有修改任何 `.go` 檔案(只改了 `late-command.sh` 一個變數的計算
+方式),`gofmt`/`go vet`/`go build ./...`/`test-boot-menu-patch.sh`
+重新確認過一次,結果跟這個 Phase 之前完全一樣、全數維持全綠。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

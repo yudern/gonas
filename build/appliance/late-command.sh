@@ -32,9 +32,34 @@ set -e
 # 用環境變數讓 preseed late_command 那一行可以覆寫，不用寫死。
 INSTALL_MEDIA="${GONAS_INSTALL_MEDIA:-/cdrom}"
 GONAS_DIR="$INSTALL_MEDIA/gonas"
-ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 
 log() { echo "[gonas-late-command] $*"; }
+
+# 這裡原本寫成 `dpkg --print-architecture 2>/dev/null || uname -m`——
+# 第九輪覆閱時發現這個 fallback 本身的值格式是錯的:`dpkg
+# --print-architecture` 回傳的是 Debian 的架構名稱("amd64"/"arm64"),
+# 跟 build-iso.sh 建立的目錄名稱("release-amd64"/"release-arm64")
+# 一致;但 `uname -m` 回傳的是核心/硬體慣用的名稱("x86_64"/"aarch64"),
+# 直接在這台沙盒機器上執行 `uname -m` 得到的就是 "x86_64",不是
+# "amd64"——如果哪天 `dpkg` 真的因為某種原因不可用(在一個裝好的
+# Debian in-target chroot 裡理論上不該發生,dpkg 本身就是這個系統的
+# 一部分,幾乎不可能缺席,但這不代表 fallback 寫錯也沒關係),這個
+# fallback 會算出一個跟 `$RELEASE_DIR="$GONAS_DIR/release-$ARCH"`
+# 對不起來的路徑,導致下面「找不到 install.sh」直接判定 ISO 建置錯誤
+# 並中止——實際上只是這一行本身的 fallback 寫錯,不是真的建置錯誤。
+# 修法:fallback 分支額外把 `uname -m` 的輸出對應回 Debian 的架構
+# 命名,對不上已知對應表的情況才直接使用原始值(至少不會是一個看起來
+# 對、其實是另一種命名慣例的假象)。
+ARCH="$(dpkg --print-architecture 2>/dev/null)"
+if [ -z "$ARCH" ]; then
+    UNAME_M="$(uname -m 2>/dev/null || echo unknown)"
+    case "$UNAME_M" in
+        x86_64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) ARCH="$UNAME_M" ;;
+    esac
+    log "WARNING: 'dpkg --print-architecture' unavailable, fell back to 'uname -m' ($UNAME_M -> $ARCH) — this should not happen inside a Debian in-target chroot; if you see this warning, please report it"
+fi
 
 log "install media: $INSTALL_MEDIA"
 log "target architecture: $ARCH"
