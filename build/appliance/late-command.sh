@@ -174,12 +174,23 @@ if [ -f /etc/default/grub ]; then
     # 小型辦公室 NAS 開機應該直接進系統，不需要每次開機都看到 GRUB
     # 選單，跟 Unraid/TrueNAS 的開機體驗一致。GRUB_TIMEOUT=0 加上
     # GRUB_TIMEOUT_STYLE=hidden 是標準組合，維持一個很短的按鍵視窗
-    # （硬體/韌體通常仍會給使用者一個機會用方向鍵中斷）。
-    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=3/' /etc/default/grub || echo 'GRUB_TIMEOUT=3' >> /etc/default/grub
+    # （硬體/韌體通常仍會給使用者一個機會用方向鍵中斷，例如 BIOS 機器
+    # 在開機當下按住 Shift、或 UEFI 機器按 Esc，是 GRUB 本身的行為，
+    # 這裡不用另外處理）。
+    #
+    # 這裡曾經是一個「上面的中文註解講的是一回事、底下實際設的值是
+    # 另一回事」的真 bug:第七輪覆閱之前寫的是 `GRUB_TIMEOUT=3` 加上
+    # `GRUB_TIMEOUT_STYLE=menu`——跟註解說要做到的「開機不用看到選單、
+    # 直接進系統」剛好相反,`menu` 樣式會讓完整的 GRUB 選單畫面在每次
+    # 開機時都顯示 3 秒,而不是隱藏、直接開機。這是靠回頭逐字重讀這段
+    # 註解跟緊接著的程式碼、發現兩者互相矛盾才抓到的,不是靠執行測試
+    # (這段是真正需要 GRUB/韌體環境才能觀察效果的邏輯,這個沙盒沒有
+    # 辦法執行驗證),所以修法直接照註解原本描述的設計意圖修正。
+    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub || echo 'GRUB_TIMEOUT=0' >> /etc/default/grub
     if grep -q '^GRUB_TIMEOUT_STYLE=' /etc/default/grub; then
-        sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub
+        sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
     else
-        echo 'GRUB_TIMEOUT_STYLE=menu' >> /etc/default/grub
+        echo 'GRUB_TIMEOUT_STYLE=hidden' >> /etc/default/grub
     fi
     update-grub 2>/dev/null || grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || \
         log "WARNING: could not regenerate grub.cfg automatically; verify manually on first boot"

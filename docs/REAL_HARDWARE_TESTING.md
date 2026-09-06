@@ -860,6 +860,60 @@ shell 腳本跟函式庫檔案),`gofmt`/`go vet`/`go build ./...`/
 `go test ./... -race -count=1` 重新確認過一次,結果跟這個 Phase 之前
 完全一樣、全數維持全綠。
 
+**第七輪覆閱額外發現、已修正的項目**——這一輪抓到的第一個問題,是
+逐字重讀 `late-command.sh` 裡一段程式碼跟緊接在它上面的中文註解,
+發現兩者互相矛盾:
+
+- [ ] **GRUB 開機選單的逾時設定,註解講的是一回事,程式碼設的是
+      另一回事**:`late-command.sh` 品牌化那一段的註解明確寫著
+      appliance 的目標是「開機不用等使用者按鍵、也不用刻意顯示選單,
+      直接進系統,跟 Unraid/TrueNAS 的開機體驗一致」,並說標準做法是
+      `GRUB_TIMEOUT=0` 加 `GRUB_TIMEOUT_STYLE=hidden`——但緊接著的
+      程式碼實際寫的是 `GRUB_TIMEOUT=3` 加
+      `GRUB_TIMEOUT_STYLE=menu`,兩者剛好相反:`menu` 樣式會讓完整的
+      GRUB 選單畫面在**每一次開機都顯示 3 秒**,不是隱藏起來直接開機。
+      這是從第一輪覆閱這段程式碼被寫出來那次就存在的 bug,前六輪
+      review 都只看了「這一步有沒有做該做的事」(有沒有改
+      GRUB_DISTRIBUTOR、有沒有處理 grub.cfg 不存在的情況),沒有人
+      逐字核對「註解說的目標」跟「程式碼實際設的值」是否一致,直到
+      這一輪才抓到。已經改成 `GRUB_TIMEOUT=0` 加
+      `GRUB_TIMEOUT_STYLE=hidden`,符合註解原本描述的設計意圖。這段
+      邏輯的實際效果需要真正的 GRUB/韌體環境才能觀察(這個沙盒沒有
+      辦法執行驗證),所以這一項在第一次 VM/真機測試時,務必額外確認
+      一下:開機應該直接跳過 GRUB 選單畫面(不是完全看不到任何東西,
+      是「幾乎沒有停留」,一般硬體上按住 Shift 鍵、或 UEFI 機器上按
+      Esc,仍然可以強制叫出選單)。
+- [ ] **`make clean` 會把 `build-iso.sh` 自己的下載快取一起清掉,
+      悄悄抵銷掉第三輪覆閱加的快取機制**:第三輪覆閱在
+      `dist/.cache/debian-iso/` 底下加了官方 Debian ISO 的本地快取,
+      理由是這份 ISO 有幾百 MB,反覆建置/除錯時每次都重新下載很不
+      友善。但 `Makefile` 原本的 `clean` target 是單純
+      `rm -rf $(DIST) devdata`——`$(DIST)` 就是 `dist`,包含
+      `dist/.cache/`,只要養成「`make clean` 之後再重新
+      build」的習慣(很常見的操作順序),快取的 ISO 就會被一起砍掉,
+      下次建置照樣要重新下載幾百 MB,快取形同虛設,而且完全不會有
+      任何提示告訴使用者「你剛剛把快取清掉了」。已經把 `clean`
+      改成用 `find $(DIST) -mindepth 1 -maxdepth 1 ! -name .cache -exec
+      rm -rf {} +`,只清掉 `dist/` 底下 `.cache` 以外的東西(release
+      輸出、編譯出來的執行檔),保留下載快取;另外新增一個獨立的
+      `clean-cache` target,真的想清掉下載快取(例如懷疑快取的 ISO
+      損毀了)可以明確執行 `make clean-cache`。這個修法本身有在這個
+      沙盒裡用假的 `dist/` 目錄結構實際執行測試過:確認過 `make
+      clean` 之後 `dist/.cache/debian-iso/` 底下的假檔案還在、其他
+      東西都被清掉,以及 `dist/` 目錄一開始不存在時 `make clean` 也
+      不會報錯,都是純 POSIX 工具(`find`/`rm`)的邏輯,不需要網路就能
+      驗證,不屬於本節開頭說的「完全沒辦法驗證」那一類。
+- [ ] **`preseed.cfg` 裡 `pkgsel/update-policy select none` 的說明
+      補充**:這不是這輪才發現的程式碼 bug,而是覆閱時發現文件用詞
+      可能讓人誤解——`build/appliance/README.md` 開頭說「底層仍然是
+      標準 Debian,能繼續吃到安全更新」,但 `preseed.cfg` 明確關掉了
+      `unattended-upgrades` 自動背景更新的安裝選項,兩句放在一起看,
+      容易誤以為這份映像檔開機後會自動裝好安全更新機制。已經在
+      `build/appliance/README.md` 的「已知的設計限制」補上一條說明:
+      「能吃到安全更新」指的是底層是標準 Debian、手動
+      `apt upgrade` 就拿得到,不是開機就自動背景更新——如果要自動化,
+      跟軟體版安裝路徑一樣,自己事後裝 `unattended-upgrades` 即可。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

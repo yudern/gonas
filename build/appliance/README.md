@@ -267,6 +267,16 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   金鑰,這支腳本不假設一定有;如果你的信任層級要求更高,建議自己
   另外對 `SHA256SUMS`/`SHA256SUMS.sign` 做一次 GPG 驗證,見
   https://www.debian.org/CD/verify 。
+- `preseed.cfg` 裡 `d-i pkgsel/update-policy select none` 關掉的是
+  「安裝過程順便設定 unattended-upgrades 自動背景更新」這個選項,不是
+  真的關掉更新能力——開機之後機器有網路,手動 `apt update && apt
+  upgrade` 一樣能拿到 Debian 的安全更新,只是預設不會自動背景執行,
+  跟上面「這不是取代既有安裝路徑」一節說的「底層仍然是標準 Debian,
+  能繼續吃到安全更新」講的是「有能力吃到」,不是「會自動吃到」——
+  這個差異值得說清楚,避免使用者誤以為裝了這份映像檔就等於有自動
+  安全更新機制。如果你的使用情境需要自動安全更新,開機、機器連上
+  網路之後自己 `apt install unattended-upgrades` 並依 Debian 官方文件
+  設定即可,跟軟體版安裝路徑上的既有 Debian 機器完全一樣的做法。
 - `gonasadmin` 這組 Unix 帳號的預設密碼寫死在 `preseed.cfg` 裡
   (`gonas-change-me-now`),純粹是給「緊急 SSH/主控台除錯」用的
   備援管道,跟 GoNAS 自己的 Web 介面帳號系統完全無關(見

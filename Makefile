@@ -12,7 +12,7 @@ LDFLAGS := -s -w \
 DIST := dist
 RELEASE_DIR := $(DIST)/release
 
-.PHONY: build build-amd64 build-arm64 build-all release run clean vet fmt iso iso-amd64 iso-arm64
+.PHONY: build build-amd64 build-arm64 build-all release run clean clean-cache vet fmt iso iso-amd64 iso-arm64
 
 ## build: 編譯給目前這台機器用的 binary(開發用)
 build:
@@ -75,5 +75,19 @@ iso-arm64: release
 ## iso: 兩個架構的映像檔都做一次。
 iso: iso-amd64 iso-arm64
 
+## clean: 清掉編譯產物跟 release/ISO 輸出,但刻意保留
+## dist/.cache/(build-iso.sh 快取下載回來的官方 Debian ISO 用的目錄,
+## 見 build/appliance/build-iso.sh)——那份快取存在的唯一理由就是
+## 「反覆重新建置 ISO 不用每次都重新下載幾百 MB」,如果 `make clean`
+## 把它一起清掉,只要養成「clean 完再重新 build」的習慣,就等於快取
+## 從來沒有真的發揮過作用。真的想清掉下載快取(例如懷疑快取的 ISO
+## 損毀、想強制重抓最新的官方映像),用下面的 `clean-cache`。
 clean:
-	rm -rf $(DIST) devdata
+	@if [ -d $(DIST) ]; then \
+		find $(DIST) -mindepth 1 -maxdepth 1 ! -name .cache -exec rm -rf {} +; \
+	fi
+	rm -rf devdata
+
+## clean-cache: 清掉 dist/.cache/ 下載快取(不影響 dist/ 底下其他東西)。
+clean-cache:
+	rm -rf $(DIST)/.cache
