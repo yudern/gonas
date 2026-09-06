@@ -77,16 +77,23 @@ EOF
 gonas_patch_boot_menu_file "$CASE2" "$APPEND_EXTRA"
 assert_injected "grub '--- quiet' (params after triple-dash)" "$CASE2"
 
-# --- 案例 3: grub.cfg，"---" 後面只有空白(行尾前留白，之前誤判為安全的情境) ---
+# --- 案例 3: grub.cfg，"---" 後面接的是空白字元、不是直接行尾(第二輪
+# 覆閱當時「允許尾端空白」的修法設計要涵蓋的情境——這裡故意用 printf
+# 而不是 heredoc 寫出這一行,確保 "---" 後面那個空白字元不會被任何
+# 工具(編輯器/heredoc 處理)不小心修剪掉,真的測到「有空白」這個情境,
+# 不是又跟案例 4 一樣變成沒有任何字元的行尾。之前這裡曾經用 heredoc
+# 寫,結果那個空白字元被拿掉了、內容其實跟案例 4 一模一樣,兩個案例名字
+# 說要測不同情境,實際上測的是同一份輸入——這是覆閱這支測試腳本本身
+# 時，用 `diff` 直接比對兩個案例的檔案內容才抓到的,不是靠看程式碼
+# 看出來的。) ---
 CASE3="$TEST_WORK_DIR/case3-grub-dashes-trailing-space.cfg"
-cat > "$CASE3" <<'EOF'
-menuentry "Install" {
-	linux	/install.amd/vmlinuz vga=788 ---
-	initrd	/install.amd/initrd.gz
-}
-EOF
+printf 'menuentry "Install" {\n\tlinux\t/install.amd/vmlinuz vga=788 --- \n\tinitrd\t/install.amd/initrd.gz\n}\n' > "$CASE3"
+if ! grep -q -- '--- $' "$CASE3"; then
+    echo "FAIL: test setup error — case3 was supposed to contain a trailing space after '---' but does not (got mangled somewhere)" >&2
+    FAIL=1
+fi
 gonas_patch_boot_menu_file "$CASE3" "$APPEND_EXTRA"
-assert_injected "grub '---' with only trailing whitespace" "$CASE3"
+assert_injected "grub '---' with trailing whitespace before end of line" "$CASE3"
 
 # --- 案例 4: grub.cfg，"---" 是這一行最後的東西，什麼都不接(模擬 arm64/EFI 常見格式) ---
 CASE4="$TEST_WORK_DIR/case4-grub-bare-dashes.cfg"
