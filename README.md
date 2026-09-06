@@ -460,6 +460,16 @@ WireGuard-tools/rsync,systemd 也不是真正的 PID 1 —— 所以「實機測
   JSON 回應並記進 log,而不是讓那個請求的連線直接斷掉、且錯誤資訊
   只印在 stderr 裡難以追查。用一個刻意觸發 nil map 寫入 panic 的臨時
   測試實際驗證過會被正確攔截,測完即刪除(不留在最終程式碼裡)。
+- **提醒:第一次設定管理者帳號那段流程走的是純 HTTP**——`GONAS_LISTEN_ADDR`
+  預設 `:8291`,不是 HTTPS;HTTPS 是登入之後才能在設定頁面手動開啟、
+  且要重啟 daemon 才生效。也就是說從 `gonasd` 第一次啟動、到你設定完
+  管理者帳號並開啟 HTTPS 之前,這段期間的流量(包含你設定的密碼本身)
+  都是明文,而且 `/api/v1/auth/setup` 在完全沒有帳號時任何人都能呼叫、
+  誰先呼叫誰就拿到帳號(程式碼用 `sync.Mutex` 保證不會同時建立出兩個
+  帳號,但沒辦法保證「先到的是你」)。建議第一次安裝/開機設定時,機器
+  接在一個只有自己/信任的人能連進來的網路上,設定完帳號、開啟 HTTPS
+  之後再接回一般網路——appliance 版的完整說明見
+  `build/appliance/README.md`「安全性提醒」一節。
 - **登入嘗試節流**(`internal/security/ratelimit.go`,`LoginLimiter`):
   同一個來源 IP 連續 5 次登入失敗(帳號、密碼、TOTP 驗證碼都算)後
   鎖定 5 分鐘,擋掉對管理者密碼的暴力猜測 —— 先前 Phase 6 做完整套
