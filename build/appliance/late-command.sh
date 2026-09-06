@@ -197,6 +197,14 @@ if [ -d "$DEBS_DIR" ] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
         dpkg --configure -a >/dev/null 2>&1 || true
         log "WARNING: 'dpkg -i' on bundled packages reported problems; if SSH does not work after first boot, run 'sudo dpkg --configure -a'"
     fi
+    # 保險:確保 SSH host key 真的產生了。openssh-server 的 postinst
+    # 正常會自己跑 `ssh-keygen -A`,但那是在這種「沒有真正在跑的 systemd
+    # /裝置節點可能不完整」的 in-target chroot 環境裡執行的,不保證每次
+    # 都成功;這裡再明確補跑一次(ssh-keygen -A 是冪等的——已經存在的
+    # host key 不會重新產生),沒有 host key 的話 sshd 開機會起不來。
+    if command -v ssh-keygen >/dev/null 2>&1; then
+        ssh-keygen -A >/dev/null 2>&1 || true
+    fi
     # 確保 SSH 服務開機自動啟動(openssh-server 的 postinst 通常已經
     # enable 過,這裡再補一次確保;ssh / sshd 兩種 unit 名稱都試一下)。
     if systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null; then
@@ -315,6 +323,51 @@ if [ -f /etc/default/grub ]; then
     fi
     update-grub 2>/dev/null || grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || \
         log "WARNING: could not regenerate grub.cfg automatically; verify manually on first boot"
+fi
+
+# --- 3.5. 修好安裝後的 apt 套件來源(離線安裝的後遺症) ----------------
+# 第十九輪覆閱全面排查時發現的一個真實缺口:這個 appliance 是「完全
+# 離線安裝」(preseed 的 apt-setup/use_mirror false),結果 d-i 產生的
+# apt 套件來源只會指向安裝媒體(光碟/USB)本身——而 preseed 又設了
+# cdrom-detect/eject,裝完重開機之後那份媒體邏輯上已經退出,apt 的
+# 來源等於指著一個不存在的光碟。這會直接打臉 README 講的「開機、機器
+# 有網路之後,透過 Doctor 頁面或 apt install 補裝 mergerfs/samba/docker
+# 這些選用相依套件」——因為在修好套件來源之前,`apt update`/`apt
+# install` 會因為讀不到那份已經退出的光碟而失敗。
+#
+# 修法:裝完之後直接寫一份指向 deb.debian.org 網路鏡像的
+# /etc/apt/sources.list(main + updates + security),並把任何還指著
+# cdrom 的舊來源檔案移開(Debian 13 預設用 deb822 格式的
+# /etc/apt/sources.list.d/debian.sources,舊格式是 /etc/apt/sources.list
+# ——用「檔案內容有沒有出現 cdrom:」判斷,兩種格式都涵蓋得到,不必
+# 分別處理)。整段 best-effort,失敗只記 log、不中止。
+#
+# 版本代號直接從目標系統的 /etc/os-release 讀 VERSION_CODENAME(前面
+# 品牌化只改了 NAME/PRETTY_NAME,沒動這個欄位),這樣不管裝的是 trixie
+# 還是之後的版本都對得上,不用寫死。
+GONAS_CODENAME="$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")"
+if [ -n "$GONAS_CODENAME" ]; then
+    # 把任何還指著 cdrom 的來源檔案移開,避免 apt update 讀不到已退出的
+    # 光碟而報錯(兩種格式都靠「內容含 cdrom:」判斷)。
+    for _apt_src in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+        [ -f "$_apt_src" ] || continue
+        if grep -qi 'cdrom:' "$_apt_src" 2>/dev/null; then
+            mv "$_apt_src" "$_apt_src.disabled-by-gonas" 2>/dev/null || true
+            log "disabled cdrom-based apt source: $_apt_src"
+        fi
+    done
+    if cat > /etc/apt/sources.list <<EOF
+deb http://deb.debian.org/debian $GONAS_CODENAME main contrib non-free-firmware
+deb http://deb.debian.org/debian $GONAS_CODENAME-updates main contrib non-free-firmware
+deb http://security.debian.org/debian-security $GONAS_CODENAME-security main contrib non-free-firmware
+EOF
+    then
+        log "wrote network apt sources.list for '$GONAS_CODENAME' (offline install left apt pointing only at the ejected install media)"
+    else
+        log "WARNING: could not write /etc/apt/sources.list — after first boot, 'apt update'/'apt install' may fail until you add a network mirror manually"
+    fi
+else
+    log "WARNING: could not detect VERSION_CODENAME from /etc/os-release — left apt sources as-is; 'apt install' may not work until you configure a network mirror manually"
 fi
 
 # --- 4. 強制第一次登入就要換掉 gonasadmin 的預設密碼 -----------------

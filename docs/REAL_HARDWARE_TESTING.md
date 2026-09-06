@@ -1746,6 +1746,23 @@ install.sh 上主動修過的「執行位元能不能被信任」這個原則,�
       重開機會看到 GoNAS 品牌畫面、gonas.service 正常跑、tty2 登入
       gonasadmin 會被強制改密碼、而且能 SSH 進去、gonasadmin 能 sudo。
       任何一項不如預期,一樣把畫面/log 帶回來。
+- [x] **全面排查時再補抓到的兩個真實缺口(這一輪順手一起修掉)**:
+      (1) **離線安裝後 apt 套件來源指著已退出的光碟**——`use_mirror
+      false` + `cdrom-detect/eject true` 的組合,讓裝完的系統 apt 只
+      認得那份已經退出的安裝媒體,`apt update`/`apt install` 會失敗,
+      直接打臉 README 說的「開機後透過 Doctor 頁面/apt install 補裝
+      mergerfs/samba/docker 等選用相依套件」。修法:late-command.sh
+      新增 3.5 節,裝完後寫一份指向 deb.debian.org 的網路
+      sources.list(main+updates+security,版本代號從 /etc/os-release
+      的 VERSION_CODENAME 動態讀),並把還指著 cdrom 的舊來源檔案移開
+      (deb822 跟舊格式都靠「內容含 cdrom:」判斷,兩種都涵蓋)。
+      (2) **SSH host key 產生的保險**:openssh-server 的 postinst 正常
+      會跑 `ssh-keygen -A`,但那是在沒有真正 systemd/裝置節點可能不完整
+      的 in-target chroot 裡執行,不保證每次成功,沒有 host key 的話
+      sshd 開機會起不來。late-command.sh 1.7 節在 dpkg 之後明確再補跑
+      一次 `ssh-keygen -A`(冪等)。兩項都是 best-effort、不會中止整支
+      腳本,同樣需要使用者實測確認(apt install 補裝一個套件試試、
+      確認 SSH 連得進來)。
 
 這一輪最值得記錄的教訓,跟前幾輪是同一條線的延伸,但更尖銳:**這台
 機器「裝完卻是陽春 Debian」的根本原因,是一個早就被辨識出來、也已經
