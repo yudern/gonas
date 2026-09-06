@@ -53,6 +53,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 腳本跟 test-boot-menu-patch.sh(離線回歸測試)才會共用同一份邏輯，
 # 不會出現「測試跑的是一份可能跟正式邏輯不同步的複製品」這種情況。
 . "$SCRIPT_DIR/lib/patch-boot-menu.sh"
+. "$SCRIPT_DIR/lib/verify-gpg-signature.sh"
 
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
@@ -145,14 +146,81 @@ if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
     exit 1
 fi
 echo "==> checksum OK ($ACTUAL_SHA256)"
-echo "    (this confirms the download is intact, not that it is authentic — for full authenticity,"
-echo "    separately verify SHA256SUMS.sign with gpg against Debian's signing key, see"
-echo "    https://www.debian.org/CD/verify)"
+echo "    (this confirms the download is intact, not that it is authentic)"
+
+# --- 2.65 (可選)GPG 簽章驗證 ------------------------------------------
+# 上面的 checksum 比對只驗證「完整性」(下載過程沒有被截斷/損毀),不是
+# 「真實性」(SHA256SUMS 本身沒有被中間人偽造)——真正的真實性驗證要另外
+# 抓 SHA256SUMS.sign 用 gpg 驗證簽章,而這一步需要一把可信的 Debian
+# 簽章金鑰。這支腳本刻意不去自動下載/匯入金鑰:金鑰應該透過一個獨立於
+# 這個下載流程本身的管道取得(見 https://www.debian.org/CD/verify 官方
+# 說明的建議做法),如果腳本自己去某個固定網址抓一把「聲稱是 Debian
+# 官方金鑰」的檔案再拿來驗證,等於信任鏈繞了一圈又繞回同一個下載
+# 管道,沒有真的增加安全性。
+#
+# 所以這裡改成:預設完全不做(維持原本只有 checksum 這一層,不改變
+# 既有行為),使用者可以自己照官方文件匯入金鑰、匯出成一個獨立的
+# keyring 檔案,再用 GONAS_DEBIAN_KEYRING 環境變數指到那個檔案路徑,
+# 才會啟用這一層驗證——而且一旦啟用,驗證失敗就直接中止建置(不是
+# 印個警告就算了),因為使用者主動選擇了「我要更高的信任層級」,失敗
+# 卻放行會比完全不做這層檢查更糟。
+#
+# 誠實的邊界:這一段判斷邏輯本身(gonas_verify_gpg_signature,見
+# lib/verify-gpg-signature.sh)有用假的 gpg 執行檔測過控制流程對不對
+# (見 test-gpg-verify.sh),但「真的能不能用一把真正的 Debian 簽章金鑰
+# 驗證一份真正的 SHA256SUMS.sign」這件事本身,這個開發沙盒完全沒辦法
+# 連網測試,只能等使用者自己有 keyring 可以測的時候才算數。
+GONAS_DEBIAN_KEYRING="${GONAS_DEBIAN_KEYRING:-}"
+if [ -n "$GONAS_DEBIAN_KEYRING" ]; then
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo "error: GONAS_DEBIAN_KEYRING is set but 'gpg' is not installed — install gnupg, or unset GONAS_DEBIAN_KEYRING to fall back to checksum-only verification" >&2
+        exit 1
+    fi
+    if [ ! -f "$GONAS_DEBIAN_KEYRING" ]; then
+        echo "error: GONAS_DEBIAN_KEYRING is set to '$GONAS_DEBIAN_KEYRING' but that file does not exist — see https://www.debian.org/CD/verify for how to prepare a keyring" >&2
+        exit 1
+    fi
+    SIGN_URL="$BASE_ISO_URL/SHA256SUMS.sign"
+    echo "==> GONAS_DEBIAN_KEYRING is set — fetching $SIGN_URL for GPG signature verification"
+    if ! wget -q -O "$WORK_DIR/SHA256SUMS.sign" "$SIGN_URL"; then
+        echo "error: could not download $SIGN_URL — GONAS_DEBIAN_KEYRING was set, so this is treated as a hard failure (unset it to fall back to checksum-only verification)" >&2
+        exit 1
+    fi
+    GPG_LOG="$WORK_DIR/gpg-verify.log"
+    if gonas_verify_gpg_signature "$WORK_DIR/SHA256SUMS.sign" "$WORK_DIR/SHA256SUMS" "$GONAS_DEBIAN_KEYRING" "$GPG_LOG"; then
+        echo "==> GPG signature OK — SHA256SUMS is authentically signed by a key in $GONAS_DEBIAN_KEYRING"
+    else
+        echo "error: GPG signature verification failed — refusing to continue with an ISO whose SHA256SUMS could not be authenticated. Full gpg output:" >&2
+        sed 's/^/  /' "$GPG_LOG" >&2
+        exit 1
+    fi
+else
+    echo "    (for full authenticity, separately verify SHA256SUMS.sign with gpg against Debian's"
+    echo "    signing key, see https://www.debian.org/CD/verify — set GONAS_DEBIAN_KEYRING to a"
+    echo "    local keyring file path to have this script do that check automatically)"
+fi
+
 # 通過驗證才寫進快取(或更新快取)——避免一份沒通過驗證的檔案被誤存
 # 起來,下次又被當成「快取命中」重用。
 if [ ! -f "$CACHED_ISO" ] || [ "$(sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
     cp "$WORK_DIR/base.iso" "$CACHED_ISO"
 fi
+
+# --- 2.7 清掉同架構、不同 Debian 版本代號的舊快取 -----------------------
+# 只在確認新版本快取成功寫入之後才做,清的對象限定在「同一個架構、
+# 檔名裡代號不是目前 $BASE_ISO_NAME」的檔案——例如把
+# GONAS_DEBIAN_RELEASE 從 bookworm 換成 trixie 之後,原本 bookworm 那份
+# amd64 快取永遠不會再被用到(BASE_ISO_NAME 已經換了),但也永遠不會
+# 自動消失,一直佔用磁碟空間卻沒有任何提示。故意不去動「其他架構」的
+# 快取檔案(例如建 amd64 的時候不會去動 arm64 的快取)——避免使用者
+# 分開兩次 `make iso-amd64`/`make iso-arm64` 時,這一步反而互相刪掉
+# 對方仍然有效的快取,那樣就違背了當初做這個快取機制的本意。
+for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-netinst.iso; do
+    [ -e "$old_cached" ] || continue
+    [ "$(basename "$old_cached")" = "$BASE_ISO_NAME" ] && continue
+    echo "==> removing stale cached ISO for a different Debian release ($DEBIAN_ARCH_DIR): $old_cached"
+    rm -f "$old_cached"
+done
 
 # --- 3. 解開原始 ISO --------------------------------------------------
 EXTRACT_DIR="$WORK_DIR/iso"

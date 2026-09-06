@@ -102,21 +102,27 @@ build/appliance/build-iso.sh arm64 1.2.3
 `.sha256`。下載回來的官方 Debian ISO 會快取在 `dist/.cache/`(以雜湊
 值判斷是否還能重用,不是單純看檔名/時間),重複執行不用每次都重新
 下載幾百 MB;`dist/` 整個目錄已經在 `.gitignore` 裡,快取不會被誤
-commit 進版本控制。
+commit 進版本控制。切換 `GONAS_DEBIAN_RELEASE`(例如之後 Debian 出新
+的穩定版,想從 bookworm 換成 trixie)之後,同一個架構下舊版代號的
+快取檔案會在下一次成功建置時自動被清掉,不會一直留著佔磁碟空間
+(只清「同架構、代號不是目前這個」的檔案,不會動到另一個架構的
+快取,分開跑 `make iso-amd64`/`iso-arm64` 兩次也不會互相清掉對方)。
 
-**在跑真正的建置之前,建議先跑一次快速、完全不需要網路的離線檢查**:
+**在跑真正的建置之前,建議先跑兩支快速、完全不需要網路的離線檢查**:
 
 ```
 sh build/appliance/test-boot-menu-patch.sh
+sh build/appliance/test-gpg-verify.sh
 ```
 
-這只驗證「開機選單參數注入」這一小段邏輯本身(用假的 isolinux/grub
-設定檔測試,幾秒鐘跑完),不會碰到網路、xorriso、真正的 Debian
-ISO——不能取代下面「如何驗證」一節真正的 QEMU/VirtualBox 端到端
-測試,但可以在完整建置(需要下載幾百 MB 的官方 ISO、跑 xorriso)之前,
-先確認這段最容易因為 Debian 版本格式變動而壞掉的邏輯還是好的,尤其是
-改過 `build/appliance/lib/patch-boot-menu.sh` 之後,或者換了
-`GONAS_DEBIAN_RELEASE` 想升級到不同的 Debian 版本之後。
+第一支驗證「開機選單參數注入」這一小段邏輯本身(用假的 isolinux/grub
+設定檔測試);第二支驗證「判斷 GPG 簽章驗不驗得過」這段邏輯的控制
+流程(用假的 `gpg` 執行檔測試,見下面「已知的設計限制」一節裡 GPG
+驗證那一條的完整說明)。兩支都是幾秒鐘跑完,不會碰到網路、xorriso、
+真正的 Debian ISO——不能取代下面「如何驗證」一節真正的 QEMU/
+VirtualBox 端到端測試,但可以在完整建置(需要下載幾百 MB 的官方 ISO、
+跑 xorriso)之前,先確認這幾段最容易因為 Debian 版本格式變動、或
+gpg 版本差異而壞掉的邏輯還是好的。
 
 整個流程做的事(細節見 `build-iso.sh` 裡逐段的中文註解):
 
@@ -286,14 +292,24 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   嚴格來說這不是一份「完全零互動、從開機到裝完中間不用碰鍵盤」的
   preseed——多碟機器上至少會停兩次:選磁碟、確認寫入。單碟機器
   (或只掛一顆測試碟的 VM)只會停在確認寫入那一次。
-- `build-iso.sh` 會比對下載回來的官方 ISO 跟 Debian 發布的
+- `build-iso.sh` 預設會比對下載回來的官方 ISO 跟 Debian 發布的
   `SHA256SUMS` 是否一致,雜湊不符就直接中止(避免在一份損毀或被
   竄改的 ISO 上繼續動作卻完全沒有任何錯誤訊息)——但這只驗證
-  「完整性」,沒有做 GPG 簽章驗證(`SHA256SUMS.sign`)這一層
-  「真實性」檢查,因為那需要腳本執行環境事先匯入 Debian 的官方簽章
-  金鑰,這支腳本不假設一定有;如果你的信任層級要求更高,建議自己
-  另外對 `SHA256SUMS`/`SHA256SUMS.sign` 做一次 GPG 驗證,見
-  https://www.debian.org/CD/verify 。
+  「完整性」,不是「真實性」(`SHA256SUMS` 本身有沒有被偽造)。第十輪
+  覆閱補上了可選的 GPG 簽章驗證:自己照
+  https://www.debian.org/CD/verify 官方說明匯入 Debian 的簽章金鑰、
+  匯出成一個獨立的 keyring 檔案之後,設定環境變數
+  `GONAS_DEBIAN_KEYRING=/path/to/your.keyring` 再執行 `build-iso.sh`
+  (或 `make iso-amd64`/`iso-arm64`),就會自動多做這一層驗證,失敗直接
+  中止建置。**這裡刻意不是腳本自己去某個網址下載金鑰**——金鑰的取得
+  管道應該獨立於這支下載腳本本身,不然信任鏈繞了一圈又繞回同一個
+  下載來源,沒有真的增加安全性,所以金鑰檔案要由你自己準備好。判斷
+  「gpg 說的算不算真的驗證通過」這段邏輯本身(`lib/verify-gpg-
+  signature.sh`)已經用假的 `gpg` 執行檔測過控制流程(`sh
+  build/appliance/test-gpg-verify.sh`,不需要網路),但「用一把真正的
+  Debian 簽章金鑰驗證一份真正的 `SHA256SUMS.sign`」這件事本身,這個
+  開發沙盒完全沒辦法連網測試,需要你自己有 keyring 可用時才算數驗證
+  過。不想用這一層的話什麼都不用做,預設行為(只做 checksum)不變。
 - `preseed.cfg` 裡 `d-i pkgsel/update-policy select none` 關掉的是
   「安裝過程順便設定 unattended-upgrades 自動背景更新」這個選項,不是
   真的關掉更新能力——開機之後機器有網路,手動 `apt update && apt

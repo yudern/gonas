@@ -974,6 +974,53 @@ shell 腳本跟函式庫檔案),`gofmt`/`go vet`/`go build ./...`/
 方式),`gofmt`/`go vet`/`go build ./...`/`test-boot-menu-patch.sh`
 重新確認過一次,結果跟這個 Phase 之前完全一樣、全數維持全綠。
 
+**第十輪:把前九輪列出來、還沒打勾的項目逐一補完**——這一輪不是再找
+新 bug,而是照著上一次多視角(架構/資安/設計/全鏈路)覆閱列出的清單,
+把每一個沒打勾的項目實際做掉:
+
+- [x] **同架構、舊 Debian 版本代號的快取不會自動清掉**(架構師視角):
+      `build-iso.sh` 現在會在確認新版本快取成功寫入之後,清掉
+      `dist/.cache/debian-iso/` 底下「同一個架構、檔名代號不是目前
+      這次要用的版本」的舊快取檔案——用假的快取目錄結構實際測試過:
+      同架構的舊代號檔案會被清掉,不同架構的檔案不會被誤刪,快取
+      目錄本來就是空的也不會出錯。
+- [x] **GPG 簽章驗證(只做過 checksum,一直沒做真實性驗證)**(資安
+      視角):新增可選的 `GONAS_DEBIAN_KEYRING` 環境變數,設定之後
+      `build-iso.sh` 會多抓一份 `SHA256SUMS.sign`、用使用者自己準備好
+      的 keyring 驗證簽章,失敗直接中止建置。判斷邏輯獨立成
+      `lib/verify-gpg-signature.sh`,並且新增
+      `test-gpg-verify.sh`——用假的 `gpg` 執行檔測過控制流程(exit
+      code 0 加輸出裡有 "Good signature" 才算過、exit code 非 0 或
+      輸出裡沒有那個字串都算沒過),3 個案例全部驗證正確。老實說清楚
+      這裡測過跟沒測過的邊界:控制流程本身測過,但「用一把真正的
+      Debian 簽章金鑰驗證一份真正的 SHA256SUMS.sign」這件事本身,
+      這個沙盒完全沒辦法連網驗證,需要使用者自己有 keyring 才算數。
+- [x] **Web 前端首次設定畫面**(設計師視角):讀過
+      `internal/api/webui/static/app.js` 的 `showSetupGate()` 跟對應
+      的 i18n 文字——使用者名稱/密碼(至少 8 字元)/確認密碼三個欄位,
+      前端先檢查兩次密碼一致再送出,三種語言(繁中/簡中/英文)的文案
+      都清楚、意思一致,沒有發現需要修改的地方。
+- [x] **沒有 CI 自動跑這些檢查**(全鏈路/測試視角):新增
+      `.github/workflows/ci.yml`,涵蓋 `gofmt`/`go vet`/`go build`/
+      `go test -race`,以及 `build/` 底下所有 shell 腳本的 `sh -n`
+      語法檢查、`test-boot-menu-patch.sh`、`test-gpg-verify.sh`——
+      這幾項全部不需要網路,理論上每次 push/PR 都能自動跑,不用再
+      依賴人工記得手動執行。刻意沒有讓 CI 做真正下載 ISO/跑
+      xorriso/QEMU 開機這一段,那仍然照
+      `docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md` 手動做。
+- [ ] **端到端(真正下載官方 ISO、跑 xorriso、真正 debian-installer
+      安裝、late-command 在真正 in-target chroot 執行)**:這一項這輪
+      沒有、也不可能在這個沙盒裡完成——不是沒去做,是這個環境的網路
+      白名單從一開始就擋死了 Debian 的套件鏡像,前面十輪能做的都是
+      「讓能做的部分盡量不要有已知的錯」,這一項只能交給使用者在
+      有網路的機器上照 `docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md`
+      實際跑一次才能打勾。
+
+沒有修改任何 `.go` 檔案(只改了 `build/appliance/` 底下的 shell 腳本、
+新增函式庫跟測試,以及新增 CI workflow),`gofmt`/`go vet`/
+`go build ./...`/`go test ./... -race -count=1`/兩支
+`test-*.sh` 全數維持全綠。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

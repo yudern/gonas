@@ -45,16 +45,20 @@ late-command 邏輯完全共用,amd64 驗證過的東西大部分也適用於 ar
 
 ## 步驟 2:跑一次完全離線的快速自我檢查(不需要網路,幾秒鐘)
 
-在真正花時間下載幾百 MB 的官方 ISO 之前,先確認開機選單參數注入這段
-邏輯本身沒問題:
+在真正花時間下載幾百 MB 的官方 ISO 之前,先確認兩段最容易壞掉的邏輯
+本身沒問題:
 
 ```
 sh build/appliance/test-boot-menu-patch.sh
+sh build/appliance/test-gpg-verify.sh
 ```
 
-應該看到 5 個 `PASS` 跟最後一行 `==> all boot-menu-patch test cases
-passed`。如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用
-往下做,先確認拿到的程式碼是完整的。
+第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
+passed`;第二支應該看到 3 個 `PASS` 跟 `==> all gpg-verify
+control-flow test cases passed`。如果這裡就失敗了,代表程式碼在傳輸
+過程中被改動或損毀,不用往下做,先確認拿到的程式碼是完整的。這兩支
+測試也已經寫進 `.github/workflows/ci.yml`,如果你把這個 repo 推到
+GitHub,之後每次 push/PR 都會自動跑一次,不用每次都記得手動執行。
 
 ## 步驟 3:建置 ISO
 
@@ -71,6 +75,12 @@ make iso-amd64
    不用每次都重新下載)。
 3. 驗證下載回來的 ISO 雜湊值,解開、塞進 gonasd 執行檔跟客製化腳本、
    修改開機選單、重新用 xorriso 包裝。
+
+預設只做 checksum 驗證(完整性,不是真實性)。如果你想多一層 GPG
+簽章驗證,自己照 https://www.debian.org/CD/verify 官方說明匯入
+Debian 的簽章金鑰、匯出成一個 keyring 檔案,執行前設定
+`export GONAS_DEBIAN_KEYRING=/path/to/your.keyring` 就會自動多驗證
+一層,失敗直接中止(不想用這個的話什麼都不用做,行為不變)。
 
 過程中終端機會印出目前在做哪一步(`==> ...` 開頭的訊息)。順利的話最後
 會看到:

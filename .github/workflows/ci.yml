@@ -1,0 +1,73 @@
+name: CI
+
+# 這支 CI 存在的理由:前十輪 build/appliance/ 的覆閱裡,好幾個真的存在
+# 的 bug(POSIX 子行程變數作用域、grub "---" 注入規則、架構偵測 fallback
+# 命名不一致……)都是靠人工在一個開發沙盒裡手動跑 `sh -n`/`go vet`/
+# `go test`/`test-boot-menu-patch.sh` 才抓到的——這些檢查全部不需要
+# 網路、也不需要真的建置 ISO,理論上每一次 push/PR 都應該自動跑一次,
+# 而不是依賴「有沒有人記得手動跑」。這支 workflow 就是把那套手動流程
+# 固定下來。
+#
+# 刻意不涵蓋的東西:真正下載 Debian ISO、跑 xorriso 建置、進 QEMU
+# 開機測試——那些需要的網路存取/建置時間跟 GitHub Actions 一般 runner
+# 的預設環境不完全匹配,而且不是這個專案目前最需要自動化的部分(目前
+# 最需要的是「不要讓已經抓到過的那類 bug 悄悄回歸」),真正的端到端
+# ISO 驗證仍然照 docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md 手動做。
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  go:
+    name: Go build / vet / fmt / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt(檢查有沒有沒格式化過的檔案)
+        run: |
+          UNFORMATTED="$(gofmt -l -s .)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "以下檔案沒有用 'gofmt -s -w' 格式化過:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test(含 -race)
+        run: go test ./... -race -count=1
+
+  appliance-shell:
+    name: build/appliance/ shell 腳本檢查(不需要網路)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sh -n(POSIX 語法檢查所有 build/ 底下的 shell 腳本)
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            if ! sh -n "$f"; then
+              echo "語法錯誤: $f"
+              status=1
+            fi
+          done < <(find build -type f -name '*.sh' -print0)
+          exit $status
+
+      - name: test-boot-menu-patch.sh(開機選單參數注入邏輯的離線回歸測試)
+        run: sh build/appliance/test-boot-menu-patch.sh
+
+      - name: test-gpg-verify.sh(GPG 簽章驗證控制流程的離線回歸測試)
+        run: sh build/appliance/test-gpg-verify.sh
