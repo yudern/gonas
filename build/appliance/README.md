@@ -356,6 +356,25 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   開發沙盒只裝了 C/POSIX 這幾種語系,沒辦法直接裝一個有翻譯包的語系
   重現症狀本身,但 gnupg 訊息會被翻譯這件事本身是有文件可查的既有
   行為,不是憑空猜測。
+- **`build-iso.sh`(以及它會用到的 `lib/patch-boot-menu.sh`)現在同時
+  支援在 Linux 跟 macOS 上執行,不再假設建置這支腳本的機器一定是
+  Linux**——第十七輪覆閱是因為使用者實際要在自己的 Mac mini 上建置才
+  發現的:`sed -i`(不接參數的 GNU 寫法)在 macOS 內建的 BSD sed 底下
+  是完全不同的語法,直接照 Linux 寫法呼叫會讓整條指令的參數解讀錯位;
+  `sha256sum`/`md5sum` 這兩個 GNU coreutils 指令在 stock macOS 上根本
+  不存在。已修正:新增 `lib/portable-sed.sh` 的 `gonas_sed_inplace()`
+  (統一用 `-i.gonas-sed-bak` 這種兩邊都合法的寫法呼叫 `sed`,再手動
+  清掉備份檔)跟 `lib/portable-checksum.sh` 的
+  `gonas_sha256sum()`/`gonas_md5sum()`(GNU 工具不存在時 fallback 到
+  macOS 原生的 `shasum -a 256`/`md5 -r`),`build-iso.sh` 跟
+  `lib/patch-boot-menu.sh` 裡所有原本直接呼叫 GNU 工具的地方全部改用
+  這兩個函式。`late-command.sh` 因為是在真正的 Debian in-target
+  chroot(永遠是 Linux)裡執行,不受影響、不需要修改。這兩個新函式各自
+  都有離線回歸測試(`test-portable-sed.sh`/`test-portable-checksum.sh`
+  ),CI 也新增了一個 `macos-latest` 的 job 實際在真正的 BSD 工具鏈底下
+  跑這些測試,不是只在 Linux runner 上跑過就算數。在 macOS 上建置的
+  詳細步驟(Homebrew 裝哪些套件、Apple Silicon 跟 Intel Mac 分別要注意
+  什麼)見 `docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md`。
 - `preseed.cfg` 裡 `d-i pkgsel/update-policy select none` 關掉的是
   「安裝過程順便設定 unattended-upgrades 自動背景更新」這個選項,不是
   真的關掉更新能力——開機之後機器有網路,手動 `apt update && apt

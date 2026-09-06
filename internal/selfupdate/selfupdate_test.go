@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -484,9 +485,24 @@ func TestChecker_StopBeforeStart_DoesNotPanic(t *testing.T) {
 }
 
 func TestChecker_RunsRepeatedlyAndStopsCleanly(t *testing.T) {
-	var count int
+	// count 是 atomic.Int64,不是普通的 int——這裡故意這樣寫是因為第
+	// 十七輪覆閱跑 `go test ./... -race -count=1` 時,真的抓到一次
+	// (非每次都會觸發,是時序相關的間歇性 flake)DATA RACE:htttest 的
+	// handler 在它自己的連線 goroutine 裡執行 `count++`,而這個測試的
+	// 主 goroutine 在 `c.Stop()` 回傳之後直接讀 `count`(`after := count`
+	// 跟後面的 `count != after`)。雖然邏輯上 Stop() 保證了「回傳之後不會
+	// 再有新的檢查」(Checker.Stop() 會等待背景 goroutine 真的執行完
+	// 目前這一輪 check() 才關閉 done channel,見 selfupdate.go),但這只
+	// 保證「不會再有新的 HTTP request 被發出」,不保證 race detector
+	// 能沿著「HTTP round trip 完成」這條路徑辨識出足夠的
+	// happens-before 關係——普通的 `int` 在兩個 goroutine 之間沒有任何
+	// atomic/mutex 保護,就算功能上恰好每次都是對的,對 race detector
+	// 來說仍然是未定義行為,而且是真的會被抓到的(不是誤報,實測跑十幾
+	// 次會出現一次)。改用 atomic.Int64 讓讀寫都走原子操作,才是正確
+	// 的修法,而不是靠「反正這個測試場景下不會真的同時存取」的假設。
+	var count atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count++
+		count.Add(1)
 		_ = json.NewEncoder(w).Encode(Manifest{Version: "v1.0.0", Assets: map[string]Asset{}})
 	}))
 	defer srv.Close()
@@ -497,13 +513,13 @@ func TestChecker_RunsRepeatedlyAndStopsCleanly(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	c.Stop()
 
-	if count < 2 {
-		t.Errorf("expected at least 2 checks within the wait window, got %d", count)
+	if got := count.Load(); got < 2 {
+		t.Errorf("expected at least 2 checks within the wait window, got %d", got)
 	}
 
-	after := count
+	after := count.Load()
 	time.Sleep(20 * time.Millisecond)
-	if count != after {
-		t.Error("expected no further checks after Stop()")
+	if got := count.Load(); got != after {
+		t.Errorf("expected no further checks after Stop(), count went from %d to %d", after, got)
 	}
 }

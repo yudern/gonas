@@ -74,3 +74,54 @@ jobs:
 
       - name: test-detect-arch.sh(late-command.sh 架構偵測 fallback 對應表的離線回歸測試)
         run: sh build/appliance/test-detect-arch.sh
+
+      - name: test-portable-checksum.sh(sha256sum/md5sum 在沒有 GNU coreutils 環境下 fallback 邏輯的離線回歸測試)
+        run: sh build/appliance/test-portable-checksum.sh
+
+      - name: test-portable-sed.sh(sed -i 跨 GNU/BSD 相容包裝邏輯的離線回歸測試)
+        run: sh build/appliance/test-portable-sed.sh
+
+  # 第十七輪覆閱抓到的問題:build-iso.sh 跟 lib/patch-boot-menu.sh 原本
+  # 直接呼叫 `sed -i`/`sha256sum`/`md5sum`,這些是 GNU coreutils 工具,
+  # 在 ubuntu-latest 這種 Linux runner 上到處都有,完全不會暴露這個問題
+  # ——這個問題是使用者實際要在自己的 macOS 機器上執行這支腳本時才發現
+  # 的,前面 16 輪 CI 設定都只在 Linux runner 上跑,從來沒有機會真的
+  # 驗證過 macOS 相容性修正(lib/portable-sed.sh、
+  # lib/portable-checksum.sh)有沒有真的在一台真正的 macOS 機器、真正
+  # 的 BSD sed/shasum/md5 底下正確運作。GitHub Actions 剛好提供
+  # macos-latest 這種 runner,讓這件事第一次不用靠人工在自己的 Mac 上
+  # 手動確認——這支 job 完全複用跟 appliance-shell 一樣的離線測試腳本,
+  # 差別只在 runs-on,任何一次修改弄壞了 macOS 相容性(例如不小心又
+  # 加了一個假設 GNU coreutils 一定存在的呼叫),這裡就會直接紅燈,不用
+  # 等到有人真的在 Mac 上手動跑才發現。
+  appliance-shell-macos:
+    name: build/appliance/ shell 腳本檢查(macOS/BSD 環境,不需要網路)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sh -n(POSIX 語法檢查所有 build/ 底下的 shell 腳本)
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            if ! sh -n "$f"; then
+              echo "語法錯誤: $f"
+              status=1
+            fi
+          done < <(find build -type f -name '*.sh' -print0)
+          exit $status
+
+      - name: test-boot-menu-patch.sh(在真正的 BSD sed 底下驗證 gonas_sed_inplace 沒有壞掉)
+        run: sh build/appliance/test-boot-menu-patch.sh
+
+      - name: test-gpg-verify.sh(這個 runner 上如果沒裝 gpg,案例 4/5 會自動 SKIP,不影響整體通過)
+        run: sh build/appliance/test-gpg-verify.sh
+
+      - name: test-detect-arch.sh
+        run: sh build/appliance/test-detect-arch.sh
+
+      - name: test-portable-checksum.sh(在真正沒有 GNU coreutils 的環境下,驗證真的會 fallback 到 shasum/md5 而不是假設 sha256sum/md5sum 存在)
+        run: sh build/appliance/test-portable-checksum.sh
+
+      - name: test-portable-sed.sh(在真正的 BSD sed 底下驗證 -i.bak 這個寫法真的可行)
+        run: sh build/appliance/test-portable-sed.sh

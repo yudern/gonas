@@ -18,8 +18,13 @@ gonas_patch_boot_menu_file() {
     # isolinux 語法用 "append ..." 這一行帶核心參數,直接整行加在最
     # 後面即可——isolinux 的 append 行沒有 grub 那種用 "---" 分隔
     # 「核心參數」跟「init 參數」的慣例,單純是一串扁平的參數列表。
+    # sed -i 的呼叫都改用 gonas_sed_inplace(見 lib/portable-sed.sh)
+    # 而不是直接 `sed -i "..." 檔案`——第十七輪覆閱抓到的問題:GNU sed
+    # 的 `-i`(不接參數)在 macOS 內建的 BSD sed 底下是另一回事,直接
+    # 這樣寫在 Mac 上執行會做出完全不對的事,不是單純的指令找不到,
+    # 細節見 lib/portable-sed.sh 開頭的說明。
     if grep -q '^[[:space:]]*append ' "$_pbm_file" 2>/dev/null; then
-        sed -i "s#^\([[:space:]]*append .*\)\$#\\1 $_pbm_append_extra#" "$_pbm_file"
+        gonas_sed_inplace "s#^\([[:space:]]*append .*\)\$#\\1 $_pbm_append_extra#" "$_pbm_file"
     fi
 
     # grub.cfg 用 "linux ... ---" 這種格式,但這裡刻意不假設 "---"
@@ -44,10 +49,10 @@ gonas_patch_boot_menu_file() {
     # 靜默失敗。改用 [[:space:]] 字元類別(在 POSIX BRE 的中括號裡合法,
     # 同時涵蓋空白鍵跟 tab)取代字面空白鍵,兩種分隔字元都認得。
     if grep -q '[[:space:]]linux[[:space:]]' "$_pbm_file" 2>/dev/null || grep -q '^[[:space:]]*linux[[:space:]]' "$_pbm_file" 2>/dev/null; then
-        sed -i "s#---#$_pbm_append_extra ---#" "$_pbm_file"
+        gonas_sed_inplace "s#---#$_pbm_append_extra ---#" "$_pbm_file"
     fi
 
     # 選單標題品牌化——把看得到的 "Debian GNU/Linux installer" 字樣
     # 換成 "GoNAS Installer",純粹是顯示文字，不影響實際安裝行為。
-    sed -i 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
+    gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
 }

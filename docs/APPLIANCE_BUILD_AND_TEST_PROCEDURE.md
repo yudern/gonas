@@ -28,6 +28,8 @@ cd gonas
 
 ## 步驟 1:裝建置工具
 
+### Linux(Debian/Ubuntu)
+
 ```
 sudo apt update
 sudo apt install -y xorriso wget qemu-system-x86 qemu-utils ovmf
@@ -38,10 +40,65 @@ sudo apt install -y xorriso wget qemu-system-x86 qemu-utils ovmf
 UEFI 韌體檔案 `edk2-aarch64-code.fd`,`ovmf` 這個套件在大多數
 Debian/Ubuntu 上也一併帶了 aarch64 版本的韌體檔案(路徑通常在
 `/usr/share/AAVMF/AAVMF_CODE.fd`,實際路徑依發行版而定,用
-`dpkg -L ovmf | grep -i aavmf` 找)。**建議先把 amd64 這條路徑完整走完
-一次確認沒問題,再考慮花力氣測 arm64**,兩者用的建置/preseed/
-late-command 邏輯完全共用,amd64 驗證過的東西大部分也適用於 arm64,
-差別主要在 QEMU 開機參數跟 UEFI 韌體這一層。
+`dpkg -L ovmf | grep -i aavmf` 找)。硬體加速用的是 KVM,`-enable-kvm`
+這個 QEMU 參數見步驟 5。
+
+### macOS(例如你現在用的 Mac mini)
+
+先確認你的 Mac 是哪一種晶片,這決定了下面該用哪個架構、哪個硬體加速
+方式:
+
+```
+uname -m
+```
+
+看到 `arm64` 代表是 Apple Silicon(M1/M2/M3/M4 系列);看到
+`x86_64` 代表是 Intel 晶片。這件事很重要,原因見下面「該測 amd64
+還是 arm64」的說明。
+
+裝建置工具(用 [Homebrew](https://brew.sh),如果還沒裝過先照官網
+指示裝好):
+
+```
+brew install xorriso wget qemu
+```
+
+macOS 上不需要另外裝 `qemu-utils`/`ovmf`——Homebrew 的 `qemu` 套件
+本身就含 `qemu-img`、`qemu-system-x86_64`、`qemu-system-aarch64`
+跟 arm64 開機要用的 UEFI 韌體檔案(路徑通常是
+`$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd`,步驟 8 會
+用到)。
+
+macOS 的硬體加速用的是 Apple 自己的 Hypervisor.framework(QEMU 的
+`-accel hvf` 參數,取代 Linux 的 `-enable-kvm`,見步驟 5),但
+**HVF 只能加速跟主機同架構的 VM**——這跟 Linux 上的 KVM 不一樣(KVM
+也只能加速同架構,但 x86_64 機器本來就幾乎不會想在裡面跑 arm64
+VM,不會特別感覺到這個限制)。這對你接下來要測哪個架構有直接影響,
+見下面的說明。
+
+**該測 amd64 還是 arm64:**
+
+- **Apple Silicon Mac(`uname -m` 顯示 `arm64`)→ 建議測 arm64 映像檔
+  (`make iso-arm64`,對應步驟 3/5/8 都選 arm64 那個指令)。** 這樣
+  QEMU 才吃得到 HVF 加速,開機/安裝過程是正常速度(幾分鐘等級)。
+  如果你反而想測 amd64 映像檔,QEMU 會用純軟體模擬(TCG)跑一顆
+  x86_64 虛擬 CPU,完全沒有加速,整個安裝過程可能要等上數十分鐘到
+  更久,不建議當第一次測試——GoNAS 的建置/preseed/late-command 邏輯
+  兩個架構完全共用,arm64 測過一次,邏輯上的問題(preseed 有沒有
+  正確生效、tty1 品牌畫面對不對、gonasd 有沒有開機自動啟動)跟 amd64
+  是同一套,不需要兩個都測。
+- **Intel Mac(`uname -m` 顯示 `x86_64`)→ 測 amd64 映像檔**
+  (`make iso-amd64`,文件裡預設的指令),QEMU 用 HVF 加速跑
+  x86_64 VM,速度正常。
+
+下面步驟 3/5 的指令預設寫的是 amd64(對應多數 Linux/Intel 機器的
+情境);如果你是 Apple Silicon Mac,照著做但把 `amd64` 換成
+`arm64`、`qemu-system-x86_64` 換成 `qemu-system-aarch64`,詳細的
+arm64 QEMU 開機參數在步驟 8。
+
+**建議先把你機器對應的那個架構完整走完一次確認沒問題**,兩者用的
+建置/preseed/late-command 邏輯完全共用,差別主要在 QEMU 開機參數跟
+UEFI 韌體這一層。
 
 **磁碟空間**:粗抓一下,建置一個架構的過程中同時間可能佔用到:官方
 netinst ISO 一份快取在 `dist/.cache/`(約 700MB)、同一份 ISO 的工作
@@ -55,13 +112,15 @@ netinst ISO 一份快取在 `dist/.cache/`(約 700MB)、同一份 ISO 的工作
 
 ## 步驟 2:跑一次完全離線的快速自我檢查(不需要網路,幾秒鐘)
 
-在真正花時間下載幾百 MB 的官方 ISO 之前,先確認三段最容易壞掉的邏輯
-本身沒問題:
+在真正花時間下載幾百 MB 的官方 ISO 之前,先確認幾段最容易壞掉的邏輯
+本身沒問題(在 Linux 或 macOS 上都一樣執行,不用另外做什麼):
 
 ```
 sh build/appliance/test-boot-menu-patch.sh
 sh build/appliance/test-gpg-verify.sh
 sh build/appliance/test-detect-arch.sh
+sh build/appliance/test-portable-checksum.sh
+sh build/appliance/test-portable-sed.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
@@ -72,11 +131,18 @@ passed`;第二支應該看到 6 個 `PASS`(其中一個案例驗證「呼叫 gpg
 GPG 金鑰簽章/驗證,不是純粹的假 `gpg`)跟 `==> all gpg-verify
 test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
 `dpkg --print-architecture` 不可用而 fallback 到 `uname -m` 的對應表)
-應該看到 6 個 `PASS` 跟 `==> all detect-arch test cases passed`。
+應該看到 6 個 `PASS` 跟 `==> all detect-arch test cases passed`;
+第四、五支(第十七輪覆閱新增,專門為了你在 macOS 上執行這件事補的
+——`build-iso.sh` 原本直接用 GNU 專屬的 `sha256sum`/`md5sum`/
+`sed -i`,macOS 內建的 BSD 版本這幾個指令要不是不存在、要不是語法
+不一樣,已經改成會自動判斷環境的版本)應該分別看到 4 個跟 3 個
+`PASS`,以及 `==> all portable-checksum test cases passed`/
+`==> all portable-sed test cases passed`。
 如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用往下做,
-先確認拿到的程式碼是完整的。這三支測試也已經寫進
-`.github/workflows/ci.yml`,如果你把這個 repo 推到 GitHub,之後每次
-push/PR 都會自動跑一次,不用每次都記得手動執行。
+先確認拿到的程式碼是完整的。這五支測試也已經寫進
+`.github/workflows/ci.yml`(而且特地也在 macOS 的 GitHub Actions
+runner 上跑一次,不是只在 Linux 上跑),如果你把這個 repo 推到
+GitHub,之後每次 push/PR 都會自動跑一次,不用每次都記得手動執行。
 
 ## 步驟 3:建置 ISO
 
@@ -126,6 +192,8 @@ qemu-img create -f qcow2 gonas-test-disk.img 20G
 
 ## 步驟 5:開機測試(QEMU)
 
+### Linux
+
 ```
 qemu-system-x86_64 \
     -enable-kvm \
@@ -144,6 +212,49 @@ qemu-system-x86_64 \
 `/dev/kvm` 存不存在確認。如果沒有圖形介面的環境(例如透過 SSH 連進
 一台雲端 VM 操作),把整行最後加上 `-nographic`(改用終端機文字模式
 顯示 QEMU 的畫面),或者裝 `-vnc :1` 然後用 VNC client 連進去看。
+
+### macOS(Apple Silicon,例如 Mac mini M 系列——步驟 1 判斷過
+`uname -m` 是 `arm64` 的情況)
+
+```
+qemu-system-aarch64 \
+    -M virt \
+    -cpu host \
+    -accel hvf \
+    -m 2048 \
+    -bios "$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd" \
+    -cdrom dist/release/gonas-<version>-arm64.iso \
+    -boot d \
+    -drive file=gonas-test-disk.img,format=qcow2,if=virtio \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+    -device virtio-gpu-pci -display default,show-cursor=on
+```
+
+把 `<version>` 換成步驟 3 實際產出的檔名。`-accel hvf` 是 macOS 的
+硬體加速(相當於 Linux 的 KVM),`-cpu host` 讓虛擬 CPU 直接使用主機
+CPU 的完整特性——這個組合只在**虛擬機架構跟主機架構相同**時有效
+(arm64 虛擬機 + Apple Silicon 主機),這正是步驟 1 建議 Apple
+Silicon Mac 測 arm64 映像檔而不是 amd64 的原因。`-device
+virtio-gpu-pci -display default,show-cursor=on` 是給 QEMU 開一個
+真正的視窗顯示畫面(在 Mac 上通常不需要另外裝 X11/VNC,QEMU 自己會
+跳出一個視窗);如果你想在 Terminal 裡直接看文字輸出,把這兩個參數
+換成 `-nographic`。
+
+### macOS(Intel Mac——`uname -m` 是 `x86_64` 的情況)
+
+```
+qemu-system-x86_64 \
+    -accel hvf \
+    -m 2048 \
+    -cdrom dist/release/gonas-<version>-amd64.iso \
+    -boot d \
+    -drive file=gonas-test-disk.img,format=qcow2,if=virtio \
+    -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+```
+
+跟 Linux 版本幾乎一樣,差別只在加速參數從 `-enable-kvm` 換成
+`-accel hvf`(Intel Mac 上跑 x86_64 虛擬機,架構跟主機相同,一樣吃得
+到硬體加速)。
 
 ## 步驟 6:照順序確認安裝過程
 
@@ -237,17 +348,23 @@ ISO 的過程可能沒有正確保留這兩個檔案的 Unix 執行位元(Rock R
 回來——這會是這個 Phase 目前唯一一個「理論推導出問題、但修法本身
 也還沒被真正驗證過」的地方。
 
-## 步驟 8(可選):arm64 映像檔
+## 步驟 8(可選):另一個架構的映像檔
 
-確認 amd64 沒問題之後,如果你的目標硬體是樹莓派或其他 arm64 SBC,
-重複同樣的流程,差別在:
+**如果你是 Apple Silicon Mac,你在步驟 5 測的已經是 arm64**——這一步
+對你來說是「反過來,可選地也測一下 amd64」,順序相反但道理一樣:
+GoNAS 的建置/preseed/late-command 邏輯兩個架構完全共用,通常不需要
+兩個都測,除非你想額外確認一下(amd64 在 Apple Silicon Mac 上跑
+QEMU 的純軟體模擬,沒有 HVF 加速,建置/開機都會慢很多)。
+
+**如果你是 Linux 或 Intel Mac**,確認 amd64 沒問題之後,如果你的
+目標硬體是樹莓派或其他 arm64 SBC,重複同樣的流程,差別在:
 
 ```
 make iso-arm64
 ```
 
-以及開機指令換成 `qemu-system-aarch64`,大致像這樣(實際參數請對照
-你機器上安裝的 QEMU 版本文件微調,尤其是 UEFI 韌體檔案的路徑):
+Linux 上開機指令換成 `qemu-system-aarch64`,大致像這樣(實際參數請
+對照你機器上安裝的 QEMU 版本文件微調,尤其是 UEFI 韌體檔案的路徑):
 
 ```
 qemu-system-aarch64 \
@@ -260,14 +377,28 @@ qemu-system-aarch64 \
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0
 ```
 
+在 Intel Mac 上則是步驟 5 的 macOS 指令,但把 `-accel hvf` 拿掉
+(Intel 主機跑 arm64 虛擬機,架構不同,吃不到 HVF 加速,一樣是純
+軟體模擬)、`-cpu host` 換成 `-cpu cortex-a57`(host CPU 特性只有
+架構相同時才能直接透傳)、`-bios` 路徑照樣用
+`"$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd"`。
+
 這條路徑完全沒有在任何環境測試過(連 QEMU 帶起來的參數都只是照文件
-推測的,不保證第一次就能直接開機成功),遇到問題的機率比 amd64 高,
-把實際遇到的錯誤訊息告訴我,我可以照著修。
+推測的,不保證第一次就能直接開機成功),遇到問題的機率比另一個架構
+高,把實際遇到的錯誤訊息告訴我,我可以照著修。
 
 ## 步驟 9:全部通過之後才燒到真實硬體
 
 用 `dd`/Rufus/balenaEtcher 之類的工具把 `dist/release/gonas-<version>-
-<arch>.iso` 寫到實體 USB。插到真正要當 NAS 用的機器上開機之前:
+<arch>.iso` 寫到實體 USB。在 macOS 上用 `dd` 的話,裝置路徑跟 Linux
+不一樣(`diskutil list` 找到 USB 隨身碟對應的 `/dev/diskN`,先
+`diskutil unmountDisk /dev/diskN` 卸載、再用
+`/dev/rdiskN`——加了 `r` 的「raw disk」路徑寫入速度快很多——執行
+`sudo dd if=dist/release/gonas-<version>-<arch>.iso of=/dev/rdiskN
+bs=4m`);裝置路徑選錯會直接覆寫到錯的磁碟,務必用 `diskutil list`
+仔細確認是那支隨身碟,不是你電腦本身的硬碟。也可以省去命令列,直接
+用 balenaEtcher(有 macOS 版 GUI,選好 ISO 跟目標隨身碟,介面上會
+清楚標示,比較不容易選錯)。插到真正要當 NAS 用的機器上開機之前:
 
 - **先拔掉/斷開任何已經有資料的磁碟,只留下要裝系統的那顆全新硬碟**
   ——避免萬一分割步驟選錯磁碟,不可逆地清空正式的資料陣列。

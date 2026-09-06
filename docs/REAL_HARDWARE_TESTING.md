@@ -1309,6 +1309,134 @@ verify-gpg-signature.sh`、`test-gpg-verify.sh` 跟文件),`gofmt`/
 驗證、preseed 在真正 debian-installer 環境裡的行為),都需要使用者
 實際跑一次建置 + 安裝才會有答案。
 
+**第十七輪(使用者說「我現在回到電腦前 Mac mini」,準備開始真的建置
++ 測試):這一輪不是又換角度重新讀同一批邏輯,而是「部署環境本身
+第一次真的改變」直接暴露出一整類前 16 輪完全沒被想到過的 bug**——
+前 16 輪的靜態審查全部是在這個 Linux 開發沙盒裡進行的,`build-iso.sh`
+從頭到尾預設「建置這支 ISO 的機器是 Linux」,沒有人在任何一輪質疑過
+這個假設,直到使用者說出他實際要用來建置/測試的機器是 macOS 的
+Mac mini,才第一次有理由去檢查「這支腳本假設的 GNU coreutils 工具,
+在 macOS 內建的 BSD 工具鏈底下還能不能用」。
+
+- [x] **`sed -i` 在 macOS 上是完全不同的語法,不是單純「行為稍微不同」
+      ,是「照 Linux 寫法直接執行會出錯或做出錯的事」**:GNU sed 的
+      `-i` 可以不接任何參數(原地修改、不留備份),但 BSD sed(macOS
+      內建)的 `-i` **強制要求**緊接一個備份副檔名參數(可以是空字串
+      `''`,但那個參數位置一定要有東西)——`build-iso.sh` 跟
+      `lib/patch-boot-menu.sh` 原本全部是 `sed -i "腳本" 檔案` 這種
+      GNU 寫法,直接在 macOS 上執行,BSD sed 會把緊跟在 `-i` 後面的
+      "腳本" 字串誤當成備份副檔名,把原本要修改的內容當成"要處理的
+      檔案清單"的第一個檔名,整條指令的參數解讀全部錯位,不是單純
+      「效果一樣、語法不同」而已。修法:新增
+      `build/appliance/lib/portable-sed.sh`,提供
+      `gonas_sed_inplace()` 函式,統一用 `-i.gonas-sed-bak` 這種「兩邊
+      都合法、都是接一個非空字串當備份副檔名」的寫法呼叫 `sed`,再手動
+      `rm -f` 掉那個備份檔——這個寫法在 GNU sed 跟 BSD sed 底下行為
+      一致,不需要在呼叫端判斷作業系統。`build-iso.sh` 跟
+      `lib/patch-boot-menu.sh` 裡所有 `sed -i` 呼叫全部改用這個函式。
+- [x] **`sha256sum`/`md5sum` 這兩個指令在 stock macOS 上根本不存在**:
+      這兩個是 GNU coreutils 的東西,macOS 內建的是 `shasum -a 256`
+      (輸出格式跟 `sha256sum` 相容)跟 `md5 -r`(輸出格式跟 `md5sum`
+      相容)。`build-iso.sh` 原本在快取檢查、完整性檢查、最終校驗檔
+      產生等總共 4 個地方直接呼叫 `sha256sum`,`md5sum.txt` 產生邏輯
+      直接呼叫 `md5sum`——在沒有另外用 Homebrew 裝 coreutils 的
+      macOS 機器上,這些呼叫會直接因為指令找不到而失敗,不是得到錯的
+      結果,是整支腳本直接中斷。修法:新增
+      `build/appliance/lib/portable-checksum.sh`,提供
+      `gonas_sha256sum()`/`gonas_md5sum()`,各自先用 `command -v` 檢查
+      GNU 版工具在不在,不在的話 fallback 到 macOS 原生的
+      `shasum -a 256`/`md5 -r`,兩邊都沒有才真的報錯並清楚說明原因
+      (以及 macOS 上這兩個工具本來就內建、不需要另外安裝)。
+      `find ... -exec md5sum {} \;` 這一段額外改成
+      `find ... | while read -r f; do gonas_md5sum "$f"; done`,原因是
+      `-exec` 沒辦法直接呼叫一個 shell 函式,只能呼叫外部指令。
+- [x] **補上的兩個新函式,各自都有離線回歸測試,而且測試本身也抓到
+      一次「測試設計錯誤」**:`test-portable-sed.sh`(3 案例:基本
+      修改邏輯正確、備份檔會被清乾淨、`sed` 本身失敗時回傳值不會被
+      後面的 `rm -f` 蓋掉)、`test-portable-checksum.sh`(4 案例:GNU
+      工具存在時用 GNU 工具、GNU 工具不存在時正確 fallback)全數
+      通過。寫 `test-portable-checksum.sh` 的過程中,第一版的
+      fallback 測試案例寫錯了:原本用「在一個插到 PATH 最前面的目錄裡
+      放一個假的 `sha256sum`/`md5sum` 腳本」來模擬「這台機器沒有這個
+      工具」,這是錯的——`command -v sha256sum` 只檢查 PATH 上有沒有
+      一個叫這個名字、可執行的檔案存在,根本不會真的執行它,所以只要
+      PATH 上有任何一個叫 `sha256sum` 的檔案(不管是真的還是假的),
+      `command -v sha256sum` 就會回報「找到了」,程式碼一定會走
+      「主要工具存在」那個分支,fallback 那段邏輯實際上完全沒被跑到
+      過,不管假腳本裡面寫什麼都一樣。修法:fallback 測試案例乾脆不要
+      放假的 `sha256sum`/`md5sum`,而是把 `PATH` 整個換成只包含假
+      `shasum`/`md5` 的目錄(不含系統原本的 PATH),讓
+      `command -v sha256sum`/`command -v md5sum` 真的找不到東西、
+      真的觸發 fallback 分支——修好之後重新確認 4 個案例都通過,包含
+      fallback 案例。
+- [x] **確認過哪些腳本需要修、哪些不需要**:`late-command.sh`
+      是在 `d-i preseed/late_command` 底下、`in-target sh -c "..."`
+      進去的**真正 Debian in-target chroot 環境**裡執行的,不管使用者
+      在哪一種作業系統上建置這支 ISO,`late-command.sh` 實際跑起來的
+      環境永遠是 Linux——它自己內部的 `sed -i` 呼叫不受影響,不需要
+      改。真正需要 macOS 相容性修正的,只有「在建置這台機器本身上
+      執行」的腳本:`build-iso.sh` 本身跟它會 source 進來的
+      `lib/patch-boot-menu.sh`。搞混這兩類腳本、對不需要改的
+      `late-command.sh` 做多餘的修改,是這一輪特別注意要避免的錯誤。
+- [x] **CI 新增一個 `macos-latest` runner 的 job**:前 16 輪的
+      CI 設定(`appliance-shell` job)只在 `ubuntu-latest` 上跑,這代表
+      即使有心力寫 `lib/portable-sed.sh`/`lib/portable-checksum.sh`
+      這兩個修正,CI 本身也從來沒有機會在一台真正的 BSD sed/
+      shasum/md5 環境下驗證這兩個修正真的有效——這兩個修正本身完全有
+      可能又寫錯一次(例如又不小心在某個新加的地方直接呼叫了
+      `sed -i` 而忘記用 `gonas_sed_inplace`),過去的 CI 設定不會
+      發現。新增 `appliance-shell-macos` job,`runs-on: macos-latest`,
+      跑跟 `appliance-shell` 完全一樣的 5 支離線測試腳本,差別只在
+      執行環境——這樣任何一次修改弄壞了 macOS 相容性,CI 會直接紅燈,
+      不需要等到使用者真的在自己的 Mac 上手動跑才發現。
+
+**這一輪額外跑了一次過去沒認真做過的動作:把
+`go test ./... -race -count=1` 連續重跑了好干次(不是只跑一次),
+意外抓到一個跟 macOS 完全無關、純粹的 Go 測試程式碼 bug**:
+
+- [x] **`internal/selfupdate/selfupdate_test.go` 的
+      `TestChecker_RunsRepeatedlyAndStopsCleanly` 有一個真正的、間歇性
+      觸發的 data race,不是每次跑都會抓到**:這個測試用一個普通的
+      `var count int`(不是 `atomic.Int64`,也沒有 mutex)在 httptest
+      的 handler goroutine 裡 `count++`,同時在測試自己的 goroutine裡
+      直接讀 `count`(`if count < 2`、`after := count`、
+      `count != after`)。第十六輪雖然已經第一次完整跑過
+      `go test ./... -race -count=1` 並且回報全綠,但 race detector
+      能不能抓到一個間歇性的 race,本來就跟當下的 goroutine 排程時機
+      有關,不是「跑過一次沒事就代表沒有這個問題」——這一輪連續跑了
+      十幾次之後,其中一次真的跳出
+      `WARNING: DATA RACE`,明確指向這個 `count` 變數。雖然
+      `Checker.Stop()` 本身的實作(`cancel()` 之後 `<-c.done` 等背景
+      goroutine 真的執行完才回傳)在邏輯上確實保證了「`Stop()` 回傳之後
+      不會再有新的檢查發生」,但這只保證「不會再發新的 HTTP
+      request」,不保證 race detector 能沿著「HTTP round trip 完成」
+      這條路徑辨識出足夠強的 happens-before 關係——一個沒有任何
+      同步保護的 `int`,在兩個 goroutine 之間讀寫,即使功能上剛好每次
+      都是對的,對 race detector 來說仍然是未定義行為,而且是真的會被
+      抓到的(不是誤報)。修法:把 `count` 改成 `atomic.Int64`,讀寫
+      都走 `Add`/`Load`,不再依賴「這個測試場景下網路 round trip
+      恰好提供了足夠同步」這種脆弱的假設。修完之後連續跑
+      `go test ./internal/selfupdate/... -race -count=1` 十次以上,
+      沒有再出現過 race。
+      這個 bug 跟 macOS 沒有任何關係,純粹是因為這一輪第一次認真把
+      `-race` 反覆跑了很多次(過去頂多跑一兩次就當作驗證過了),才有
+      機會撞見這種間歇性、跟系統負載/排程時機有關的問題——提醒往後
+      「`go test -race` 過一次」不等於「這個套件裡沒有 race」,間歇性
+      的 race 需要多跑幾次才有機會撞見。
+
+這一輪修改的檔案:新增 `build/appliance/lib/portable-sed.sh`、
+`build/appliance/lib/portable-checksum.sh`、
+`build/appliance/test-portable-sed.sh`、
+`build/appliance/test-portable-checksum.sh`;修改
+`build/appliance/build-iso.sh`、`build/appliance/lib/patch-boot-menu.sh`
+`build/appliance/test-boot-menu-patch.sh`、`.github/workflows/ci.yml`、
+`docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md`(macOS 專屬的建置/測試
+步驟)、`internal/selfupdate/selfupdate_test.go`(race 修正)。
+`gofmt -l -s .`/`go vet ./...`/`go build ./...`/
+`go test ./... -race -count=1`(含針對 selfupdate 套件額外重跑十次
+確認 race 真的修好)/全部 5 支 `test-*.sh`(`sh -n` 語法檢查跟實際
+執行)全數維持全綠。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

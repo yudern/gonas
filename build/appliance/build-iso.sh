@@ -21,8 +21,12 @@
 #   ./build-iso.sh amd64 [version]
 #   ./build-iso.sh arm64 [version]
 #
-# 需要的工具（Debian/Ubuntu 上都是 `apt install xorriso wget`）：
-#   xorriso, wget（或 curl）, sha256sum
+# 需要的工具:
+#   - Debian/Ubuntu:`apt install xorriso wget`——sha256sum/md5sum
+#     隨 coreutils 本來就有,不用另外裝。
+#   - macOS(例如用 Homebrew):`brew install xorriso wget`——checksum
+#     工具改用系統內建的 shasum/md5(見 lib/portable-checksum.sh),
+#     一樣不用另外裝。
 # 需要能連上網路下載官方 netinst ISO 跟(可選)驗證 GPG 簽章。
 
 set -eu
@@ -46,6 +50,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORK_DIR="$(mktemp -d /tmp/gonas-iso-build.XXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
+# gonas_sed_inplace(見 lib/portable-sed.sh)要先於
+# lib/patch-boot-menu.sh 來源進來——那個檔案裡的
+# gonas_patch_boot_menu_file() 會呼叫這個函式,順序顛倒的話會在真正
+# 呼叫到之前都沒事,一直到執行到那一行才會出現「找不到指令」。
+. "$SCRIPT_DIR/lib/portable-sed.sh"
 # 「幫一份 isolinux/grub 開機選單設定檔插入 preseed 自動安裝參數」這段
 # 邏輯獨立成 lib/patch-boot-menu.sh,理由是這是整個 build/appliance/
 # 目錄裡少數幾段完全不需要真的連網、可以在沙盒/CI 環境裡直接拿假資料
@@ -54,6 +63,13 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 不會出現「測試跑的是一份可能跟正式邏輯不同步的複製品」這種情況。
 . "$SCRIPT_DIR/lib/patch-boot-menu.sh"
 . "$SCRIPT_DIR/lib/verify-gpg-signature.sh"
+# 第十七輪覆閱抓到的問題:這支腳本下面原本直接呼叫 `sha256sum`/
+# `md5sum`,這兩個是 GNU coreutils 工具,Linux 上到處都有,但 macOS
+# 內建的 BSD 使用者空間完全沒有——如果直接在一台 Mac 上執行這支腳本
+# (而不是在 Linux 機器/VM 上),會在第一次驗證 ISO 雜湊值時就直接
+# 「command not found」中止。`gonas_sha256sum`/`gonas_md5sum` 是修好
+# 之後的版本,理由/實作見 lib/portable-checksum.sh 開頭的說明。
+. "$SCRIPT_DIR/lib/portable-checksum.sh"
 
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
@@ -113,7 +129,7 @@ fi
 CACHE_DIR="$REPO_ROOT/dist/.cache/debian-iso"
 mkdir -p "$CACHE_DIR"
 CACHED_ISO="$CACHE_DIR/$BASE_ISO_NAME"
-if [ -f "$CACHED_ISO" ] && [ "$(sha256sum "$CACHED_ISO" | awk '{print $1}')" = "$EXPECTED_SHA256" ]; then
+if [ -f "$CACHED_ISO" ] && [ "$(gonas_sha256sum "$CACHED_ISO" | awk '{print $1}')" = "$EXPECTED_SHA256" ]; then
     echo "==> reusing cached $CACHED_ISO (checksum matches current SHA256SUMS)"
     cp "$CACHED_ISO" "$WORK_DIR/base.iso"
 else
@@ -133,7 +149,7 @@ fi
 # 被中間人竄改成惡意版本）——真正的真實性驗證是下面「2.65」那一段
 # 可選的 GPG 簽章驗證,預設不開啟(維持只做 checksum),設定
 # GONAS_DEBIAN_KEYRING 才會真的去驗證簽章,細節見那一段的說明。
-ACTUAL_SHA256="$(sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
+ACTUAL_SHA256="$(gonas_sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
 if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
     echo "error: checksum mismatch for $BASE_ISO_NAME" >&2
     echo "  expected: $EXPECTED_SHA256" >&2
@@ -229,7 +245,7 @@ fi
 
 # 通過驗證才寫進快取(或更新快取)——避免一份沒通過驗證的檔案被誤存
 # 起來,下次又被當成「快取命中」重用。
-if [ ! -f "$CACHED_ISO" ] || [ "$(sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
+if [ ! -f "$CACHED_ISO" ] || [ "$(gonas_sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
     cp "$WORK_DIR/base.iso" "$CACHED_ISO"
 fi
 
@@ -363,12 +379,23 @@ echo "==> confirmed the GoNAS preseed boot parameter was injected successfully"
 # GRUB 選單品牌化/等待時間是 late-command.sh 在目標系統裡處理的，
 # 是兩個不同的東西)。
 if [ -f "$EXTRACT_DIR/isolinux/isolinux.cfg" ]; then
-    sed -i 's/^timeout .*/timeout 50/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
+    # 用 gonas_sed_inplace(見上面的說明跟 lib/portable-sed.sh)而不是
+    # 直接 `sed -i 'script' file`——原本這裡就是那個 macOS/BSD sed
+    # 不相容問題的其中一個現場。
+    gonas_sed_inplace 's/^timeout .*/timeout 50/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
 fi
 
 # --- 6. 重新計算 checksum 清單、重新包裝 -------------------------------
 echo "==> recomputing md5sum.txt"
-( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' -exec md5sum {} \; > md5sum.txt )
+# 這裡原本是 `find ... -exec md5sum {} \;`——`-exec` 直接呼叫外部指令
+# `md5sum`,沒辦法像其他地方一樣改成呼叫 shell 函式
+# (`gonas_md5sum`,見上面 lib/portable-checksum.sh 的說明,原因同樣是
+# macOS 內建 BSD 使用者空間沒有 GNU 的 md5sum)。改成 `find | while read`
+# 逐一呼叫 gonas_md5sum,把結果導向同一份 md5sum.txt——這裡不需要迴圈
+# 內部設定的變數在迴圈結束後還讀得到(不是 build-iso.sh 前面
+# 「開機選單設定檔清單」那種情境),單純把每一行的輸出接力寫進檔案,
+# 用管線(而不是先寫檔案再讀)完全沒問題。
+( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' | while read -r f; do gonas_md5sum "$f"; done > md5sum.txt )
 
 OUT_DIR="$REPO_ROOT/dist/release"
 mkdir -p "$OUT_DIR"
@@ -394,7 +421,7 @@ xorriso -indev "$WORK_DIR/base.iso" \
         -changes_pending yes \
         -end
 
-sha256sum "$OUT_ISO" > "$OUT_ISO.sha256"
+gonas_sha256sum "$OUT_ISO" > "$OUT_ISO.sha256"
 echo "==> done: $OUT_ISO"
 echo "==> checksum: $(cat "$OUT_ISO.sha256")"
 echo

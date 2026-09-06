@@ -31,6 +31,10 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# lib/patch-boot-menu.sh 的 gonas_patch_boot_menu_file() 內部會呼叫
+# gonas_sed_inplace(見 lib/portable-sed.sh,第十七輪覆閱抓到的
+# macOS/BSD sed 相容性修正),要先來源進來。
+. "$SCRIPT_DIR/lib/portable-sed.sh"
 . "$SCRIPT_DIR/lib/patch-boot-menu.sh"
 
 TEST_WORK_DIR="$(mktemp -d /tmp/gonas-boot-menu-test.XXXXXX)"
