@@ -1621,6 +1621,36 @@ options`/... ,游標停在 `Install` 上不動)——這揭露第四個問題,�
       這一次測試的其他驗證項目。這個 timeout 修正是給「以後重新建置
       的 ISO」用的,不是這一份已經在裝的媒體能夠回頭套用的東西。
 
+**選了 `Install` 繼續之後,使用者拍照回報又跳出一個要求手動回答的
+對話框:`[!!] Configure the package manager`,內容是「The image with
+the following label has already been scanned: Debian GNU/Linux
+13.6.0 _Trixie_ - Official arm64 NETINST with firmware
+20260711-09:43. Please replace it now, if you wish to scan another.
+Scan extra installation media?」,`<Yes>` 被反白選取——這一次是真正
+的 `preseed.cfg` 邏輯錯誤,不是環境假設問題**:
+
+- [x] **根本原因**:`preseed.cfg` 裡 `d-i apt-setup/cdrom/set-first
+      boolean true` 這一行,語意剛好寫反了。這個 debconf 問題問的是
+      「用完第一份安裝媒體之後,要不要繼續問使用者要不要插入第二份
+      來掃描更多套件」,`true` 代表「要」——所以即使整份 preseed
+      已經用 `priority=high` 蓋掉大多數問題,安裝到「設定套件管理員」
+      這一步時,還是會真的跳出這個對話框要求使用者手動選 `<No>` 才能
+      繼續。這台機器從頭到尾只有一份安裝媒體(就是它自己開機用的這片
+      USB/ISO),根本沒有「第二片」這回事,這一步從來就不應該需要
+      人工介入——這是一個貨真價實的設定值寫反了的 bug,不是「這個
+      沙盒沒辦法驗證的環境假設」那一類,是所有前 17 輪讀 `preseed.cfg`
+      時都應該看得出來、卻沒有人真的意識到這個布林值方向不對的問題。
+- [x] **修法**:對照 Debian 官方 bugs.debian.org #992183(這正是
+      `installation-guide` 的 `example-preseed.txt` 官方範例檔案本身
+      缺漏這一行、導致同一個症狀的 bug 報告討論)確認正確答案是
+      `boolean false`,把這一行改成 `d-i apt-setup/cdrom/set-first
+      boolean false`。
+- [x] **這個修正同樣還沒有被使用者實際重新走一次完整安裝驗證過**:
+      目前這份已經卡在這個對話框的安裝,直接選 `<No>` 就能繼續(這台
+      機器確實沒有第二份媒體,選 `No` 是唯一正確答案),不影響這一次
+      測試的其餘驗證項目;下一次重新建置、重新安裝,才會是這個修正
+      第一次真的被走過、確認生效的機會。
+
 這一輪最值得記錄的教訓:**前 17 輪反覆討論、也在 late-command.sh/
 install.sh 上主動修過的「執行位元能不能被信任」這個原則,自己的
 `Makefile` 卻沒有同步套用**——知道一個風險類別存在,不代表已經檢查過
