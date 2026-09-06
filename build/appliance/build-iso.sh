@@ -91,16 +91,26 @@ if [ ! -f "$RELEASE_TARBALL" ]; then
 fi
 
 # --- 2. 下載官方 Debian netinst ISO ----------------------------------
-# 版本/路徑基於 Debian 目前的目錄慣例，Debian 發新的穩定版之後路徑
-# 可能改變（例如 bookworm -> trixie），請對照
-# https://www.debian.org/CD/netinst/ 確認目前的實際路徑再執行。
-DEBIAN_RELEASE="${GONAS_DEBIAN_RELEASE:-bookworm}"
+# 第十八輪覆閱(使用者實測)才真的抓到的問題:這裡以前假設
+# cdimage.debian.org 的 netinst 檔名是用「版本代號」組出來的(例如
+# `debian-bookworm-amd64-netinst.iso`),這個假設從一開始就是錯的,
+# 而且錯得很基本——這個開發沙盒完全連不到 cdimage.debian.org,前
+# 17 輪不管做多仔細的靜態審查都不可能發現。使用者實測第一次真的呼叫
+# `wget`/`awk` 去比對真正的 SHA256SUMS 內容,才第一次真正暴露:
+# `debian-cd/current/<arch>/iso-cd/` 底下的檔名實際上是用完整版本
+# 號組出來的(例如 `debian-13.6.0-arm64-netinst.iso`),不是代號,
+# 「代號」只用在 APT 的套件庫路徑(`/debian/dists/bookworm/`)這種
+# 完全不同的地方,兩者是兩套不相干的命名慣例,不能套用同一個假設。
+# 修法:不再自己組出一個「猜測的」檔名,而是先把 SHA256SUMS 抓下來,
+# 再從裡面實際找出符合 `debian-<版本號>-<arch>-netinst.iso` 這個格式
+# 的那一行,檔名跟版本號都直接來自 Debian 官方當下真正發布的內容,
+# 不管 Debian 之後從 trixie 換到下一個代號、或同一個穩定版又出新的
+# point release(12.11.0 -> 12.12.0 這種),都不需要回來改這支腳本。
 case "$ARCH" in
     amd64) DEBIAN_ARCH_DIR="amd64" ;;
     arm64) DEBIAN_ARCH_DIR="arm64" ;;
 esac
 BASE_ISO_URL="${GONAS_DEBIAN_ISO_URL:-https://cdimage.debian.org/debian-cd/current/$DEBIAN_ARCH_DIR/iso-cd}"
-BASE_ISO_NAME="debian-$DEBIAN_RELEASE-$DEBIAN_ARCH_DIR-netinst.iso"
 
 # 先抓 SHA256SUMS(每次都重新抓,不快取——這份清單很小,而且要用它來
 # 判斷「快取的 base.iso 還算不算數」,快取 SHA256SUMS 本身會讓這個判斷
@@ -111,6 +121,21 @@ if ! wget -q -O "$WORK_DIR/SHA256SUMS" "$SHA256SUMS_URL"; then
     echo "error: could not download $SHA256SUMS_URL to verify the base ISO's checksum — refusing to continue with an unverified ISO" >&2
     exit 1
 fi
+
+# 從 SHA256SUMS 實際列出的檔名裡,找符合
+# debian-<版本號,例如 13.6.0>-<arch>-netinst.iso 格式的那一行——不是
+# 事先假設好一個檔名再回頭比對。`grep -o` 在 GNU 跟 BSD(macOS 內建)
+# grep 底下都支援,不需要額外的相容性包裝。`head -n1` 是防呆:目前
+# 這個目錄底下就只會有一個 netinst 映像檔,理論上只會有一個結果,
+# 但如果 Debian 未來改變目錄結構、同時列出多個候選,寧可明確只取第一個
+# 也不要整個比對邏輯壞掉。
+BASE_ISO_NAME="$(grep -o 'debian-[0-9][0-9.]*-'"$DEBIAN_ARCH_DIR"'-netinst\.iso' "$WORK_DIR/SHA256SUMS" | head -n1)"
+if [ -z "$BASE_ISO_NAME" ]; then
+    echo "error: could not find a 'debian-<version>-$DEBIAN_ARCH_DIR-netinst.iso' entry in $SHA256SUMS_URL — Debian's directory layout or netinst filename convention may have changed; open the URL in a browser to see what's actually there" >&2
+    exit 1
+fi
+echo "==> found official netinst image: $BASE_ISO_NAME"
+
 EXPECTED_SHA256="$(awk -v name="$BASE_ISO_NAME" '$2 == name || $2 == "*"name {print $1}' "$WORK_DIR/SHA256SUMS")"
 if [ -z "$EXPECTED_SHA256" ]; then
     echo "error: $BASE_ISO_NAME not found in downloaded SHA256SUMS — refusing to continue with an unverified ISO" >&2
@@ -249,15 +274,18 @@ if [ ! -f "$CACHED_ISO" ] || [ "$(gonas_sha256sum "$CACHED_ISO" 2>/dev/null | aw
     cp "$WORK_DIR/base.iso" "$CACHED_ISO"
 fi
 
-# --- 2.7 清掉同架構、不同 Debian 版本代號的舊快取 -----------------------
+# --- 2.7 清掉同架構、不同 Debian 版本號的舊快取 -----------------------
 # 只在確認新版本快取成功寫入之後才做,清的對象限定在「同一個架構、
-# 檔名裡代號不是目前 $BASE_ISO_NAME」的檔案——例如把
-# GONAS_DEBIAN_RELEASE 從 bookworm 換成 trixie 之後,原本 bookworm 那份
-# amd64 快取永遠不會再被用到(BASE_ISO_NAME 已經換了),但也永遠不會
-# 自動消失,一直佔用磁碟空間卻沒有任何提示。故意不去動「其他架構」的
-# 快取檔案(例如建 amd64 的時候不會去動 arm64 的快取)——避免使用者
-# 分開兩次 `make iso-amd64`/`make iso-arm64` 時,這一步反而互相刪掉
-# 對方仍然有效的快取,那樣就違背了當初做這個快取機制的本意。
+# 檔名不是目前這個 $BASE_ISO_NAME」的檔案——第十八輪覆閱把 BASE_ISO_NAME
+# 改成直接從 SHA256SUMS 動態抓真正的檔名之後,這一段反而變得更常會
+# 真的用到:Debian 每次發布新的 point release(例如 12.11.0 ->
+# 12.12.0,或直接換到下一個穩定版代號),`current/` 底下的檔名都會
+# 跟著換,舊版本號的那份快取永遠不會再被用到(BASE_ISO_NAME 已經變了)
+# ,但也永遠不會自動消失,一直佔用磁碟空間卻沒有任何提示。故意不去動
+# 「其他架構」的快取檔案(例如建 amd64 的時候不會去動 arm64 的快取)
+# ——避免使用者分開兩次 `make iso-amd64`/`make iso-arm64` 時,這一步
+# 反而互相刪掉對方仍然有效的快取,那樣就違背了當初做這個快取機制的
+# 本意。
 for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-netinst.iso; do
     [ -e "$old_cached" ] || continue
     [ "$(basename "$old_cached")" = "$BASE_ISO_NAME" ] && continue

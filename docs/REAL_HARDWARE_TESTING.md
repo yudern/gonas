@@ -1437,6 +1437,109 @@ Mac mini,才第一次有理由去檢查「這支腳本假設的 GNU coreutils �
 確認 race 真的修好)/全部 5 支 `test-*.sh`(`sh -n` 語法檢查跟實際
 執行)全數維持全綠。
 
+**第十八輪(使用者在真正的 Mac mini(M4)上第一次實測建置,立刻就撞見
+一個問題):`make iso-arm64` 直接失敗
+`Permission denied`,不是程式邏輯錯,是這份原始碼透過 zip 下載、
+在 macOS 用 Finder 解壓縮之後,`build-iso.sh` 的可執行權限位元掉了**。
+
+- [x] **根本原因**:`Makefile` 的 `iso-amd64`/`iso-arm64` 這兩個
+      target 原本直接寫 `build/appliance/build-iso.sh amd64/arm64
+      $(VERSION)`,靠檔案本身的「可執行權限」位元讓 shell 找到
+      shebang 執行——這跟第十四輪修 `late-command.sh`/`install.sh` 時
+      發現、進而修正的問題,是完全同一個類別的 bug(「執行位元能不能在
+      檔案傳輸過程中被保留」不能被信任),只是這次是踩在我們自己的
+      建置工具鏈上,不是 ISO 裡打包的檔案:zip 檔案本身在這個沙盒裡
+      驗證過(用 `unzip -l -v` 跟實際解壓縮測試)確實正確保留了
+      `-rwxr-xr-x`,問題出在使用者實際的下載/解壓縮鏈路上(瀏覽器
+      下載 → macOS Finder 雙擊解壓縮)某個環節把這個位元重置掉了——
+      這是這個開發沙盒本身完全沒辦法重現、只有使用者實際走一次真正的
+      下載流程才會暴露的問題,前 17 輪不管做多仔細的靜態審查都不可能
+      找到,因為前 17 輪的「測試」全部是在同一台機器上直接跑 `sh -n`/
+      執行測試腳本,從來沒有真的模擬過「打包成 zip → 下載 →
+      解壓縮」這一整條實際交付鏈路。
+- [x] **修法**:兩個 target 都改成 `sh build/appliance/build-iso.sh
+      amd64/arm64 $(VERSION)`,用 `sh <path>` 明確呼叫、完全不依賴
+      可執行權限位元,不管 zip/tar/git 在傳輸過程中有沒有保留它都能
+      正常執行——跟 late-command.sh/install.sh 用的是同一個修法。
+      同時確認過 `build-iso.sh` 內部呼叫 `lib/*.sh` 都是用 `.`
+      (source)進來,不是直接執行,本來就不受這個位元影響,不需要
+      額外修改;`build-iso.sh` 自己會在把 `late-command.sh`/
+      `install.sh` 塞進 ISO 之前明確下 `chmod +x`,這個既有的防禦寫法
+      也確認沒問題。
+- [x] **給使用者的立即解法**(在等到修正版重新打包之前,讓他不用
+      卡住):`chmod +x build/appliance/*.sh build/appliance/lib/*.sh`
+      之後直接重跑 `make iso-arm64` 即可,不需要重新下載。
+
+沒有新增或修改任何測試腳本(這是 `Makefile` 呼叫方式的問題,不是
+被測試的邏輯本身有問題,現有的 `sh -n`/`test-*.sh` 都不會涵蓋
+「exec bit 在真實下載鏈路上會不會掉」這件事,這本質上是傳輸環境的
+問題,不是能寫成離線回歸測試的邏輯 bug)。修改
+`gofmt -l -s .`/`go vet ./...`/`go build ./...`/全部 5 支
+`test-*.sh`(`sh -n` 語法檢查跟實際執行)/`make -n iso-arm64`(dry
+run 確認新的呼叫方式語法正確)全數維持全綠。
+
+**同一輪測試,`chmod +x` 之後重跑 `make iso-arm64`,立刻撞見第二個、
+嚴重得多的問題:`build-iso.sh` 對 Debian netinst ISO 檔名的假設從
+一開始就是錯的,這個 Phase 從第一天開始就不可能真的建置成功過,
+只是這個開發沙盒完全連不上 `cdimage.debian.org`,前 17 輪不管做多
+仔細的靜態審查都不可能發現**:
+
+- [x] **症狀**:`==> fetching https://cdimage.debian.org/debian-cd/
+      current/arm64/iso-cd/SHA256SUMS` 之後,緊接著
+      `error: debian-bookworm-arm64-netinst.iso not found in
+      downloaded SHA256SUMS`——SHA256SUMS 有真的抓下來,但腳本自己
+      組出來要找的檔名,根本不在這份清單裡。
+- [x] **根本原因**:`build-iso.sh` 原本寫
+      `BASE_ISO_NAME="debian-$DEBIAN_RELEASE-$DEBIAN_ARCH_DIR-netinst.iso"`
+      ,`$DEBIAN_RELEASE` 預設是 `bookworm`,假設官方 netinst ISO
+      的檔名是用「版本代號」組出來的——這個假設從一開始就是錯的。
+      實際用 `WebFetch`/`WebSearch` 查了一個公開鏡像站
+      (mirror.arizona.edu)的目錄列表才確認:`debian-cd/current/
+      <arch>/iso-cd/` 底下真正的檔名是用**完整版本號**組的,像
+      `debian-13.6.0-arm64-netinst.iso`,不是代號——`bookworm`/
+      `trixie` 這種名字只用在 APT 套件庫的路徑(`/debian/dists/
+      bookworm/`),是完全不同的一套命名慣例,這支腳本從一開始就
+      把兩者搞混了。這也連帶說明了另一件事:現在(2026 年 9 月)
+      Debian 的目前穩定版其實已經是 13(trixie)而不是 12
+      (bookworm)——`current/` 這個路徑的內容本來就會隨官方發布新
+      穩定版自動往前推進,不會停在寫這支腳本當下的那個版本。
+      不管代號對不對,只要是用代號组檔名,這個邏輯在 `current/`
+      這個路徑底下就**從來沒有可能是對的**——這不是「環境剛好變了
+      才壞掉」,是從第一行程式碼寫下去就不成立的假設,只是需要真的
+      發一個 `wget` 請求出去、看官方伺服器實際回應什麼,才會現形,
+      前面 17 輪不管靜態審查多少次都不可能觸發到這條路徑。
+- [x] **修法**:不再自己組一個「猜測的」檔名,改成先把
+      `SHA256SUMS` 抓下來,直接用 `grep -o
+      'debian-[0-9][0-9.]*-<arch>-netinst\.iso'` 從清單裡實際找出
+      符合格式的那一行,檔名跟版本號都來自 Debian 當下真正發布的
+      內容。這樣不管 Debian 之後從 trixie 換到下一個代號、還是同一個
+      穩定版又出新的 point release(12.11.0 -> 12.12.0 這種),都
+      不需要回來改這支腳本——原本用來「選版本」的
+      `GONAS_DEBIAN_RELEASE` 環境變數因此整個拿掉,它原本想選的東西,
+      `current/` 這個路徑本來就只會有一份,沒有代號可選;真的想固定
+      用某個已經封存的舊版本,改指定 `GONAS_DEBIAN_ISO_URL` 指到
+      對應的 archive 路徑即可。同步更新了
+      `build/appliance/README.md` 三處提到 `GONAS_DEBIAN_RELEASE`
+      的說明。
+- [x] **這個修正還沒有被使用者實際重跑驗證過**:改動當下只用一份
+      手寫的假 `SHA256SUMS`(內容模仿真實格式,含一行故意設計成
+      「檔名相似但不該命中」的干擾行)在這個沙盒裡驗證過
+      `grep`/`awk` 這兩行邏輯本身抓得對,`sh -n`/五支離線測試/
+      `gofmt`/`go vet`/`go build`/`make -n iso-arm64` dry run 全部
+      維持全綠——但這個沙盒仍然連不上 `cdimage.debian.org` 本身,
+      「這次改完真的重跑 `make iso-arm64` 會不會成功抓到 ISO」還是
+      要靠使用者下一次重跑才能真正確認,是這個 Phase 目前為止
+      最需要使用者立刻回報結果的一個修正。
+
+這一輪最值得記錄的教訓:**前 17 輪反覆討論、也在 late-command.sh/
+install.sh 上主動修過的「執行位元能不能被信任」這個原則,自己的
+`Makefile` 卻沒有同步套用**——知道一個風險類別存在,不代表已經檢查過
+專案裡所有踩得到同一個坑的地方。更根本的是第二個問題:**一個從第一天
+就不成立的假設(檔名用代號組),不管靜態審查跑幾輪都發現不了,因為
+觸發它需要的是一個這個沙盒環境本身就沒有的東西——對外網路**。這正是
+「使用者實際動手測」不是形式上的最後一步、而是這整個 Phase 唯一能
+真正驗證這幾段邏輯的方式的原因。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

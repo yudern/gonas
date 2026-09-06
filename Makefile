@@ -65,12 +65,22 @@ fmt:
 ## 連線去抓官方 Debian netinst ISO，還有 xorriso/wget——這個開發沙盒
 ## 沒有這些條件，這個 target 設計成在使用者自己的機器或 CI 上執行，
 ## 見 build/appliance/README.md)。
+##
+## 用 `sh build/appliance/build-iso.sh ...` 呼叫，不是直接
+## `build/appliance/build-iso.sh ...` 靠檔案本身的可執行權限位元——
+## 第十七輪覆閱實測抓到的問題：這份原始碼透過 zip 下載、在 macOS 上
+## 用 Finder 解壓縮之後，`build-iso.sh` 的可執行權限位元掉了，
+## `make iso-arm64` 直接以 `Permission denied` 失敗，即使檔案內容
+## 完全正確也一樣。這跟第十四輪修 late-command.sh/install.sh 的
+## exec-bit 問題是同一個類別，只是這次是自己的建置工具鏈本身踩到，
+## 不是 ISO 裡的檔案——用 `sh <path>` 呼叫完全不依賴那個位元，
+## 不管 tar/zip/git 在傳輸過程中有沒有保留它都能正常執行。
 iso-amd64: release
-	build/appliance/build-iso.sh amd64 $(VERSION)
+	sh build/appliance/build-iso.sh amd64 $(VERSION)
 
 ## iso-arm64: 同上，產生 aarch64(樹莓派4/5、多數 SBC)版本的映像檔。
 iso-arm64: release
-	build/appliance/build-iso.sh arm64 $(VERSION)
+	sh build/appliance/build-iso.sh arm64 $(VERSION)
 
 ## iso: 兩個架構的映像檔都做一次。
 iso: iso-amd64 iso-arm64

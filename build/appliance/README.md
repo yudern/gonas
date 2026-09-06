@@ -102,11 +102,14 @@ build/appliance/build-iso.sh arm64 1.2.3
 `.sha256`。下載回來的官方 Debian ISO 會快取在 `dist/.cache/`(以雜湊
 值判斷是否還能重用,不是單純看檔名/時間),重複執行不用每次都重新
 下載幾百 MB;`dist/` 整個目錄已經在 `.gitignore` 裡,快取不會被誤
-commit 進版本控制。切換 `GONAS_DEBIAN_RELEASE`(例如之後 Debian 出新
-的穩定版,想從 bookworm 換成 trixie)之後,同一個架構下舊版代號的
-快取檔案會在下一次成功建置時自動被清掉,不會一直留著佔磁碟空間
-(只清「同架構、代號不是目前這個」的檔案,不會動到另一個架構的
-快取,分開跑 `make iso-amd64`/`iso-arm64` 兩次也不會互相清掉對方)。
+commit 進版本控制。實際要抓哪個檔名,是每次建置當下直接從 Debian
+官方的 `SHA256SUMS` 清單裡找出來的(見下面「已知的設計限制」一節
+第十八輪覆閱那一條的完整說明),不是寫死在腳本裡——所以不管 Debian
+之後出新的 point release(例如 12.11.0 -> 12.12.0)還是換到下一個
+穩定版代號,同一個架構下舊版本號的快取檔案都會在下一次成功建置時
+自動被清掉,不會一直留著佔磁碟空間(只清「同架構、版本號不是目前這個」
+的檔案,不會動到另一個架構的快取,分開跑 `make iso-amd64`/`iso-arm64`
+兩次也不會互相清掉對方)。
 
 **在跑真正的建置之前,建議先跑兩支快速、完全不需要網路的離線檢查**:
 
@@ -129,11 +132,15 @@ gpg 版本差異而壞掉的邏輯還是好的。
 1. 確認/建置 `dist/release/gonas-<version>-linux-<arch>.tar.gz`(沒有
    就自動跑 `make release`——這一步是純 Go 交叉編譯,在任何機器上都
    不需要網路)。
-2. 抓官方發布的 `SHA256SUMS` 清單,從 `dist/.cache/` 找有沒有雜湊值
-   還對得上的快取檔案可以直接重用;沒有的話從
+2. 抓官方發布的 `SHA256SUMS` 清單,從裡面實際找出符合
+   `debian-<版本號>-<arch>-netinst.iso` 格式的那一行(檔名跟版本號
+   都是當下從官方清單讀出來的,不是腳本自己猜或寫死的,見下面「已知
+   的設計限制」一節第十八輪覆閱那一條),從 `dist/.cache/` 找有沒有
+   雜湊值還對得上的快取檔案可以直接重用;沒有的話從
    `https://cdimage.debian.org/...` 下載官方 netinst ISO(需要網路;
-   鏡像位置可用 `GONAS_DEBIAN_ISO_URL`/`GONAS_DEBIAN_RELEASE` 環境
-   變數覆寫),下載完比對雜湊值,不一致就直接中止、不繼續往下做。
+   鏡像位置可用 `GONAS_DEBIAN_ISO_URL` 環境變數覆寫,例如想固定用某個
+   已經封存的舊版本,可以指到 `cdimage.debian.org` 底下對應的 archive
+   路徑),下載完比對雜湊值,不一致就直接中止、不繼續往下做。
 3. 用 `xorriso -osirrox` 解開原始 ISO。
 4. 把 gonasd release tarball、`preseed.cfg`、`late-command.sh`、
    `overlay/` 目錄整份塞進解開的目錄樹裡的 `gonas/` 子目錄。
@@ -272,8 +279,34 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
 
 ## 已知的設計限制/尚未做的事
 
-- 只支援 Debian(bookworm,由 `GONAS_DEBIAN_RELEASE` 環境變數決定)
-  netinst 映像,沒有做 Ubuntu Server 或其他發行版的版本。
+- 只支援 Debian netinst 映像,沒有做 Ubuntu Server 或其他發行版的
+  版本。抓的是 `debian-cd/current/` 這個永遠指向「目前最新穩定版」的
+  路徑,沒有自己選代號/版本這回事(想固定用某個已經封存的舊版本,
+  改設定 `GONAS_DEBIAN_ISO_URL` 指到對應的 archive 路徑)。
+- **`build-iso.sh` 原本假設 Debian netinst ISO 的檔名是用版本代號組
+  出來的(`debian-bookworm-<arch>-netinst.iso`),這個假設從一開始
+  就是錯的,而且是第十八輪覆閱——使用者第一次真的在自己的機器上執行
+  這支腳本——才抓到的**:這個開發沙盒完全連不上
+  `cdimage.debian.org`,前 17 輪不管做多仔細的靜態審查都沒有辦法
+  發現這個問題,因為問題本身要真的發一個 `wget` 請求出去、看官方
+  伺服器實際回應什麼東西才會現形。真正的情況是:
+  `debian-cd/current/<arch>/iso-cd/` 底下的檔名用的是完整版本號(例如
+  `debian-13.6.0-arm64-netinst.iso`),不是版本代號(`bookworm`/
+  `trixie` 這種名字只用在 APT 套件庫路徑,是完全不同的命名慣例)——
+  照原本的邏輯,不管 Debian 現在的穩定版是哪一個代號,腳本组出來的
+  檔名永遠不會出現在真正的 `SHA256SUMS` 清單裡,`make iso-amd64`/
+  `iso-arm64` 因此**從第一天開始就不可能成功執行**,只是這個開發
+  沙盒完全沒有網路去實際驗證這件事,所以一直沒有人發現。已修正:
+  不再自己組一個「猜測的」檔名,改成先把 `SHA256SUMS` 抓下來,直接
+  從裡面找出符合 `debian-<版本號>-<arch>-netinst.iso` 格式的那一行,
+  檔名跟版本號都來自 Debian 當下真正發布的內容——這樣不管 Debian
+  之後從 trixie 換到下一個代號、或同一個穩定版又出新的 point
+  release,都不需要回來改這支腳本,原本的 `GONAS_DEBIAN_RELEASE`
+  環境變數也因此整個拿掉(它原本要選的東西,`current/` 這個路徑本來
+  就只會有一份,沒有代號可選)。這個 bug 目前只在文件層面驗證過邏輯
+  (讀真正的 Debian 鏡像站目錄列表確認檔名格式),還沒有被使用者
+  實際重跑一次 `make iso-arm64` 確認修好,見
+  `docs/REAL_HARDWARE_TESTING.md` 第十八輪的記錄。
 - 安裝過程完全離線(只吃光碟/USB 媒體本身內附的套件),所以不會在
   裝機時自動安裝 mergerfs/snapraid/samba/docker.io/nfs-common/
   wireguard-tools/rsync 這些 GoNAS 的「選用」外部相依套件——開機、
