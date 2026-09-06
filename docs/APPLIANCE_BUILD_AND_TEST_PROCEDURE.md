@@ -78,9 +78,12 @@ make iso-amd64
 
 預設只做 checksum 驗證(完整性,不是真實性)。如果你想多一層 GPG
 簽章驗證,自己照 https://www.debian.org/CD/verify 官方說明匯入
-Debian 的簽章金鑰、匯出成一個 keyring 檔案,執行前設定
-`export GONAS_DEBIAN_KEYRING=/path/to/your.keyring` 就會自動多驗證
-一層,失敗直接中止(不想用這個的話什麼都不用做,行為不變)。
+Debian 的簽章金鑰,**用 `gpg --export <key-id> > my.keyring`(不要加
+`-a`/`--armor`)匯出成 binary 格式**(這是實測踩過的坑:armor 格式
+會讓 `--keyring` 報 `invalid packet`,即使金鑰本身完全正確),執行前
+設定 `export GONAS_DEBIAN_KEYRING=/path/to/my.keyring`(相對、絕對
+路徑都可以,腳本會自動轉成絕對路徑)就會自動多驗證一層,失敗直接
+中止(不想用這個的話什麼都不用做,行為不變)。
 
 過程中終端機會印出目前在做哪一步(`==> ...` 開頭的訊息)。順利的話最後
 會看到:

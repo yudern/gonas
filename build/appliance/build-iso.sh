@@ -130,12 +130,9 @@ fi
 # 怎樣」。
 #
 # 這只驗證「完整性」（下載過程沒有被截斷/損毀），不是「真實性」（沒有
-# 被中間人竄改成惡意版本）——真正的真實性驗證需要另外抓
-# SHA256SUMS.sign 用 gpg 驗證簽章，這一步需要事先匯入 Debian 的
-# 簽章金鑰才能做，這支腳本不假設執行環境已經有這把金鑰,所以只做到
-# checksum 比對這一層,並在下面印出訊息提醒使用者如果要更高的信任
-# 層級,可以自行另外做 GPG 簽章驗證(見
-# https://www.debian.org/CD/verify 的官方說明)。
+# 被中間人竄改成惡意版本）——真正的真實性驗證是下面「2.65」那一段
+# 可選的 GPG 簽章驗證,預設不開啟(維持只做 checksum),設定
+# GONAS_DEBIAN_KEYRING 才會真的去驗證簽章,細節見那一段的說明。
 ACTUAL_SHA256="$(sha256sum "$WORK_DIR/base.iso" | awk '{print $1}')"
 if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
     echo "error: checksum mismatch for $BASE_ISO_NAME" >&2
@@ -165,11 +162,27 @@ echo "    (this confirms the download is intact, not that it is authentic)"
 # 印個警告就算了),因為使用者主動選擇了「我要更高的信任層級」,失敗
 # 卻放行會比完全不做這層檢查更糟。
 #
+# 準備 keyring 檔案時務必用 `gpg --export <key-id-或名字> > my.keyring`
+# (不要加 `-a`/`--armor`)——這裡真的用一把測試用的 GPG 金鑰、一份
+# 真的簽章走過一次完整流程才發現:如果匯出成 ASCII armor 格式
+# (`gpg --export -a ... > my.keyring`,很多人的直覺會這樣做,官方
+# 文件裡常見的範例也習慣加 `-a` 方便用文字編輯器看/貼上),`--keyring`
+# 讀到這個檔案會直接報 `invalid packet`、`No public key`,即使金鑰內容
+# 本身完全正確——`--keyring` 吃的是 binary 格式,不是 armor 格式,兩者
+# 對 gpg 來說是不同的檔案格式,不是同一份資料的兩種呈現方式,不能直接
+# 混用。
+#
 # 誠實的邊界:這一段判斷邏輯本身(gonas_verify_gpg_signature,見
-# lib/verify-gpg-signature.sh)有用假的 gpg 執行檔測過控制流程對不對
-# (見 test-gpg-verify.sh),但「真的能不能用一把真正的 Debian 簽章金鑰
-# 驗證一份真正的 SHA256SUMS.sign」這件事本身,這個開發沙盒完全沒辦法
-# 連網測試,只能等使用者自己有 keyring 可以測的時候才算數。
+# lib/verify-gpg-signature.sh)不只用假的 gpg 執行檔測過控制流程(見
+# test-gpg-verify.sh),也已經在這個沙盒裡用一把真的、當場產生的測試用
+# GPG 金鑰、一份真的簽章,實際跑過一次完整的「產生金鑰 → 匯出 keyring
+# → 簽一份測試資料 → 驗證通過」跟「資料被竄改 → 驗證正確失敗」兩種
+# 情境,確認邏輯本身是對的(過程中也是這樣抓到上面「keyring 路徑要轉
+# 絕對路徑」跟「keyring 要用 binary 格式匯出」這兩個問題的)。唯一還沒
+# 驗證過的,是「用 Debian 真正的官方簽章金鑰驗證一份真正的官方
+# SHA256SUMS.sign」這件事本身,那需要連得上網路取得 Debian 的官方
+# 金鑰/簽章檔案,這個開發沙盒完全沒辦法做,需要使用者在真正建置的時候
+# 才會第一次碰到真正的 Debian 簽章資料。
 GONAS_DEBIAN_KEYRING="${GONAS_DEBIAN_KEYRING:-}"
 if [ -n "$GONAS_DEBIAN_KEYRING" ]; then
     if ! command -v gpg >/dev/null 2>&1; then
@@ -180,6 +193,20 @@ if [ -n "$GONAS_DEBIAN_KEYRING" ]; then
         echo "error: GONAS_DEBIAN_KEYRING is set to '$GONAS_DEBIAN_KEYRING' but that file does not exist — see https://www.debian.org/CD/verify for how to prepare a keyring" >&2
         exit 1
     fi
+    # 轉成絕對路徑再往下用——實際測試過確認 gpg 的 `--keyring` 對「相對
+    # 路徑」的解讀方式跟 shell 本身不一樣:在這台機器上真的執行過
+    # `gpg --no-default-keyring --keyring my.keyring --verify ...`(從
+    # 一個 my.keyring 真實存在的目錄裡執行,用相對路徑),結果 gpg
+    # 完全沒有讀到那個檔案,而是在自己的 homedir(`~/.gnupg/`)底下
+    # 建立了一個全新的空 keybox,等於憑空冒出一份跟原本準備好的 keyring
+    # 完全無關、什麼金鑰都沒有的「keyring」——上面 `[ -f ... ]` 這道
+    # 檢查是用 shell 自己的相對路徑解讀方式(相對於目前工作目錄),會
+    # 正確判斷檔案存在,但傳給 gpg 之後卻是另一個結果,兩邊「相對路徑」
+    # 指的根本不是同一個檔案,驗證因此必然失敗,而且錯誤訊息只會說
+    # 「簽章驗證失敗」,完全看不出來是路徑解讀方式不一致造成的,非常
+    # 容易誤導使用者去懷疑金鑰或簽章本身有問題。轉成絕對路徑之後,
+    # shell 跟 gpg 兩邊看到的都是同一個檔案,不會有這個落差。
+    GONAS_DEBIAN_KEYRING="$(cd "$(dirname "$GONAS_DEBIAN_KEYRING")" && pwd)/$(basename "$GONAS_DEBIAN_KEYRING")"
     SIGN_URL="$BASE_ISO_URL/SHA256SUMS.sign"
     echo "==> GONAS_DEBIAN_KEYRING is set — fetching $SIGN_URL for GPG signature verification"
     if ! wget -q -O "$WORK_DIR/SHA256SUMS.sign" "$SIGN_URL"; then

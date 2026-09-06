@@ -297,19 +297,35 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   竄改的 ISO 上繼續動作卻完全沒有任何錯誤訊息)——但這只驗證
   「完整性」,不是「真實性」(`SHA256SUMS` 本身有沒有被偽造)。第十輪
   覆閱補上了可選的 GPG 簽章驗證:自己照
-  https://www.debian.org/CD/verify 官方說明匯入 Debian 的簽章金鑰、
-  匯出成一個獨立的 keyring 檔案之後,設定環境變數
-  `GONAS_DEBIAN_KEYRING=/path/to/your.keyring` 再執行 `build-iso.sh`
-  (或 `make iso-amd64`/`iso-arm64`),就會自動多做這一層驗證,失敗直接
+  https://www.debian.org/CD/verify 官方說明匯入 Debian 的簽章金鑰,
+  **務必用 `gpg --export <key-id> > my.keyring`(不要加 `-a`/
+  `--armor`)匯出成 binary 格式**——這是實測時真的踩到的坑:如果匯出
+  成 ASCII armor 格式(很多官方文件範例習慣加 `-a` 方便用文字編輯器
+  查看),`--keyring` 讀到會直接報 `invalid packet`/`No public key`,
+  即使金鑰內容本身完全正確也一樣,armor 格式跟 `--keyring` 要的 binary
+  格式對 gpg 來說是兩種不同的檔案格式,不能直接互換。準備好 binary
+  格式的 keyring 之後,設定環境變數
+  `GONAS_DEBIAN_KEYRING=/path/to/your.keyring`(**要絕對路徑**——這裡
+  也是實測抓到的坑:`gpg --keyring` 對相對路徑的解讀方式不是相對於
+  目前的工作目錄,而是相對於 gpg 自己的 homedir,兩者常常不是同一個
+  地方;`build-iso.sh` 現在會自動把你給的路徑轉成絕對路徑,不管你給
+  的是相對還是絕對路徑都不受影響,這裡只是說明背後的原因)再執行
+  `build-iso.sh`(或 `make iso-amd64`/`iso-arm64`),就會自動多做這一層
+  驗證,失敗直接
   中止建置。**這裡刻意不是腳本自己去某個網址下載金鑰**——金鑰的取得
   管道應該獨立於這支下載腳本本身,不然信任鏈繞了一圈又繞回同一個
   下載來源,沒有真的增加安全性,所以金鑰檔案要由你自己準備好。判斷
   「gpg 說的算不算真的驗證通過」這段邏輯本身(`lib/verify-gpg-
-  signature.sh`)已經用假的 `gpg` 執行檔測過控制流程(`sh
-  build/appliance/test-gpg-verify.sh`,不需要網路),但「用一把真正的
-  Debian 簽章金鑰驗證一份真正的 `SHA256SUMS.sign`」這件事本身,這個
-  開發沙盒完全沒辦法連網測試,需要你自己有 keyring 可用時才算數驗證
-  過。不想用這一層的話什麼都不用做,預設行為(只做 checksum)不變。
+  signature.sh`)不只用假的 `gpg` 執行檔測過控制流程(`sh
+  build/appliance/test-gpg-verify.sh`,不需要網路),也已經在這個沙盒
+  裡當場產生一把真的測試用 GPG 金鑰、簽一份測試資料,實際走過一次
+  完整的「驗證通過」跟「資料被竄改後驗證正確失敗」兩種情境(過程中
+  就是這樣抓到上面「keyring 要用 binary 格式匯出」跟「路徑要轉絕對
+  路徑」這兩個問題的)。唯一還沒驗證過的,是「用 Debian 真正的官方
+  簽章金鑰驗證一份真正的官方 `SHA256SUMS.sign`」這件事本身,那需要
+  連得上網路取得 Debian 的官方金鑰/簽章檔案,這個開發沙盒完全沒辦法
+  做,需要你自己在真正建置的時候第一次碰到真正的 Debian 簽章資料。
+  不想用這一層的話什麼都不用做,預設行為(只做 checksum)不變。
 - `preseed.cfg` 裡 `d-i pkgsel/update-policy select none` 關掉的是
   「安裝過程順便設定 unattended-upgrades 自動背景更新」這個選項,不是
   真的關掉更新能力——開機之後機器有網路,手動 `apt update && apt
