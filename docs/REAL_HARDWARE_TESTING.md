@@ -1074,6 +1074,91 @@ shell 腳本跟函式庫檔案),`gofmt`/`go vet`/`go build ./...`/
 跟測試),`gofmt`/`go vet`/`go build ./...`/兩支 `test-*.sh` 全數維持
 全綠。
 
+**第十三輪(使用者要求的最後一輪覆閱,之後使用者會親自跑實際建置 +
+虛擬機測試):這一輪抓到目前整個 Phase 19 覆閱過程裡最嚴重的一個
+bug,而且是那種「靜態看程式碼完全看不出來,只有真的建置一次 ISO
+才會現形」的失敗模式**——過程是:
+
+- [x] **CI 裡一個過時的步驟說明文字**:`.github/workflows/ci.yml` 裡
+      `test-gpg-verify.sh` 那個步驟的註解還寫著「只測控制流程」,但
+      第十一輪已經幫它加了案例 4/5(真的用一把臨時金鑰簽章/驗證),
+      註解沒有跟著更新——這正是第七、第十輪都抓到過的同一類「註解
+      講的是一回事、程式碼做的是另一回事」問題,這次出現在 CI 設定檔
+      裡。已更新成準確描述目前的 5 個測試案例。
+- [x] **回頭重新讀 CI 檔案開頭那段「為什麼需要這支 CI」的說明時,
+      發現第九輪修的架構偵測 fallback,從來沒有補上對應的回歸測試**:
+      `patch-boot-menu.sh` 有 `test-boot-menu-patch.sh`、
+      `verify-gpg-signature.sh` 有 `test-gpg-verify.sh`,但第九輪把
+      `late-command.sh` 裡「`dpkg --print-architecture` 不可用時,
+      `uname -m` 的輸出要對應回 Debian 慣用架構名稱」這段邏輯修好之後,
+      邏輯本身還是直接寫死在 `late-command.sh` 裡,沒有像另外兩個
+      同類型的修正一樣抽成 `lib/*.sh` 的獨立函式、配一支
+      `test-*.sh`——導致這段邏輯少了持續的回歸保護,以後如果有人不小心
+      改回舊的錯誤對應表,不會有任何測試抓到。已抽成
+      `build/appliance/lib/detect-arch.sh`
+      (`gonas_uname_to_debian_arch()`),新增
+      `build/appliance/test-detect-arch.sh`(6 個案例:
+      `x86_64`→`amd64`、`aarch64`→`arm64`、`arm64`→`arm64`、以及三個
+      不在對應表裡、應該原樣輸出的架構名稱),並讓 `late-command.sh`
+      `.` 來源這份函式庫、呼叫 `gonas_uname_to_debian_arch` 取代原本
+      寫死的 `case` 敘述,同時把新測試加進
+      `.github/workflows/ci.yml`。
+- [x] **(這一輪最嚴重的發現)`build-iso.sh` 從來沒有把
+      `build/appliance/lib/` 目錄複製到實際建置出來的 ISO
+      上**:上一項把 `late-command.sh` 改成在執行一開始就
+      `. "$SCRIPT_DIR_FOR_LIB/lib/detect-arch.sh"` 之後,回頭檢查
+      `build-iso.sh` 究竟把哪些檔案塞進 ISO 的 `gonas/` 目錄時發現——
+      原本只複製了 `late-command.sh`、`overlay/`、`preseed.cfg` 三樣
+      東西,從來沒有複製過 `lib/` 目錄本身。這代表如果沒有這一輪額外
+      補上這個複製步驟,真正燒出來的 ISO 上會有一個「呼叫了一個不存在
+      的檔案」的 `late-command.sh`:preseed 的 `late_command` 在真正
+      裝好的系統裡透過 `in-target sh -c
+      "GONAS_INSTALL_MEDIA=/cdrom /cdrom/gonas/late-command.sh"`
+      執行它,而它的第一段可執行邏輯就是 `.` 一份
+      `/cdrom/gonas/lib/detect-arch.sh`——這個檔案根本不存在於燒出來的
+      ISO 上,在 `set -e` 之下這一行會直接讓整支腳本以錯誤結束,後面
+      「安裝 gonasd 本體」「換掉 tty1 品牌」「強制 gonasadmin 改密碼」
+      等等**全部**都不會執行到,而且因為失敗在腳本最前面,連 preseed
+      裡「失敗時把錯誤寫進 motd」那個備援機制都還來得及生效(所以症狀
+      會是:機器裝完、重開機,但完全不是 GoNAS 的樣子,只是一台裝好
+      SSH 的陽春 Debian)。**這種失敗模式只靠讀 `late-command.sh`
+      本身完全看不出問題**——它引用的路徑、語法都完全正確,問題純粹
+      出在「另一支腳本(`build-iso.sh`)有沒有把它需要的檔案一起
+      放上 ISO」這種跨檔案的對應關係,是這一整個 13 輪覆閱過程裡第一次
+      出現「兩個獨立看都對、合起來才會炸」的問題,也是目前為止後果
+      最嚴重的一個(如果沒抓到,會讓整個 Phase 19 appliance 的核心賣點
+      在真機/VM 上完全跑不出來,而且要真的裝一次系統才會發現)。已在
+      `build-iso.sh` 複製 `late-command.sh` 那幾行的正下方,補上
+      `mkdir -p "$GONAS_ON_ISO/lib"` +
+      `cp -a "$SCRIPT_DIR/lib/." "$GONAS_ON_ISO/lib/"`,並用整份
+      `cp -a` 整個目錄(而不是一個個列檔名),這樣以後 `lib/` 底下
+      再新增其他函式庫檔案,也會自動一起塞進 ISO,不用記得回來改這裡。
+      這個修正本身沒辦法在這個沙盒裡真的建一次 ISO 來驗證(網路白名單
+      擋掉 Debian 鏡像),是靠追蹤兩支腳本之間的路徑對應關係(`in-target`
+      實際執行的路徑 `/cdrom/gonas/late-command.sh`、它用
+      `dirname "$0"` 算出的 `/cdrom/gonas`、跟 `build-iso.sh` 裡
+      `GONAS_ON_ISO="$EXTRACT_DIR/gonas"` 這幾個變數手動推導、確認
+      三者最終在 ISO 上會對齊)確認邏輯正確,實際生效與否要等使用者
+      這一輪之後真的跑一次建置 + 安裝才能最終確認。
+- [x] **`docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md` 步驟 2 也同步
+      補上了 `test-detect-arch.sh`,並且順便修正了原本就已經過時的
+      案例數字說明**(第十一輪幫 `test-gpg-verify.sh` 加了案例 4/5
+      之後,這份文件步驟 2 的說明文字還停在「3 個 PASS」跟舊的
+      「control-flow test cases passed」字樣,沒有跟著更新——這是這份
+      文件自己的另一個「文件跟實際行為不同步」,雖然影響有限,趁這一輪
+      一起修掉)。
+
+沒有修改任何 `.go` 檔案(只改了 `build/appliance/` 底下的 shell 腳本、
+CI 設定跟文件),`gofmt`/`go vet`/`go build ./...`/三支 `test-*.sh`
+(含新增的 `test-detect-arch.sh`)全數維持全綠。
+
+這一輪是使用者明確要求的「最後一輪」覆閱,之後會由使用者親自在一台
+有網路的機器上跑 `docs/APPLIANCE_BUILD_AND_TEST_PROCEDURE.md` 裡的
+完整流程(真的下載 ISO、xorriso 建置、QEMU 開機安裝)——這是整個
+Phase 19 第一次會有真實執行結果,不管全部通過還是某幾步失敗,都請把
+實際看到的訊息帶回來,尤其是上面提到的 `lib/` 複製修正,理論推導再
+仔細也比不上一次真的跑過。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

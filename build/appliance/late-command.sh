@@ -35,6 +35,13 @@ GONAS_DIR="$INSTALL_MEDIA/gonas"
 
 log() { echo "[gonas-late-command] $*"; }
 
+# 「把 uname -m 的輸出對應回 Debian 慣用架構名稱」這段邏輯獨立成
+# lib/detect-arch.sh 的 gonas_uname_to_debian_arch(),原因見那個檔案
+# 開頭的說明——來源進來而不是像之前那樣直接寫死在這裡,才能讓
+# test-detect-arch.sh 跟這支正式腳本共用同一份對應表,不會不同步。
+SCRIPT_DIR_FOR_LIB="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR_FOR_LIB/lib/detect-arch.sh"
+
 # 這裡原本寫成 `dpkg --print-architecture 2>/dev/null || uname -m`——
 # 第九輪覆閱時發現這個 fallback 本身的值格式是錯的:`dpkg
 # --print-architecture` 回傳的是 Debian 的架構名稱("amd64"/"arm64"),
@@ -53,11 +60,7 @@ log() { echo "[gonas-late-command] $*"; }
 ARCH="$(dpkg --print-architecture 2>/dev/null)"
 if [ -z "$ARCH" ]; then
     UNAME_M="$(uname -m 2>/dev/null || echo unknown)"
-    case "$UNAME_M" in
-        x86_64) ARCH="amd64" ;;
-        aarch64|arm64) ARCH="arm64" ;;
-        *) ARCH="$UNAME_M" ;;
-    esac
+    ARCH="$(gonas_uname_to_debian_arch "$UNAME_M")"
     log "WARNING: 'dpkg --print-architecture' unavailable, fell back to 'uname -m' ($UNAME_M -> $ARCH) — this should not happen inside a Debian in-target chroot; if you see this warning, please report it"
 fi
 

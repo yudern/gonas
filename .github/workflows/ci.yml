@@ -69,5 +69,8 @@ jobs:
       - name: test-boot-menu-patch.sh(開機選單參數注入邏輯的離線回歸測試)
         run: sh build/appliance/test-boot-menu-patch.sh
 
-      - name: test-gpg-verify.sh(GPG 簽章驗證控制流程的離線回歸測試)
+      - name: test-gpg-verify.sh(GPG 簽章驗證邏輯的離線回歸測試——含真的用一把臨時金鑰簽章/驗證,ubuntu-latest 預裝 gpg 所以這裡不會被跳過)
         run: sh build/appliance/test-gpg-verify.sh
+
+      - name: test-detect-arch.sh(late-command.sh 架構偵測 fallback 對應表的離線回歸測試)
+        run: sh build/appliance/test-detect-arch.sh

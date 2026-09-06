@@ -43,22 +43,37 @@ Debian/Ubuntu 上也一併帶了 aarch64 版本的韌體檔案(路徑通常在
 late-command 邏輯完全共用,amd64 驗證過的東西大部分也適用於 arm64,
 差別主要在 QEMU 開機參數跟 UEFI 韌體這一層。
 
+**磁碟空間**:粗抓一下,建置一個架構的過程中同時間可能佔用到:官方
+netinst ISO 一份快取在 `dist/.cache/`(約 700MB)、同一份 ISO 的工作
+副本在系統暫存目錄(`/tmp`,同樣約 700MB)、解開後的完整目錄樹(約
+1GB)、最後包裝出來的成品 ISO 在 `dist/release/`(約 700MB)——保守
+估計建置過程中**暫時**需要 3GB 左右的可用空間才不會卡在中途(如果
+`/tmp` 跟這個 repo 所在的磁碟是同一個分割區,兩邊加起來一起算)。
+加上步驟 4 的 20GB 測試磁碟映像(那個是稀疏檔案,實際用量看安裝了
+多少東西,通常遠小於 20GB),建議至少預留 10GB 以上的可用空間再開始,
+免得建到一半才發現 `No space left on device`。
+
 ## 步驟 2:跑一次完全離線的快速自我檢查(不需要網路,幾秒鐘)
 
-在真正花時間下載幾百 MB 的官方 ISO 之前,先確認兩段最容易壞掉的邏輯
+在真正花時間下載幾百 MB 的官方 ISO 之前,先確認三段最容易壞掉的邏輯
 本身沒問題:
 
 ```
 sh build/appliance/test-boot-menu-patch.sh
 sh build/appliance/test-gpg-verify.sh
+sh build/appliance/test-detect-arch.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
-passed`;第二支應該看到 3 個 `PASS` 跟 `==> all gpg-verify
-control-flow test cases passed`。如果這裡就失敗了,代表程式碼在傳輸
-過程中被改動或損毀,不用往下做,先確認拿到的程式碼是完整的。這兩支
-測試也已經寫進 `.github/workflows/ci.yml`,如果你把這個 repo 推到
-GitHub,之後每次 push/PR 都會自動跑一次,不用每次都記得手動執行。
+passed`;第二支應該看到 5 個 `PASS`(其中第 4、5 個案例會用一把真的
+臨時 GPG 金鑰簽章/驗證,不是純粹的假 `gpg`)跟 `==> all gpg-verify
+test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
+`dpkg --print-architecture` 不可用而 fallback 到 `uname -m` 的對應表)
+應該看到 6 個 `PASS` 跟 `==> all detect-arch test cases passed`。
+如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用往下做,
+先確認拿到的程式碼是完整的。這三支測試也已經寫進
+`.github/workflows/ci.yml`,如果你把這個 repo 推到 GitHub,之後每次
+push/PR 都會自動跑一次,不用每次都記得手動執行。
 
 ## 步驟 3:建置 ISO
 

@@ -267,6 +267,19 @@ cp "$SCRIPT_DIR/late-command.sh" "$GONAS_ON_ISO/late-command.sh"
 chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh"
 cp -a "$SCRIPT_DIR/overlay/." "$GONAS_ON_ISO/overlay/"
 cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
+# late-command.sh 第十三輪覆閱之後會 `. `一份 lib/detect-arch.sh 來源
+# 檔案(理由見 late-command.sh 開頭的說明)——這裡務必把整個
+# build/appliance/lib/ 目錄也一起塞進 ISO,放在跟 late-command.sh
+# 同一層(late-command.sh 用 `dirname "$0"` 找這個目錄,兩者的相對
+# 位置要對得起來)。這是這一輪新增的一步:如果漏掉這一步,
+# late-command.sh 在真正的 in-target chroot 裡執行時,`.` 一個不存在
+# 的檔案會直接觸發 `set -e` 中止,整個 GoNAS 的安裝/品牌化流程完全
+# 不會執行——這種失敗只有真的建置一次 ISO、實際跑一次安裝流程才會
+# 現形,靜態看 late-command.sh 本身完全看不出少了這一步,務必特別
+# 小心維護 late-command.sh 跟這裡「塞了什麼檔案進 ISO」兩者的對應
+# 關係一致。
+mkdir -p "$GONAS_ON_ISO/lib"
+cp -a "$SCRIPT_DIR/lib/." "$GONAS_ON_ISO/lib/"
 
 # --- 5. 修改開機選單:自動套用 preseed、品牌化標題 ---------------------
 # 不同 Debian 版本的 isolinux/grub 選單檔案結構偶爾會變(例如選單項目
