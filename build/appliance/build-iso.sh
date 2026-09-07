@@ -523,8 +523,23 @@ fi
 # 那段一樣:不同版本的目錄結構可能不同,對著整份清單逐一嘗試,沒有
 # `set timeout=` 這一行的檔案,這條 sed 規則本來就不會有任何動作
 # (no-op),不會誤傷到其他內容。
+# 第十九輪覆閱(全面排查「除了選硬碟其餘全自動」的原始目標)強化:
+# 原本這條 sed 是 `s/^set timeout=.*/.../`,只比對「行首、沒有縮排」的
+# `set timeout=`——但不同 Debian 版本的 grub.cfg,這一行可能有縮排、
+# 也可能根本沒有 `set timeout=` 這一行(改用 theme 或預設值等待)。
+# 只要沒命中,安裝媒體就會停在 GRUB 選單畫面等使用者按 Enter,直接
+# 違背「開機不用人工介入就自動開始安裝」的目標(使用者實測就是卡在
+# 這裡)。改成:(1) 比對時容許行首空白;(2) 如果一個看起來是 grub
+# 設定檔(含 menuentry)的檔案完全沒有 `set timeout=` 行,就主動補一行
+# ——確保不管哪種格式,安裝媒體最多等 5 秒就自動開始。isolinux 的
+# txt.cfg/gtk.cfg 用的是 `label`/`menu` 語法、不含 `menuentry`,不會被
+# 這個 append 分支誤傷。
 while read -r cfgfile; do
-    gonas_sed_inplace 's/^set timeout=.*/set timeout=5/' "$cfgfile" || true
+    if grep -Eq '^[[:space:]]*set[[:space:]]+timeout=' "$cfgfile" 2>/dev/null; then
+        gonas_sed_inplace 's/^[[:space:]]*set[[:space:]]*timeout=.*/set timeout=5/' "$cfgfile" || true
+    elif grep -q 'menuentry' "$cfgfile" 2>/dev/null; then
+        printf '\nset timeout=5\n' >> "$cfgfile"
+    fi
 done < "$CFG_LIST"
 
 # --- 6. 重新計算 checksum 清單、重新包裝 -------------------------------
