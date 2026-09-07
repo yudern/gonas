@@ -432,4 +432,42 @@ else
     log "WARNING: 'chage' not available — could not force a password change on first login for gonas"
 fi
 
+# --- 5. 清掉安裝過程複製到系統上的暫存安裝媒體副本 -------------------
+# 第二十五輪覆閱(主動再查一輪,不是使用者回報)發現的問題:第二十三輪
+# 修「in-target chroot 裡看不到 /cdrom」那個 bug 時,preseed.cfg 的
+# late_command 改成把整個 /cdrom/gonas 先複製一份到
+# /target/var/lib/gonas-install/gonas,這支腳本再從那份複製好的檔案
+# 執行(見上面 INSTALL_MEDIA 的說明)——當時只顧著讓 late-command.sh
+# 找得到檔案來修好「安裝失敗」這個立即可見的症狀,沒有想到這份複製品
+# 裝完之後會永久留在目標系統的磁碟上,沒有任何一步會清掉它:裡面有
+# gonasd 執行檔(跟已經裝到 /usr/local/bin/gonasd 的那份完全重複)、
+# 離線 SSH 用的 .deb 套件(如果有打包的話)、overlay/ 目錄、以及
+# preseed.cfg 本身的副本。不是「安裝失敗」那種立即可見的症狀,是每次
+# 安裝都會多佔用一些磁碟空間、且在系統上留一份不必要的安裝期檔案的
+# 衛生問題——對一台系統碟空間可能吃緊的家用 NAS appliance 而言,不應該
+# 平白浪費,裡面那份 preseed.cfg 副本也沒有理由留著(帳號密碼是文件裡
+# 公開記載的預設值 gonas/gonas,不是新的外洩,但同樣沒有理由留著多一份)。
+#
+# 只在 INSTALL_MEDIA 還是預設值時才清——代表這次確實是 late_command
+# 自動複製出來的那份;如果使用者手動把 GONAS_INSTALL_MEDIA 指到別的
+# 路徑做除錯,通常就是刻意要保留下來事後檢查,不應該被這裡自動清掉。
+#
+# 刻意放在這支腳本真正的最後一步:這支腳本本身就是從
+# $INSTALL_MEDIA/gonas/late-command.sh 被 `sh` 讀取執行的,在 Linux 上
+# unlink 一個仍然開著讀取中的檔案是安全的(inode 在檔案描述子關閉前都
+# 還在,不會讓正在執行中的這支腳本自己中斷),但保守起見還是等後面
+# 沒有任何指令再需要讀這個目錄底下任何檔案(lib/、overlay/、release-
+# $ARCH/、debs/ 全部都已經用完)之後才刪,不提早刪。整段 best-effort,
+# 失敗只記警告、不影響安裝結果——清不掉暫存檔案不該讓整個安裝被判定
+# 為失敗。
+if [ "$INSTALL_MEDIA" = "/var/lib/gonas-install" ]; then
+    if rm -rf "$INSTALL_MEDIA" 2>/dev/null; then
+        log "cleaned up temporary install-media copy at $INSTALL_MEDIA"
+    else
+        log "WARNING: could not remove temporary install-media copy at $INSTALL_MEDIA — safe to delete manually later (contains a duplicate gonasd binary, any bundled .deb packages, and a copy of preseed.cfg)"
+    fi
+else
+    log "GONAS_INSTALL_MEDIA was overridden to a non-default path ($INSTALL_MEDIA) — leaving it in place (assuming this is a manual debugging run)"
+fi
+
 log "GoNAS appliance branding complete."

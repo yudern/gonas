@@ -2084,6 +2084,62 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   (跟第二十四輪前半的 `ARCH` 那個修法一樣,不屬於「需要使用者實機
   驗證」那一類)。
 
+**第二十五輪(使用者要求「查 繼續」,主動再查一輪,不是使用者回報新的
+失敗現象)**:
+
+- **覆閱範圍**:重新完整讀了一次 `preseed.cfg`(264 行全文)、
+  `late-command.sh`(全文)、`build-iso.sh`(全文)、`build/install.sh`、
+  `build/uninstall.sh`、`build/appliance/lib/` 底下全部 7 個檔案、
+  `build/appliance/overlay/` 底下的 `gonas-console`/
+  `gonas-console.service`/`motd`/`issue`,逐一檢查 `set -e`/`set -eu`
+  陷阱、「宣稱 best-effort 但其實沒擋住」的落差、以及環境/掛載點視角
+  假設是否正確——延續第二十四輪建立的稽核方法。
+- **抓到什麼**:第二十三輪修「in-target chroot 裡看不到 /cdrom」那個
+  真正讓 late-command.sh 失敗的 bug 時,preseed.cfg 的 `late_command`
+  改成先把整個 `/cdrom/gonas` 複製一份到
+  `/target/var/lib/gonas-install/gonas`,late-command.sh 再從那份複製
+  好的檔案執行——這個修法本身是對的（已經過使用者實機驗證,見
+  「logo 問題修好」的回報),但當時只顧著讓腳本找得到檔案,沒有想到
+  這份複製品裝完之後會**永久留在目標系統的磁碟上**,沒有任何一步會
+  清掉它:內含 gonasd 執行檔(跟已經裝到 `/usr/local/bin/gonasd` 的
+  那份完全重複)、離線 SSH 用的 `.deb` 套件(如果有打包的話)、
+  `overlay/` 目錄、以及 `preseed.cfg` 本身的副本。不是「安裝失敗」
+  那種立即可見的症狀,是每次安裝都會在系統碟上多留一份不必要的安裝期
+  檔案的衛生問題——對一台系統碟空間可能吃緊的家用 NAS appliance 而言
+  不應該平白浪費。
+- **修法**:`late-command.sh` 最後補上一個「5. 清掉安裝過程複製到系統
+  上的暫存安裝媒體副本」步驟:只在 `INSTALL_MEDIA` 還是預設值
+  `/var/lib/gonas-install`(代表這次確實是 late_command 自動複製出來
+  的那份,不是使用者手動指到別的路徑除錯用的資料)時,`rm -rf` 掉
+  整個目錄;失敗只記警告,不影響安裝結果。刻意放在腳本真正的最後一步
+  ——這支腳本本身就是從這個目錄底下被 `sh` 讀取執行的,在 Linux 上
+  unlink 一個仍在讀取中的檔案是安全的做法,但保守起見還是等後面沒有
+  任何指令再需要讀這個目錄底下任何檔案之後才刪。
+- **這一輪順手複查、確認沒有問題的項目**(值得記錄,避免以後重複
+  排查同樣的地方):`preseed.cfg` 裡刻意留白的 `partman/confirm` /
+  `partman/confirm_nooverwrite` / `partman-md/confirm`(手動確認磁碟
+  寫入)跟 `partman-auto/choose_recipe select atomic` 之間沒有互相
+  衝突,設計本來就是刻意的;`user-setup/allow-password-weak boolean
+  true` 跟 late-command.sh 第 4 節強制 `chage -d 0` 換密碼是兩個獨立
+  機制,前者只是讓 d-i 不要因為 `gonas` 密碼太弱而在安裝當下多問一次,
+  後者才是「第一次登入務必換密碼」的強制點,兩者不衝突;
+  `grub-installer/bootdev string default` 跟
+  `grub-installer/force-efi-extra-removable boolean true` 也是分別
+  處理「開機程式裝在哪顆碟」跟「要不要額外裝一份到 UEFI 可移除媒體
+  標準路徑」兩個不同問題,沒有重複或矛盾。`build-iso.sh` 裡所有
+  `VAR="$(...)"` 賦值句(`BASE_ISO_NAME`/`EXPECTED_SHA256`/
+  `ACTUAL_SHA256`/`CFG_COUNT`)以及新複查的 `install.sh`/
+  `uninstall.sh`/`lib/*.sh`/`gonas-console`,都沒有發現同類的
+  `set -e`/`set -eu` 陷阱或「宣稱 best-effort 卻沒真的擋住」的落差。
+- **驗證邊界**:`sh -n` 全部腳本、全部 `test-*.sh` 回歸測試、
+  `gofmt`/`go vet`/`go build` 都重跑一次確認沒有連帶壞掉。清理邏輯
+  本身(在 Linux 上 unlink 一個仍在讀取中的檔案是安全的)是 POSIX
+  檔案系統語意上有把握的行為,但「清完之後 late-command.sh 剩下的邏輯
+  真的不會再需要讀 `$INSTALL_MEDIA` 底下任何檔案」這件事,以及整個
+  修法在真正的 debian-installer/in-target 環境裡的效果,仍然需要使用者
+  下一次重新建置、重新安裝一次才能實機確認(這個開發沙盒沒有真正的
+  debian-installer 環境可以端對端驗證)。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |
