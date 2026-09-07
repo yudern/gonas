@@ -2191,6 +2191,53 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   重裝一次才會第一次真的跑到——但這一輪的價值是:下次不管服務有沒有
   起來,tty1 畫面自己就會說清楚是哪一層的問題,不用再靠猜。
 
+**第二十七輪(使用者實測回報「IP 通但 SSH 連不上」+ 要求「不管安裝還是
+哪裡都要換 GoNAS 品牌」+ 再次全面排查)**:
+
+- **SSH 連不上——先讓它「看得見」**:使用者回報 IP ping 得通,但 SSH
+  連不上。SSH 是離線打包(build-iso.sh 4.5 節在建置機器上抓
+  openssh-server 的 `.deb`)+ late-command.sh 1.7 節離線 `dpkg -i` 裝上去
+  的,整條路是刻意的 best-effort——「SSH 到底有沒有真的裝成功、有沒有
+  在跑」原本是使用者完全看不到、只能靠實際去連才會發現的事。跟第二十六
+  輪對 gonasd 做的一樣,這一輪把 SSH 的真實狀態直接搬上 tty1 狀態畫面:
+  用 `/usr/sbin/sshd` 這個執行檔存不存在判斷「有沒有裝」,用
+  `systemctl is-active ssh/sshd` + `ss` 檢查 port 22,畫面上明確顯示
+  「● 可用 / ● 服務運作中 / ✗ 已安裝但未運作 / — 未安裝」四種狀態,
+  未安裝時直接告訴使用者「建置時離線打包未成功,可開機後 apt install
+  openssh-server 補裝」。這樣使用者下次不用再猜 SSH 為什麼連不上——
+  畫面自己會說是「根本沒裝上」還是「裝了但沒跑」。
+- **SSH 連不上——一個真正的潛在 bug:過期密碼 + SSH 登入**:第 4 節
+  用 `chage -d 0 gonas` 把 gonas 帳號密碼標記為過期、強制第一次登入改
+  密碼。但「密碼已過期的帳號透過 SSH 登入時,能不能當場走完『輸入舊
+  密碼→設定新密碼』的對話」,取決於 sshd 有沒有開 PasswordAuthentication
+  + UsePAM + KbdInteractiveAuthentication——這三個雖然都是 Debian 的
+  預設值,但這個帳號是使用者實體接觸不到機器時唯一能遠端救援的管道,
+  不該賭「預設值不會被其他 drop-in 或未來版本改掉」。late-command.sh
+  1.7 節補上一份 `/etc/ssh/sshd_config.d/60-gonas.conf` 明確釘死這三項,
+  保證「開機後直接 SSH 用 gonas/gonas 進去、當場被要求改密碼」這個流程
+  在真機上可靠。best-effort,寫不成只記警告。
+- **品牌化擴大到安裝階段能控制的每一層**:使用者要求「不管是安裝還是
+  哪裡,都要換 GoNAS」。開機選單的品牌化涵蓋範圍從原本兩句擴大到也
+  涵蓋選單項目常見的「Debian GNU/Linux」確切字串。**刻意不做整檔盲目
+  `s/Debian/GoNAS/g`**——部分 grub.cfg 用 `search --label 'Debian ...'`
+  靠磁碟卷標找開機檔,那裡的 Debian 是功能性字串,盲目替換會讓機器
+  開不了機;只替換「確切、且只可能是顯示文字」的完整片語。新增
+  test-boot-menu-patch.sh 案例 6 同時驗證「該換的選單標題換了」跟
+  「不該動的 search --label 卷標沒被動到」兩件事。
+- **誠實邊界(寫進 build/appliance/README.md)**:能換的只有「開機選單」
+  這一層的字;真正進到 debian-installer 之後那些藍底畫面(選語言、
+  分割磁碟、安裝進度)裡的 Debian 字樣烙在安裝程式自己的 udeb 模板裡,
+  要改必須重新編譯整個 installer,風險高、維護成本大,這個專案刻意不做
+  ——跟絕大多數以 Debian 為底的 appliance 一樣:安裝過程中會短暫看到
+  Debian,裝完重開機後才全面變成 GoNAS 品牌(這一段裝完後的品牌化是
+  完整的:hostname / tty1 的 GoNAS logo / os-release / GRUB 標題)。
+- **驗證**:`sh -n` 全部腳本;全部 7 支 `test-*.sh` 重跑(含新增的品牌
+  安全案例)通過;`gofmt`/`go vet`/`go build` 全過;tty1 console 實際
+  跑一次 render 確認在沒有 systemctl/ss 的環境下也優雅降級、版面正確。
+  仍需使用者實機確認的邊界:sshd drop-in 對「過期密碼 SSH 改密碼流程」
+  的實際效果、以及 console 讀到的 systemctl/ss 真實結果,都要等下次
+  重建、重裝一次才會第一次真的在 debian-installer/systemd 環境裡跑到。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

@@ -231,6 +231,36 @@ if [ -d "$DEBS_DIR" ] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
     else
         log "WARNING: could not confirm the ssh service is enabled for boot — check with 'systemctl is-enabled ssh' after first boot"
     fi
+    # 第二十七輪(使用者實測回報「IP 通但 SSH 連不上」)補上的加固:寫一份
+    # sshd drop-in,明確保證「用密碼登入」跟「密碼過期時在 SSH 上完成強制
+    # 改密碼」這兩件事一定開著。背景:第 4 節會用 `chage -d 0 gonas` 把
+    # gonas 帳號的密碼標記為過期,強制第一次登入就要改密碼——但「密碼
+    # 已過期的帳號透過 SSH 登入時,能不能當場走完『輸入舊密碼→設定新密碼』
+    # 這個對話」,取決於 sshd 有沒有開 PasswordAuthentication + PAM +
+    # keyboard-interactive。這三個值本來就是 Debian openssh-server 的預設,
+    # 但預設值是「可能被其他 drop-in 或未來版本改掉」的東西,而這個帳號
+    # 是使用者實體接觸不到機器時、唯一能遠端進去救援的管道,值得明確釘死
+    # 一份自己的 drop-in,不賭預設值。放在 /etc/ssh/sshd_config.d/(現代
+    # openssh-server 的 sshd_config 預設有 `Include
+    # /etc/ssh/sshd_config.d/*.conf`),檔名用數字前綴讓它排在後面、蓋過
+    # 其他可能把這幾項關掉的設定。best-effort:寫不成只記警告,不中止。
+    if [ -d /etc/ssh ]; then
+        mkdir -p /etc/ssh/sshd_config.d 2>/dev/null || true
+        if cat > /etc/ssh/sshd_config.d/60-gonas.conf <<'EOF' 2>/dev/null
+# GoNAS appliance —— 確保 gonas 這組緊急備援維運帳號能用密碼透過 SSH
+# 登入,並且在第一次登入被強制改密碼(late-command.sh 的 chage -d 0)時,
+# 能在 SSH 連線上當場完成改密碼流程。這幾個值本來就是 Debian 的預設,
+# 明確寫死是為了不被未來預設值變動或其他 drop-in 蓋掉。
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+UsePAM yes
+EOF
+        then
+            log "wrote /etc/ssh/sshd_config.d/60-gonas.conf (password + forced-change login over SSH guaranteed)"
+        else
+            log "WARNING: could not write sshd drop-in — if the first SSH login with the expired 'gonas' password is rejected, log in on tty2 to change it first"
+        fi
+    fi
     # 確保 gonas 真的在 sudo 群組裡:preseed 的 user-setup 會在建立
     # 帳號時把它加進 `sudo` 群組(base-passwd 內建這個群組,所以即使
     # sudo 套件當時還沒裝,群組本身也存在、加得進去),這裡在 sudo 套件

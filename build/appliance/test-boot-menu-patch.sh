@@ -128,6 +128,32 @@ else
     FAIL=1
 fi
 
+# --- 案例 6: 擴大後的品牌化——選單項目的 "Debian GNU/Linux" 要變成
+# "GoNAS",但「用磁碟標籤找開機檔」那種功能性的 search --label 行裡的
+# "Debian" 絕對不能被動到(盲目 s/Debian/GoNAS/g 會讓機器開不了機,見
+# lib/patch-boot-menu.sh 的說明)。這個案例同時驗證「該換的換了」跟
+# 「不該動的沒動」兩件事。---
+CASE6="$TEST_WORK_DIR/case6-branding-safe.cfg"
+cat > "$CASE6" <<'EOF'
+menu title Debian GNU/Linux installer boot menu
+menuentry "Debian GNU/Linux" {
+	search --set=root --label 'Debian 13.6.0 amd64 1'
+	linux	/install.amd/vmlinuz vga=788 ---
+	initrd	/install.amd/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE6" "$APPEND_EXTRA"
+if grep -q 'menuentry "GoNAS"' "$CASE6" \
+   && grep -q 'GoNAS Installer boot menu' "$CASE6" \
+   && grep -q "label 'Debian 13.6.0 amd64 1'" "$CASE6" \
+   && ! grep -q 'label .GoNAS 13' "$CASE6"; then
+    echo "PASS: branding replaced display text but left the search --label volume label untouched"
+else
+    echo "FAIL: branding either missed the menuentry label or (dangerously) rewrote the search --label volume label. Actual content:" >&2
+    sed 's/^/    | /' "$CASE6" >&2
+    FAIL=1
+fi
+
 echo
 if [ "$FAIL" = "0" ]; then
     echo "==> all boot-menu-patch test cases passed"

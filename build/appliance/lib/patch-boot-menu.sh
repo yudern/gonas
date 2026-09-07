@@ -52,7 +52,29 @@ gonas_patch_boot_menu_file() {
         gonas_sed_inplace "s#---#$_pbm_append_extra ---#" "$_pbm_file"
     fi
 
-    # 選單標題品牌化——把看得到的 "Debian GNU/Linux installer" 字樣
-    # 換成 "GoNAS Installer",純粹是顯示文字，不影響實際安裝行為。
-    gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
+    # 選單標題/項目品牌化——把安裝媒體開機選單裡看得到的 Debian 字樣
+    # 換成 GoNAS,純粹是顯示文字,不影響實際安裝行為。第二十七輪(使用者
+    # 要求「不管是安裝還是哪裡,都要換 GoNAS logo」)把涵蓋範圍從原本只有
+    # 「Debian GNU/Linux installer」「Install Debian」兩句,擴大到也涵蓋
+    # 選單項目標題常見的「Debian GNU/Linux」這個確切字串。
+    #
+    # 刻意「不」做整檔 `s/Debian/GoNAS/g` 這種盲目全域替換——這會踩到一個
+    # 會讓機器開不了機的地雷:部分 Debian ISO 的 grub.cfg 用
+    # `search --label 'Debian 13.6.0 amd64 1'` 這類「用磁碟標籤找開機檔」
+    # 的寫法,那一行裡的 "Debian" 是真正拿去比對 ISO 卷標(volume label)
+    # 的功能性字串,不是顯示文字,一旦被換成 GoNAS,search 就會找不到那個
+    # 標籤、grub 直接進不了下一步。所以這裡只替換「確切、且只可能出現在
+    # 顯示文字裡」的完整片語:"Debian GNU/Linux" 這個帶斜線的確切字串
+    # 不會出現在卷標(卷標長得像 "Debian 13.6.0 amd64 1")或核心路徑
+    # (像 /install.amd/vmlinuz)裡,替換它是安全的。順序上「installer」
+    # 那句要排在「Debian GNU/Linux」前面,才不會先被較短的片語吃掉。
+    #
+    # 誠實邊界:這只換得動「開機選單」這一層的字。真正進到 debian-installer
+    # 之後那些藍底畫面(選語言、分割磁碟、安裝進度)裡的 "Debian" 字樣是
+    # 烙在安裝程式自己的 udeb 模板裡的,要改必須重新編譯整個安裝程式,
+    # 這個專案刻意不做(風險高、且跟絕大多數以 Debian 為底的 appliance
+    # 一樣:安裝過程中會短暫看到 Debian,裝完重開機後才全面變成 GoNAS
+    # 品牌——見 late-command.sh 第 3 節的開機後品牌化)。這個邊界在
+    # README/文件裡有說清楚。
+    gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian GNU\/Linux/Install GoNAS/g; s/Debian GNU\/Linux/GoNAS/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
 }

@@ -97,6 +97,34 @@ port_is_listening() {
     return 2
 }
 
+# ssh_installed 判斷這台機器到底有沒有裝好 SSH server——第二十七輪新增:
+# 使用者實測回報「IP 通,但 SSH 連不上」。SSH 是離線打包(build-iso.sh
+# 4.5 節在建置機器上抓 openssh-server 的 .deb)+ late-command.sh 1.7 節
+# 離線 dpkg -i 裝上去的,整條路是刻意的 best-effort(抓不到/裝不起來
+# 只記警告不中止),所以「SSH 到底有沒有真的裝成功」是一件使用者原本
+# 完全看不到、只能靠實際去連才會發現的事。用 sshd 這個執行檔存不存在
+# 判斷「有沒有裝」最可靠(openssh-server 一定會把它放在 /usr/sbin/sshd),
+# 不靠 systemd unit 名稱(ssh.service / sshd.service 兩種都可能)。
+ssh_installed() {
+    [ -x /usr/sbin/sshd ] || command -v sshd >/dev/null 2>&1
+}
+
+# get_ssh_state 回傳 SSH 服務的 systemd 狀態。Debian 的 openssh-server
+# 主要 unit 叫 ssh.service(sshd.service 是別名),兩個都問一下,拿第一個
+# 問得到有效狀態的。
+get_ssh_state() {
+    if command -v systemctl >/dev/null 2>&1; then
+        _gss=$(systemctl is-active ssh.service 2>/dev/null || true)
+        if [ "$_gss" = "active" ]; then echo active; return; fi
+        _gss2=$(systemctl is-active sshd.service 2>/dev/null || true)
+        if [ "$_gss2" = "active" ]; then echo active; return; fi
+        # 都不是 active——回報 ssh.service 的狀態當代表(inactive/failed 等)
+        echo "${_gss:-unknown}"
+    else
+        echo "unknown"
+    fi
+}
+
 render() {
     version=$(get_version)
     addr=$(get_listen_addr)
@@ -171,6 +199,27 @@ render() {
             echo "  Those show why the service did not start."
         fi
     fi
+
+    # --- SSH 狀態(遠端管理用的緊急備援管道) -------------------------
+    # 使用者實測回報「IP 通但 SSH 連不上」——這一段把 SSH 到底裝了沒、
+    # 有沒有在跑、port 22 有沒有在聽,直接秀在畫面上,不用使用者自己去猜。
+    echo ""
+    if ssh_installed; then
+        ssh_state=$(get_ssh_state)
+        if [ "$ssh_state" = "active" ] && port_is_listening 22; then
+            echo "  SSH:  ● 可用 available(帳號 user: gonas,port 22)"
+        elif [ "$ssh_state" = "active" ]; then
+            echo "  SSH:  ● 服務運作中 running(port 22 尚未就緒或無法確認)"
+        else
+            echo "  SSH:  ✗ 已安裝但未運作 installed but not running(狀態 state: ${ssh_state})"
+            echo "        切到 tty2 執行 sudo systemctl status ssh 看原因。"
+        fi
+    else
+        echo "  SSH:  — 未安裝 not installed"
+        echo "        (建置時的離線打包未成功;開機且有網路後可用"
+        echo "         sudo apt install openssh-server 補裝)"
+    fi
+
     echo ""
     echo "  ------------------------------------------------------------"
     echo "  這個畫面只顯示狀態,所有設定請在網頁介面完成。"

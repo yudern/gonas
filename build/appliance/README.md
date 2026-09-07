@@ -150,8 +150,23 @@ gpg 版本差異而壞掉的邏輯還是好的。
    按 Enter/輸入指令(用 `priority=high` 而不是更激進的
    `critical`,是為了讓 `preseed.cfg` 沒有涵蓋到、或刻意留白的
    高優先權問題——尤其是磁碟分割的最終確認——仍然有機會真的顯示
-   出來,而不是被 debconf 用預設值悄悄帶過);順便把看得到的
-   「Debian GNU/Linux installer」字樣換成「GoNAS Installer」。
+   出來,而不是被 debconf 用預設值悄悄帶過);順便把**開機選單**裡
+   看得到的 Debian 字樣(「Debian GNU/Linux installer」「Debian
+   GNU/Linux」「Install Debian」)換成 GoNAS。
+
+   > **品牌化的誠實邊界(使用者常問「為什麼安裝過程還是看到 Debian」)**:
+   > 上面這一步只換得動**開機選單**(bootloader menu)這一層的文字。
+   > 真正進到 debian-installer 之後那些藍底畫面(選語言、分割磁碟、
+   > 安裝進度條)裡的「Debian」字樣,是烙在安裝程式自己的 udeb 模板
+   > 裡的,要改必須重新編譯整個 Debian installer——風險高、維護成本大,
+   > 這個專案刻意不做,跟絕大多數以 Debian 為底的商用/開源 appliance
+   > 一樣:**安裝過程中會短暫看到 Debian,裝完重開機後才全面變成 GoNAS
+   > 品牌**(hostname、tty1 主控台的 GoNAS logo、`/etc/os-release`、
+   > GRUB 開機選單標題等,全部由 `late-command.sh` 第 3 節在裝好的
+   > 系統上換掉)。也刻意不做整檔盲目替換 `Debian`→`GoNAS`:部分
+   > grub.cfg 用 `search --label 'Debian ...'` 靠磁碟卷標找開機檔,
+   > 那裡的 Debian 是功能性字串,換掉會讓機器開不了機——只替換確切、
+   > 且只可能是顯示文字的完整片語(見 lib/patch-boot-menu.sh)。
 6. 重新計算 `md5sum.txt`,用 `xorriso -indev ... -outdev ... -map ...
    -boot_image any replay` 重新包裝成一份新的、一樣可開機的 ISO
    (沿用原始 ISO 的 El Torito/isohybrid 開機目錄結構,這是 Debian
