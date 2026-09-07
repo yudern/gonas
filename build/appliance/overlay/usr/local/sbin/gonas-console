@@ -62,12 +62,48 @@ list_ipv4_addrs() {
     fi
 }
 
+# get_service_state 回傳 gonas.service 目前的 systemd 狀態字串
+# (active/activating/failed/inactive...)。這是第二十六輪新增的:
+# 原本這個畫面只會讀網路介面、印出一個 http://IP:port 的網址,完全
+# 不管 gonasd 這個服務到底有沒有真的在跑——結果是「服務其實沒起來」
+# 跟「服務好好在跑」兩種情況畫面長得一模一樣,使用者照著畫面上的網址
+# 連卻打不開,卻無從得知是哪一層出問題(這正是使用者實測 amd64+ESXi
+# 遇到的「IP 加端口打不開頁面」那個回報的根源:畫面給了一種「一切正常」
+# 的假象)。用 `systemctl is-active` 直接問 systemd,這是最可靠、且
+# 一定裝得到的來源(systemd 本身就是 PID 1)。
+get_service_state() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl is-active gonas.service 2>/dev/null || true
+    else
+        echo "unknown"
+    fi
+}
+
+# port_is_listening 檢查 gonasd 是不是真的有在監聽它的埠——服務「狀態
+# active」但「沒真的 bind 上埠」是有可能的(例如埠被占用、剛啟動還沒
+# 綁定完成),多這一層檢查能把「服務在跑」跟「網頁真的連得上」分清楚。
+# ss 由 iproute2 提供(跟上面的 ip 同一個套件,Debian 最小安裝一定有)。
+port_is_listening() {
+    _pil_port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        # 不用 -H(某些較舊的 ss 不支援)——標題列的 "Local Address:Port"
+        # 結尾是 "Port" 這個字、不是數字,不會誤中下面這個「冒號/點 + 埠號
+        # 結尾」的比對,所以留著標題列也不影響判斷。
+        ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${_pil_port}\$"
+        return $?
+    fi
+    # 沒有 ss 就無法判斷,回傳「不確定」(用退出碼 2 跟明確的「沒在聽」
+    # 區分開),呼叫端會據此不顯示這一層的判斷,而不是誤報成故障。
+    return 2
+}
+
 render() {
     version=$(get_version)
     addr=$(get_listen_addr)
     port=$(get_port "$addr")
     hostname_val=$(hostname 2>/dev/null || echo gonas)
     now=$(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)
+    svc_state=$(get_service_state)
 
     clear
     echo ""
@@ -80,22 +116,66 @@ render() {
     echo ""
     echo "  版本 Version: ${version}          主機名稱 Host: ${hostname_val}"
     echo "  ------------------------------------------------------------"
-    echo "  請用瀏覽器連到下面的網址開始設定 GoNAS:"
-    echo "  Open one of these addresses in a browser to set up GoNAS:"
-    echo ""
-    have_addr=0
-    for ip in $(list_ipv4_addrs | sed 's/^.*IP: //'); do
-        have_addr=1
-        echo "      http://${ip}:${port}"
-    done
-    if [ "$have_addr" -eq 0 ]; then
-        echo "      (尚未偵測到網路連線 / no network connection detected yet)"
+
+    # --- 服務健康狀態 ------------------------------------------------
+    # 先把 gonasd 服務的狀態明確秀出來,而不是直接印網址讓使用者以為
+    # 一切正常。三種情況分開處理,每一種都直接告訴使用者「網頁能不能連」
+    # 以及「不能的話下一步該做什麼」。
+    if [ "$svc_state" = "active" ]; then
+        # 服務在跑,再確認埠真的綁上了(把「服務活著」跟「網頁連得上」
+        # 分清楚)。port_is_listening 回傳:0=有在聽,1=沒在聽,2=無法判斷。
+        if port_is_listening "$port"; then
+            echo "  GoNAS 服務 Service: ● 運作中 running(正在監聽埠 port ${port})"
+        else
+            _pil_rc=$?
+            if [ "$_pil_rc" = "1" ]; then
+                echo "  GoNAS 服務 Service: ⚠ 已啟動但尚未監聽埠 ${port} running but not yet listening"
+                echo "     (剛開機時可能需要幾秒;若持續如此,請見下方疑難排解)"
+            else
+                # 無法判斷(沒有 ss),就只報 systemd 的狀態,不誤報故障。
+                echo "  GoNAS 服務 Service: ● 運作中 running"
+            fi
+        fi
+        echo "  ------------------------------------------------------------"
+        echo "  請用瀏覽器連到下面的網址開始設定 GoNAS:"
+        echo "  Open one of these addresses in a browser to set up GoNAS:"
+        echo ""
+        have_addr=0
+        for ip in $(list_ipv4_addrs | sed 's/^.*IP: //'); do
+            have_addr=1
+            echo "      http://${ip}:${port}"
+        done
+        if [ "$have_addr" -eq 0 ]; then
+            echo "      (尚未偵測到網路連線 / no network detected yet — 網卡或"
+            echo "       DHCP 可能還沒就緒;畫面每 5 秒自動更新)"
+        fi
+    else
+        # 服務沒在跑——這就是「IP 加端口打不開頁面」最直接的原因。明確
+        # 標紅字級的警告,並給出不需要猜測的下一步:切到 tty2 看服務狀態。
+        echo "  GoNAS 服務 Service: ✗ 尚未運作 NOT running(狀態 state: ${svc_state:-unknown})"
+        echo "  ------------------------------------------------------------"
+        echo "  ⚠ 網頁介面現在會連不上(這就是頁面打不開的原因)。"
+        echo "  ⚠ The web UI is NOT reachable yet — this is why the page won't open."
+        echo ""
+        if [ "$svc_state" = "activating" ]; then
+            echo "  服務正在啟動中,請稍候幾秒,畫面每 5 秒會自動更新。"
+            echo "  The service is still starting up; this screen refreshes every 5s."
+        else
+            echo "  請切換到 tty2(Ctrl+Alt+F2)、用 gonas 帳號登入後執行:"
+            echo "  Switch to tty2 (Ctrl+Alt+F2), log in as 'gonas', then run:"
+            echo ""
+            echo "      sudo systemctl status gonas.service"
+            echo "      sudo journalctl -u gonas -n 50 --no-pager"
+            echo ""
+            echo "  這兩行會顯示服務為什麼沒起來。"
+            echo "  Those show why the service did not start."
+        fi
     fi
     echo ""
     echo "  ------------------------------------------------------------"
-    echo "  這個畫面只顯示連線資訊，所有設定請在網頁介面完成。"
+    echo "  這個畫面只顯示狀態,所有設定請在網頁介面完成。"
     echo "  This screen is informational only — all setup happens in the web UI."
-    echo "  需要指令列存取，請切換到 tty2(Ctrl+Alt+F2)。"
+    echo "  需要指令列存取,請切換到 tty2(Ctrl+Alt+F2)。"
     echo "  For command-line access, switch to tty2 (Ctrl+Alt+F2)."
     echo ""
     echo "  ${now}"
