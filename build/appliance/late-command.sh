@@ -65,7 +65,21 @@ SCRIPT_DIR_FOR_LIB="$(cd "$(dirname "$0")" && pwd)"
 # 修法:fallback 分支額外把 `uname -m` 的輸出對應回 Debian 的架構
 # 命名,對不上已知對應表的情況才直接使用原始值(至少不會是一個看起來
 # 對、其實是另一種命名慣例的假象)。
-ARCH="$(dpkg --print-architecture 2>/dev/null)"
+# 第二十四輪覆閱(這次是自己主動再查一輪,不是使用者回報):這一行
+# 原本沒有 `|| true`,而下面特地寫的「dpkg 不可用時 fallback 到 uname
+# -m」邏輯,其實根本不會被執行到——在 `set -e` 底下,`VAR="$(cmd)"`
+# 這種賦值句,如果 cmd 本身失敗,賦值句自己的結束碼就是 cmd 的結束碼,
+# 一樣會被 `set -e` 當成「這一行失敗了」直接中止整支腳本,不會等到
+# 下面 `if [ -z "$ARCH" ]` 才處理——實測驗證過:`set -e` 底下
+# `ARCH="$(false)"` 這一行本身就會讓腳本直接死掉,`echo "got here"`
+# 印都印不出來。等於下面整段精心設計的 fallback,只要 dpkg 這次真的
+# 不可用,反而完全沒有機會執行到,又是同一支腳本因為某個沒有涵蓋到的
+# `set -e` 陷阱,在早期步驟悄悄死掉、後面的品牌化/強制改密碼全部沒
+# 機會跑——跟前面幾輪抓到的好幾個 bug 是同一種模式。修法:command
+# substitution 裡面自己補一個 `|| true`,讓賦值句本身一定成功,真正
+# 「dpkg 失不失敗」的判斷交給下面既有的 `[ -z "$ARCH" ]` 檢查,這樣
+# 這段本來就寫好的 fallback 邏輯才真的有機會被執行到。
+ARCH="$(dpkg --print-architecture 2>/dev/null || true)"
 if [ -z "$ARCH" ]; then
     UNAME_M="$(uname -m 2>/dev/null || echo unknown)"
     ARCH="$(gonas_uname_to_debian_arch "$UNAME_M")"

@@ -2015,6 +2015,52 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   `/var/log/gonas-late-command.log`,如果這次有跑到那一步的話)內容
   帶回來。
 
+**第二十四輪(logo/品牌化確認修好之後,主動回頭再查一輪,不是使用者這次
+回報的新問題)**:
+
+- **抓到什麼**:`late-command.sh` 判斷架構那一行
+  `ARCH="$(dpkg --print-architecture 2>/dev/null)"` 沒有 `|| true`。
+  這支腳本全程 `set -e`,而緊接著下面就是特地為了「萬一 dpkg 不可用」
+  寫的 fallback(`uname -m` 對應回 Debian 架構名稱,見第九輪覆閱的
+  說明)——問題是這個 fallback 根本沒有機會被執行到:在 `set -e`
+  底下,`VAR="$(cmd)"` 這種賦值句,如果 `cmd` 本身結束碼非 0,賦值句
+  自己的結束碼就是 `cmd` 的結束碼,一樣會被 `set -e` 判定成「這一行
+  失敗了」,直接中止整支腳本,不會等到下面 `if [ -z "$ARCH" ]` 才處理。
+  寫了一段最小範例在沙盒裡實測驗證:`set -e` 底下
+  `ARCH="$(false)"; echo "got here"` 這兩行,`echo` 根本印不出來,腳本
+  已經在賦值那一行就死了。等於這支腳本裡「精心設計、還寫了一大段
+  註解說明的 fallback 邏輯」,如果 dpkg 真的哪次不可用,反而完全沒有
+  機會執行——會是又一次「陽春 Debian」症狀,而且比前面幾次更難查,
+  因為連 `[gonas-late-command]` 的第一行 log 都印不出來(腳本在
+  `log "install media: ..."` 這行印之前就已經死了)。
+- **這算不算「真的發生過的 bug」**:不算,是主動覆閱抓到的潛在風險,
+  不是這次或之前哪一輪使用者實測真的踩到的——`dpkg` 在一個正常裝好的
+  Debian in-target chroot 裡幾乎不可能不可用,目前為止的所有實測都是
+  在 dpkg 正常運作的路徑上通過的。但「幾乎不可能發生」不代表「發生了
+  也沒關係」,尤其這個 bug 一旦真的觸發,後果是整台機器變回陽春
+  Debian,診斷難度比目前修過的所有其他問題都高(log 都沒有),值得
+  現在就補起來,不用等真的遇到才修。
+- **修法**:command substitution 裡面自己加 `|| true`
+  (`dpkg --print-architecture 2>/dev/null || true`),讓賦值句本身
+  一定成功,「dpkg 到底失敗了沒」這件事交給既有的
+  `[ -z "$ARCH" ]` 檢查去判斷,這樣下面本來就寫好的 fallback 邏輯才
+  真的有機會被執行到。
+- **順手覆查的其他同類寫法**:把 `late-command.sh`/`build-iso.sh` 裡
+  所有 `VAR="$(...)"` 形式的賦值句都檢查了一遍,確認同一類陷阱有沒有
+  藏在別的地方——`late-command.sh` 裡另外兩處
+  (`UNAME_M="$(uname -m 2>/dev/null || echo unknown)"`、
+  `GONAS_CODENAME="$(. /etc/os-release 2>/dev/null; echo
+  "${VERSION_CODENAME:-}")"`)都已經用 `|| echo ...` 或 `;` 接一個
+  一定成功的指令墊底,原本就是安全的寫法;`build-iso.sh` 裡幾處
+  (`BASE_ISO_NAME`/`EXPECTED_SHA256`/`ACTUAL_SHA256`/`CFG_COUNT` 等)
+  都是管線(`| head`/`| awk`/`| tr`)結尾,POSIX 管線的結束碼看的是
+  最後一個指令,同樣安全。只有 `ARCH` 這一處是真正的漏網之魚。
+- **驗證邊界**:這是純粹的 shell 語意問題,不需要真正的
+  debian-installer 環境就能在沙盒裡百分之百驗證(上面那段最小範例
+  已經證明問題存在、修完之後同一段範例也證明修法有效),`sh -n` 跟
+  全部既有測試也重跑一次確認沒有連帶壞掉——這一項比這個 Phase 大多數
+  項目都更有把握,不屬於「需要使用者實機驗證」那一類。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
