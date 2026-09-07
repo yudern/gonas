@@ -313,3 +313,59 @@ func TestDigestConfig_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestSeedAdminIfEmpty_AddsOnlyWhenEmptyAndFlagsMustChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+
+	// 第一次:沒有任何帳號,應該真的加一組、回 true。
+	added, err := s.SeedAdminIfEmpty("gonas", "hash-placeholder")
+	if err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	if !added {
+		t.Fatalf("expected added=true on the first seed into an empty store")
+	}
+	admins := s.Snapshot().Admins
+	if len(admins) != 1 {
+		t.Fatalf("expected exactly 1 admin after seeding, got %d", len(admins))
+	}
+	if admins[0].Username != "gonas" {
+		t.Errorf("expected username gonas, got %q", admins[0].Username)
+	}
+	if admins[0].Role != RoleAdmin {
+		t.Errorf("expected seeded account to be RoleAdmin, got %q", admins[0].Role)
+	}
+	if !admins[0].MustChangePassword {
+		t.Errorf("expected seeded account to have MustChangePassword=true")
+	}
+	if admins[0].PasswordHash != "hash-placeholder" {
+		t.Errorf("expected the provided password hash to be stored verbatim")
+	}
+
+	// 第二次(冪等):已經有帳號了,應該什麼都不做、回 false,不覆蓋。
+	added2, err := s.SeedAdminIfEmpty("someone-else", "another-hash")
+	if err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	if added2 {
+		t.Fatalf("expected added=false when an admin already exists")
+	}
+	admins = s.Snapshot().Admins
+	if len(admins) != 1 || admins[0].Username != "gonas" {
+		t.Fatalf("second seed must not add or overwrite; got %+v", admins)
+	}
+
+	// 確認真的持久化了:重新打開同一個檔案,旗標還在。
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening store: %v", err)
+	}
+	reloaded := s2.Snapshot().Admins
+	if len(reloaded) != 1 || !reloaded[0].MustChangePassword {
+		t.Fatalf("expected MustChangePassword to persist across reopen, got %+v", reloaded)
+	}
+}

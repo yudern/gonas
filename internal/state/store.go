@@ -140,6 +140,17 @@ type AdminAccount struct {
 	TOTPSecret   string `json:"totpSecret,omitempty"`
 	TOTPEnabled  bool   `json:"totpEnabled"`
 	Role         string `json:"role"`
+	// MustChangePassword 為 true 時,這個帳號被要求在下一次登入後立刻
+	// 修改密碼才能做任何 admin 操作。目前唯一會把它設成 true 的地方是
+	// appliance 映像用 `gonasd -seed-default-admin` 預先建立的那組預設
+	// admin(帳密都是 gonas)——好記的預設密碼方便第一次登入,但一登入
+	// 就強制改掉,避免預設密碼一直有效。使用者透過 /auth/password 改完
+	// 密碼後,handleAuthChangePassword 會把這個旗標清成 false;
+	// requireAdmin 中介層在這個旗標為 true 時,會擋掉除了「改自己密碼」
+	// 以外的所有 admin 操作(回 403 password_change_required)。
+	// omitempty:一般帳號沒有這個旗標,序列化時不必寫出來,保持
+	// state.json 乾淨、也跟舊版檔案相容。
+	MustChangePassword bool `json:"mustChangePassword,omitempty"`
 }
 
 // 目前僅有的兩種帳號權限。RoleAdmin 是完全權限(建立/修改/刪除任何
@@ -343,6 +354,36 @@ func (s *Store) Update(fn func(*State) error) error {
 	}
 	s.data = next
 	return nil
+}
+
+// SeedAdminIfEmpty 只在「目前完全沒有任何管理帳號」時,新增一組帳號
+// (角色一律 RoleAdmin、MustChangePassword=true),並回傳 true 表示真的
+// 加了;如果已經有帳號了,什麼都不做、回傳 false —— 這讓它可以安全地
+// 重複執行(冪等),不會覆蓋掉使用者已經設好的帳號。
+//
+// passwordHash 必須是 internal/security.HashPassword 產生的編碼字串
+// (這個套件刻意不 import security,避免相依循環,也讓這個方法純粹是
+// 「狀態操作」、好測試——雜湊由呼叫端算好傳進來)。
+//
+// 這是給 appliance 映像的 `gonasd -seed-default-admin` 用的:預先建立
+// 一組好記的預設 admin(帳密都是 gonas),但標記為「必須第一次登入就
+// 改密碼」,避免預設密碼一直有效。
+func (s *Store) SeedAdminIfEmpty(username, passwordHash string) (bool, error) {
+	added := false
+	err := s.Update(func(st *State) error {
+		if len(st.Admins) > 0 {
+			return nil
+		}
+		st.Admins = append(st.Admins, AdminAccount{
+			Username:           username,
+			PasswordHash:       passwordHash,
+			Role:               RoleAdmin,
+			MustChangePassword: true,
+		})
+		added = true
+		return nil
+	})
+	return added, err
 }
 
 func (s *Store) writeLocked(data State) error {

@@ -211,11 +211,15 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
    看到標準的 `gonas login:` 提示,代表 `late-command.sh` 裡
    `systemctl disable/mask getty@tty1.service` 或
    `systemctl enable gonas-console.service` 沒有成功執行——先用
-   Ctrl+Alt+F2 切到 tty2(應該還是正常的登入提示,用 `gonasadmin` /
-   `gonas-change-me-now` 登入)進去看 `systemctl status
+   Ctrl+Alt+F2 切到 tty2(應該還是正常的登入提示,用 `gonas` /
+   `gonas` 登入)進去看 `systemctl status
    gonas-console.service` 跟 `journalctl -u gonas-console` 找原因。
 3. **瀏覽器能不能連到 Web 介面** —— 在 host 機器(或另一台虛擬機)
-   瀏覽器打開 tty1 顯示的網址,應該會看到 GoNAS 的首次設定畫面。
+   瀏覽器打開 tty1 顯示的網址,應該會看到 GoNAS 的登入畫面(第十九輪
+   起 appliance 會預先建好一組預設 admin `gonas`/`gonas`,所以是登入
+   畫面而不是「首次建立帳號」畫面;用 gonas/gonas 登入後會被強制先改
+   密碼——見 cmd/gonasd 的 `-seed-default-admin` 與 late-command.sh
+   1.8 節)。
    建議額外測一次「開機當下沒有網路」的情境(QEMU 的話開機時先不接
    `-netdev`,或實體機先不插網路線):tty1 應該要**立刻**顯示畫面
    (內容是「尚未偵測到網路連線」),而不是空白畫面等半天——如果是
@@ -434,11 +438,11 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   安全更新機制。如果你的使用情境需要自動安全更新,開機、機器連上
   網路之後自己 `apt install unattended-upgrades` 並依 Debian 官方文件
   設定即可,跟軟體版安裝路徑上的既有 Debian 機器完全一樣的做法。
-- `gonasadmin` 這組 Unix 帳號的預設密碼寫死在 `preseed.cfg` 裡
-  (`gonas-change-me-now`),純粹是給「緊急 SSH/主控台除錯」用的
+- `gonas` 這組 Unix 帳號的預設密碼寫死在 `preseed.cfg` 裡
+  (`gonas`),純粹是給「緊急 SSH/主控台除錯」用的
   備援管道,跟 GoNAS 自己的 Web 介面帳號系統完全無關(見
   `internal/state.AdminAccount`)。`late-command.sh` 會用
-  `chage -d 0 gonasadmin` 把這組密碼標記成已過期,第一次登入(不管是
+  `chage -d 0 gonas` 把這組密碼標記成已過期,第一次登入(不管是
   SSH 還是 tty2)都會被強制要求先設一組新密碼才能拿到 shell——這一步
   是重新覆閱時額外補上的,不是只在文件裡提醒使用者自己記得改,但這個
   強制機制本身也還沒有實際驗證過(需要確認 SSH 客戶端在互動式連線下

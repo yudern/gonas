@@ -311,16 +311,21 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
    驗證了第七輪覆閱修的 GRUB 逾時設定(不應該卡在 GRUB 選單畫面)跟
    之前幾輪修的 tty1 主控台排序問題。畫面上應該看到版本號、主機名稱、
    跟一個或多個 `http://<ip>:8291` 的網址。
-2. 在 host 機器的瀏覽器打開畫面上顯示的網址,應該看到 GoNAS 的首次
-   設定畫面。**這一步在 VM 測試時無所謂,但真機正式使用時務必注意**:
-   這個階段走的是純 HTTP,而且誰先連進去設定誰就拿到管理者帳號,建議
-   正式機器第一次開機設定時,接在一個只有自己/信任的人能連進來的
-   網路上(直接一條網路線接筆電,或隔離的 VLAN),見
-   `build/appliance/README.md`「安全性提醒:第一次開機後,誰先連到
-   誰先贏」一節的完整說明。
+2. 在 host 機器的瀏覽器打開畫面上顯示的網址,應該看到 GoNAS 的**登入
+   畫面**(不是「首次建立帳號」畫面——第十九輪起 appliance 會預先建好
+   一組預設 admin)。用帳號 `gonas` / 密碼 `gonas` 登入,登入後應該
+   **立刻被強制要求修改密碼**才能進到主畫面(這是預設密碼只有第一次
+   有效的機制,伺服器端 requireAdmin 也會擋住所有 admin 操作直到改完,
+   見 internal/api)。改完密碼就會進到 GoNAS 主控台。
+   **這一步在 VM 測試時無所謂,但真機正式使用時務必注意**:這個階段
+   在你開啟 HTTPS 之前走的是純 HTTP,而且預設密碼是眾所周知的 gonas,
+   建議正式機器第一次開機設定時,接在一個只有自己/信任的人能連進來的
+   網路上(直接一條網路線接筆電,或隔離的 VLAN),盡快登入改掉預設
+   密碼、開啟 HTTPS,再接回一般網路,見 `build/appliance/README.md`
+   「安全性提醒:第一次開機後,誰先連到誰先贏」一節的完整說明。
 3. 切到 tty2(QEMU 視窗裡按 `Ctrl+Alt+F2`,或用
    `qemu-system-x86_64` 的 monitor 送對應按鍵),應該看到正常的
-   `gonas login:` 提示——用 `gonasadmin` / `gonas-change-me-now`
+   `gonas login:` 提示——用 `gonas` / `gonas`
    登入,應該會被要求立刻設定一組新密碼才能拿到 shell(這是第五輪
    覆閱加的強制機制,務必實際測一次,是目前風險評估最高、最需要
    確認的一項)。
@@ -338,9 +343,9 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
    - `systemctl is-enabled ssh`:應該是 `enabled`(第十九輪「模式一:
      離線 SSH」新增——openssh-server 是在建置 ISO 時預先打包進去、
      安裝時離線 `dpkg -i` 上去的,不需要安裝過程連網)。接著從你的
-     Mac 用 `ssh gonasadmin@<這台機器的IP>` 應該連得進來。
-   - `sudo -v` 或 `sudo id`:gonasadmin 應該能用 sudo(sudo 這個套件
-     同樣是離線打包安裝的,gonasadmin 也已經被加進 sudo 群組)。
+     Mac 用 `ssh gonas@<這台機器的IP>` 應該連得進來。
+   - `sudo -v` 或 `sudo id`:gonas 應該能用 sudo(sudo 這個套件
+     同樣是離線打包安裝的,gonas 也已經被加進 sudo 群組)。
 5. 重開機一次(`sudo reboot`),確認 tty1 的狀態畫面在下一次開機一樣
    會自動出現,不需要每次都手動介入。
 6. 額外測「開機當下沒有網路」的情境:把 QEMU 指令裡的
@@ -351,7 +356,7 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
 以上六項全部通過,代表 Phase 19 這條路徑的核心功能都如預期運作。
 
 **額外特別留意這一項(第十四輪新加,目前風險評估最高)**:如果第 3
-項(`gonasadmin` 登入強制改密碼)或步驟 6 這裡的
+項(`gonas` 登入強制改密碼)或步驟 6 這裡的
 `/usr/local/share/gonas/uninstall.sh` 檢查失敗、或整台機器開機後
 根本不是 GoNAS 的樣子(看起來像一台單純裝了 SSH 的陽春 Debian)——
 先檢查 `journalctl -b -1` 或 `/etc/motd` 裡有沒有

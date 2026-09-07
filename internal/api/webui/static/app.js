@@ -112,8 +112,12 @@ async function boot() {
   }
 
   try {
-    await api.me();
-    showApp();
+    const me = await api.me();
+    if (me && me.mustChangePassword) {
+      showForcedPasswordChange();
+    } else {
+      showApp();
+    }
   } catch {
     showLoginGate();
   }
@@ -164,7 +168,48 @@ function showLoginGate() {
     const f = new FormData(ev.target);
     const box = authGateContent.querySelector("#login-msg");
     try {
-      await api.authLogin(f.get("username").trim(), f.get("password"), f.get("totpCode").trim());
+      const me = await api.authLogin(f.get("username").trim(), f.get("password"), f.get("totpCode").trim());
+      if (me && me.mustChangePassword) {
+        showForcedPasswordChange();
+      } else {
+        showApp();
+      }
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+// showForcedPasswordChange 是「預設 admin(gonas/gonas)第一次登入」時
+// 強制先改密碼的畫面——伺服器端的 requireAdmin 也會擋掉所有 admin 操作
+// 直到密碼改掉(見 internal/api),所以這個畫面不是唯一防線,但它讓
+// 使用者有一個清楚、擋不過去的地方去改掉預設密碼,而不是進到主畫面卻
+// 到處點了都 403。改成功之後直接 showApp()。
+function showForcedPasswordChange() {
+  showingApp = false;
+  shell.hidden = true;
+  authGate.hidden = false;
+  authGateContent.innerHTML = `
+    <h1>${esc(t("auth.forcedChangeTitle"))}</h1>
+    <p class="page-subtitle">${esc(t("auth.forcedChangeIntro"))}</p>
+    <div id="forced-change-msg"></div>
+    <form class="stacked" id="forced-change-form">
+      <div class="field"><label>${esc(t("security.oldPassword"))}</label><input type="password" name="oldPassword" autocomplete="current-password" required></div>
+      <div class="field"><label>${esc(t("security.newPassword"))}</label><input type="password" name="newPassword" minlength="8" autocomplete="new-password" required></div>
+      <div class="field"><label>${esc(t("security.confirmNewPassword"))}</label><input type="password" name="confirm" minlength="8" autocomplete="new-password" required></div>
+      <div class="btn-row"><button type="submit">${esc(t("auth.forcedChangeBtn"))}</button></div>
+    </form>
+  `;
+  authGateContent.querySelector("#forced-change-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const box = authGateContent.querySelector("#forced-change-msg");
+    if (f.get("newPassword") !== f.get("confirm")) {
+      box.innerHTML = msg("error", t("security.newPasswordMismatch"));
+      return;
+    }
+    try {
+      await api.changePassword(f.get("oldPassword"), f.get("newPassword"));
       showApp();
     } catch (err) {
       box.innerHTML = msg("error", err.message);

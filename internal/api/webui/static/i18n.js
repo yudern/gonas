@@ -50,6 +50,9 @@ const dict = {
       setupBtn: "建立管理者帳號",
       passwordMismatch: "兩次輸入的密碼不一致。",
       roleAdmin: "管理者", roleViewer: "檢視者(唯讀)",
+      forcedChangeTitle: "請先修改預設密碼",
+      forcedChangeIntro: "這是預設管理帳號(gonas),為了安全,第一次登入必須設定一組新密碼才能繼續。",
+      forcedChangeBtn: "修改密碼並繼續",
     },
     dashboard: {
       title: "儀表板",
@@ -356,6 +359,9 @@ const dict = {
       setupBtn: "创建管理员账号",
       passwordMismatch: "两次输入的密码不一致。",
       roleAdmin: "管理员", roleViewer: "查看者(只读)",
+      forcedChangeTitle: "请先修改默认密码",
+      forcedChangeIntro: "这是默认管理账号(gonas),为了安全,第一次登录必须设置一组新密码才能继续。",
+      forcedChangeBtn: "修改密码并继续",
     },
     dashboard: {
       title: "仪表盘",
@@ -662,6 +668,9 @@ const dict = {
       setupBtn: "Create administrator account",
       passwordMismatch: "The two passwords you entered do not match.",
       roleAdmin: "Admin", roleViewer: "Viewer (read-only)",
+      forcedChangeTitle: "Change the default password first",
+      forcedChangeIntro: "This is the default admin account (gonas). For security, you must set a new password on first login before continuing.",
+      forcedChangeBtn: "Change password and continue",
     },
     dashboard: {
       title: "Dashboard",

@@ -294,3 +294,92 @@ func TestHandleAuthChangePassword_ViewerCanChangeOwnPassword(t *testing.T) {
 func contextWithSession(r *http.Request, sess security.Session) context.Context {
 	return context.WithValue(r.Context(), sessionContextKey, sess)
 }
+
+// seedMustChangeAdmin 直接寫進一組 MustChangePassword=true 的預設 admin
+// (模擬 appliance 的 gonasd -seed-default-admin 建出來的帳號),回傳一個
+// 已登入的 session cookie。
+func seedMustChangeAdmin(t *testing.T, s *Server, username, password string) *http.Cookie {
+	t.Helper()
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		t.Fatalf("hashing password: %v", err)
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		st.Admins = append(st.Admins, state.AdminAccount{
+			Username: username, PasswordHash: hash, Role: state.RoleAdmin, MustChangePassword: true,
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("seeding must-change admin: %v", err)
+	}
+	sess, err := s.sessions.Create(username)
+	if err != nil {
+		t.Fatalf("creating session: %v", err)
+	}
+	return &http.Cookie{Name: sessionCookieName, Value: sess.Token}
+}
+
+// 預設 admin(gonas/gonas,MustChangePassword=true)在改掉密碼之前,
+// requireAdmin 的端點應該一律回 403;/auth/me 應該回報 mustChangePassword;
+// 走一次 /auth/password 改掉密碼之後,旗標清掉、requireAdmin 端點放行。
+func TestMustChangePassword_BlocksAdminUntilChanged(t *testing.T) {
+	s := newAuthTestServer(t)
+	cookie := seedMustChangeAdmin(t, s, "gonas", "gonas")
+
+	// /auth/me 應該回報 mustChangePassword=true
+	reqMe := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	reqMe.AddCookie(cookie)
+	recMe := httptest.NewRecorder()
+	s.requireAuth(s.handleAuthMe)(recMe, reqMe)
+	if recMe.Code != http.StatusOK {
+		t.Fatalf("me: expected 200, got %d", recMe.Code)
+	}
+	var me meResponse
+	if err := json.Unmarshal(recMe.Body.Bytes(), &me); err != nil {
+		t.Fatalf("decoding me: %v", err)
+	}
+	if !me.MustChangePassword {
+		t.Fatalf("expected /auth/me to report mustChangePassword=true")
+	}
+
+	// requireAdmin 端點在改密碼前應該被擋 (403)
+	protected := s.requireAdmin(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	reqBlocked := httptest.NewRequest(http.MethodPost, "/api/v1/storage/array/start", nil)
+	reqBlocked.AddCookie(cookie)
+	recBlocked := httptest.NewRecorder()
+	protected(recBlocked, reqBlocked)
+	if recBlocked.Code != http.StatusForbidden {
+		t.Fatalf("expected admin endpoint to be blocked (403) before password change, got %d", recBlocked.Code)
+	}
+
+	// 改密碼 (走 requireAuth 的 /auth/password,永遠開著)
+	reqChange := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password",
+		jsonBody(t, changePasswordRequest{OldPassword: "gonas", NewPassword: "a-brand-new-strong-password"}))
+	reqChange.AddCookie(cookie)
+	recChange := httptest.NewRecorder()
+	s.requireAuth(s.handleAuthChangePassword)(recChange, reqChange)
+	if recChange.Code != http.StatusOK {
+		t.Fatalf("change password: expected 200, got %d: %s", recChange.Code, recChange.Body.String())
+	}
+
+	// 旗標應已清掉
+	admins := s.store.Snapshot().Admins
+	if len(admins) != 1 || admins[0].MustChangePassword {
+		t.Fatalf("expected MustChangePassword to be cleared after change, got %+v", admins)
+	}
+
+	// 改完之後 requireAdmin 端點應該放行 —— 用改密碼後新核發的 session
+	// (handleAuthChangePassword 會 RevokeAllForUser 再核發一個新的,舊
+	// cookie 已失效,所以這裡直接建一個新 session 代表改完密碼的登入態)。
+	newSess, err := s.sessions.Create("gonas")
+	if err != nil {
+		t.Fatalf("creating post-change session: %v", err)
+	}
+	reqAfter := httptest.NewRequest(http.MethodPost, "/api/v1/storage/array/start", nil)
+	reqAfter.AddCookie(&http.Cookie{Name: sessionCookieName, Value: newSess.Token})
+	recAfter := httptest.NewRecorder()
+	protected(recAfter, reqAfter)
+	if recAfter.Code != http.StatusNoContent {
+		t.Fatalf("expected admin endpoint to pass after password change, got %d: %s", recAfter.Code, recAfter.Body.String())
+	}
+}

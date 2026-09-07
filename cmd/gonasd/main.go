@@ -19,9 +19,47 @@ import (
 	"github.com/bng147/gonas/internal/api"
 	"github.com/bng147/gonas/internal/config"
 	"github.com/bng147/gonas/internal/doctor"
+	"github.com/bng147/gonas/internal/security"
 	"github.com/bng147/gonas/internal/selfupdate"
+	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/version"
 )
+
+// defaultAdminUsername / defaultAdminPassword 是 appliance 預設 Web 管理
+// 帳號的帳密——兩個都是 gonas(使用者要求的好記預設值),但透過
+// SeedAdminIfEmpty 建立時會標記 MustChangePassword,第一次登入就會被
+// 強制改掉,所以這組明文預設密碼只有第一次登入前有效。
+const (
+	defaultAdminUsername = "gonas"
+	defaultAdminPassword = "gonas"
+)
+
+// runSeedDefaultAdmin 實作 -seed-default-admin:確保 dataDir 存在、打開
+// state.json、在還沒有任何管理帳號時建立預設 admin(帳密皆 gonas,強制
+// 第一次改密碼)。冪等——已經有帳號就只印一行說明、不動任何東西。
+func runSeedDefaultAdmin(dataDir string) error {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("creating data dir %q: %w", dataDir, err)
+	}
+	store, err := state.Open(dataDir + "/state.json")
+	if err != nil {
+		return fmt.Errorf("opening state store: %w", err)
+	}
+	hash, err := security.HashPassword(defaultAdminPassword)
+	if err != nil {
+		return fmt.Errorf("hashing default admin password: %w", err)
+	}
+	added, err := store.SeedAdminIfEmpty(defaultAdminUsername, hash)
+	if err != nil {
+		return fmt.Errorf("seeding default admin: %w", err)
+	}
+	if added {
+		fmt.Printf("seeded default web admin account %q (must change password on first login)\n", defaultAdminUsername)
+	} else {
+		fmt.Println("a web admin account already exists — leaving it untouched")
+	}
+	return nil
+}
 
 func main() {
 	// -check-deps 跟 -version 都是「印完東西就結束,不啟動 daemon」的
@@ -31,6 +69,14 @@ func main() {
 	// 用的,不用啟動整個 daemon 再呼叫 /api/v1/version。
 	checkDeps := flag.Bool("check-deps", false, "檢查選用的外部工具(mergerfs、snapraid、samba、nfs、wireguard-tools、rsync 等)是否已安裝,不啟動 daemon")
 	showVersion := flag.Bool("version", false, "印出版本資訊,不啟動 daemon")
+	// -seed-default-admin 給 appliance 映像的 late-command.sh 用:在「還
+	// 完全沒有任何 Web 管理帳號」時,預先建立一組好記的預設 admin
+	// (帳密都是 gonas),並標記為「第一次登入必須改密碼」——這樣使用者
+	// 開機後可以直接用 gonas/gonas 登入 Web 介面,而不是先走一次「首次
+	// 設定建立帳號」流程,但預設密碼一登入就會被強制改掉,不會一直有效。
+	// 冪等:已經有帳號了就什麼都不做,不會覆蓋使用者設好的帳號。印完就
+	// 結束,不啟動 daemon。
+	seedDefaultAdmin := flag.Bool("seed-default-admin", false, "若尚未有任何 Web 管理帳號,建立預設 admin(帳密皆為 gonas,強制第一次登入改密碼),不啟動 daemon")
 	flag.Parse()
 
 	if *showVersion {
@@ -39,6 +85,13 @@ func main() {
 	}
 	if *checkDeps {
 		doctor.Report(os.Stdout, doctor.Run())
+		return
+	}
+	if *seedDefaultAdmin {
+		if err := runSeedDefaultAdmin(config.Load().DataDir); err != nil {
+			fmt.Fprintf(os.Stderr, "seed-default-admin: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 

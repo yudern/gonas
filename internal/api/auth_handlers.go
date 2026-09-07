@@ -72,6 +72,18 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// 第十九輪:如果這個帳號被標記為「必須先改密碼」(appliance 預設
+		// admin gonas/gonas 第一次登入的情況),擋掉所有 admin 操作,回一個
+		// 前端認得的 403——使用者只能先去 /auth/password(那支走的是
+		// requireAuth,不經過這裡,所以永遠開著)把預設密碼改掉,改完
+		// handleAuthChangePassword 會清掉旗標,這道封鎖就自動解除。這是
+		// 伺服器端的硬性強制,就算有人繞過前端直接打 API 也一樣擋得住,
+		// 不是只靠前端畫面擋。
+		if account.MustChangePassword {
+			writeError(w, http.StatusForbidden, errPasswordChangeRequired)
+			return
+		}
+
 		// Phase 18b:稽核紀錄。只記錄會改動系統狀態的請求(HTTP 方法不是
 		// GET)——requireAdmin 底下少數幾支 GET 端點(例如
 		// GET /api/v1/auth/accounts)是查詢,不是「動作」,見
@@ -315,7 +327,7 @@ func (s *Server) loginSession(w http.ResponseWriter, r *http.Request, username s
 	}
 	setSessionCookie(w, r, sess.Token, sess.ExpiresAt)
 	account, _ := findAdmin(s.store.Snapshot().Admins, username)
-	writeJSON(w, http.StatusOK, meResponse{Username: username, TOTPEnabled: account.TOTPEnabled, Role: account.Role})
+	writeJSON(w, http.StatusOK, meResponse{Username: username, TOTPEnabled: account.TOTPEnabled, Role: account.Role, MustChangePassword: account.MustChangePassword})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
@@ -334,12 +346,17 @@ type meResponse struct {
 	// 的 requireAdmin 中介層才是真正的權限邊界,這裡純粹是為了不要讓
 	// RoleViewer 的使用者在介面上看到一堆點了也只會得到 403 的按鈕。
 	Role string `json:"role"`
+	// MustChangePassword 為 true 時,前端會強制先跳到「修改密碼」畫面、
+	// 擋住其他所有操作,直到使用者把預設密碼改掉為止(伺服器端的
+	// requireAdmin 也會同步擋掉除了改密碼以外的 admin 操作,見該中介層)。
+	// 目前只有 appliance 預設 admin(gonas/gonas)第一次登入會是 true。
+	MustChangePassword bool `json:"mustChangePassword"`
 }
 
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	sess, _ := r.Context().Value(sessionContextKey).(security.Session)
 	account, _ := findAdmin(s.store.Snapshot().Admins, sess.Username)
-	writeJSON(w, http.StatusOK, meResponse{Username: sess.Username, TOTPEnabled: account.TOTPEnabled, Role: account.Role})
+	writeJSON(w, http.StatusOK, meResponse{Username: sess.Username, TOTPEnabled: account.TOTPEnabled, Role: account.Role, MustChangePassword: account.MustChangePassword})
 }
 
 type changePasswordRequest struct {
@@ -391,6 +408,9 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 			return errAdminNotConfigured
 		}
 		st.Admins[i].PasswordHash = newHash
+		// 改完密碼就清掉「必須改密碼」旗標——這是預設 admin(gonas/gonas)
+		// 走完強制改密碼流程之後,解除 requireAdmin 封鎖的唯一途徑。
+		st.Admins[i].MustChangePassword = false
 		return nil
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)

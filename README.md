@@ -1492,7 +1492,7 @@ API/UI 功能**
   同步。底層架構全部放在新增的 `build/appliance/` 目錄:
   - `preseed.cfg`:Debian Installer 的自動應答檔(依官方 Installation
     Guide 附錄 B 撰寫),自動化語系/網路(DHCP)/套件來源(只用媒體
-    本身,不連網)/時區/建立 `gonasadmin` 這組緊急維運用 sudo 帳號
+    本身,不連網)/時區/建立 `gonas` 這組緊急維運用 sudo 帳號
     (跟 GoNAS 自己的 Web 介面帳號系統完全獨立,見
     `internal/state.AdminAccount`)——磁碟分割唯獨保留了最後一道
     「真的要清空這顆碟嗎」的確認畫面,不預先自動確認,因為 NAS 機器

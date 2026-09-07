@@ -365,7 +365,7 @@ else
     # 得起來)。都可以用環境變數覆寫。
     DEB_MIRROR="${GONAS_DEBIAN_PKG_MIRROR:-https://deb.debian.org/debian}"
     DEB_SUITE="${GONAS_DEBIAN_SUITE:-stable}"
-    # 預設打包 openssh-server(遠端管理)跟 sudo(gonasadmin 被加進
+    # 預設打包 openssh-server(遠端管理)跟 sudo(gonas 帳號被加進
     # sudo 群組,但 sudo 這個指令本身也不在 netinst 光碟裡,一樣要
     # 離線打包才能用)。可用環境變數覆寫成別的清單。
     SEED_PACKAGES="${GONAS_APPLIANCE_SEED_PACKAGES:-openssh-server sudo}"

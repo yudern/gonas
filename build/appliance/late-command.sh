@@ -17,7 +17,7 @@
 #      提示，這是使用者選的「開機後精簡狀態畫面」路線。
 #   3. 品牌化：主機名稱、/etc/motd、/etc/issue、/etc/os-release 的
 #      PRETTY_NAME、GRUB 開機選單標題。
-#   4. 強制 gonasadmin 這組緊急備援帳號的預設密碼在第一次登入時就要
+#   4. 強制 gonas 這組緊急備援帳號的預設密碼在第一次登入時就要
 #      被換掉，而不是只在文件裡提醒使用者自己記得改。
 #
 # 重要：這支腳本目前完全沒有在真正的 Debian 安裝程式環境裡執行過
@@ -212,15 +212,36 @@ if [ -d "$DEBS_DIR" ] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
     else
         log "WARNING: could not confirm the ssh service is enabled for boot — check with 'systemctl is-enabled ssh' after first boot"
     fi
-    # 確保 gonasadmin 真的在 sudo 群組裡:preseed 的 user-setup 會在建立
+    # 確保 gonas 真的在 sudo 群組裡:preseed 的 user-setup 會在建立
     # 帳號時把它加進 `sudo` 群組(base-passwd 內建這個群組,所以即使
     # sudo 套件當時還沒裝,群組本身也存在、加得進去),這裡在 sudo 套件
     # 離線裝好之後再 `usermod -aG` 補一次確保,冪等、失敗也不影響。
     if command -v usermod >/dev/null 2>&1; then
-        usermod -aG sudo gonasadmin 2>/dev/null || true
+        usermod -aG sudo gonas 2>/dev/null || true
     fi
 else
     log "no bundled offline packages found under $DEBS_DIR — this image was built without offline package bundling (SSH server will not be preinstalled; install it later with network access via 'apt install openssh-server')"
+fi
+
+# --- 1.8. 預先建立 Web 介面的預設 admin 帳號(gonas/gonas)----------------
+# 第十九輪:使用者要求 Web 超級管理員也有一組好記的預設帳密 gonas/gonas。
+# gonasd 的 `-seed-default-admin` 會在「還完全沒有任何 Web 管理帳號」時
+# 建立一組 admin(帳密皆 gonas),並標記為「第一次登入必須改密碼」——
+# 這樣開機後可以直接用 gonas/gonas 登入 Web 介面,不用先走一次首次設定
+# 建立帳號流程,但預設密碼一登入就會被強制改掉(見 cmd/gonasd 的
+# -seed-default-admin 與 internal/api requireAdmin 的強制邏輯)。冪等:
+# 已經有帳號就不動它。best-effort——失敗只記警告,不中止整支腳本
+# (Web 帳號使用者也可以開機後自己在瀏覽器首次設定,不是核心開機功能)。
+# 明確帶 GONAS_DATA_DIR=/var/lib/gonas,跟 gonas.service 用的資料目錄
+# 一致,確保 seed 寫進的 state.json 就是 daemon 開機後會讀的那一份。
+if command -v gonasd >/dev/null 2>&1; then
+    if GONAS_DATA_DIR=/var/lib/gonas gonasd -seed-default-admin >/dev/null 2>&1; then
+        log "seeded default web admin (gonas/gonas, must change password on first login)"
+    else
+        log "WARNING: 'gonasd -seed-default-admin' failed — no preset web admin; you can still create one via the web UI first-run setup on first boot"
+    fi
+else
+    log "WARNING: gonasd not on PATH — could not seed default web admin"
 fi
 
 # --- 2. tty1 狀態主控台 -------------------------------------------
@@ -370,9 +391,9 @@ else
     log "WARNING: could not detect VERSION_CODENAME from /etc/os-release — left apt sources as-is; 'apt install' may not work until you configure a network mirror manually"
 fi
 
-# --- 4. 強制第一次登入就要換掉 gonasadmin 的預設密碼 -----------------
-# preseed.cfg 裡 `gonasadmin` 帳號的密碼是寫死的明文佔位密碼
-# (`gonas-change-me-now`),原本只在文件裡提醒「正式使用前務必自己
+# --- 4. 強制第一次登入就要換掉 gonas 的預設密碼 -----------------
+# preseed.cfg 裡 `gonas` 帳號的密碼是寫死的明文預設值(也是 `gonas`),
+# 原本只在文件裡提醒「正式使用前務必自己
 # 改掉」,但機器一開機、只要接上網路,這組密碼透過 SSH 就是立刻
 # 可以被嘗試的——「文件提醒」跟「技術上強制」是兩回事,重新覆閱時
 # 覺得這裡值得做得更確實一點,而且做法完全沒有副作用:用
@@ -383,13 +404,13 @@ fi
 # 第一次登入,只是把「换掉预设密码」從一個使用者可能忘記做的提醒,
 # 變成一個做不到就進不去 shell 的強制步驟。
 if command -v chage >/dev/null 2>&1; then
-    if chage -d 0 gonasadmin 2>/dev/null; then
-        log "gonasadmin password marked as expired — first login will require setting a new password"
+    if chage -d 0 gonas 2>/dev/null; then
+        log "gonas password marked as expired — first login will require setting a new password"
     else
-        log "WARNING: 'chage -d 0 gonasadmin' failed — the default placeholder password will NOT be forced to change on first login, change it manually as soon as possible"
+        log "WARNING: 'chage -d 0 gonas' failed — the default placeholder password will NOT be forced to change on first login, change it manually as soon as possible"
     fi
 else
-    log "WARNING: 'chage' not available — could not force a password change on first login for gonasadmin"
+    log "WARNING: 'chage' not available — could not force a password change on first login for gonas"
 fi
 
 log "GoNAS appliance branding complete."

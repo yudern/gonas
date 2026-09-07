@@ -1794,6 +1794,53 @@ install.sh 內部那一行——而且那一行剛好是整條安裝鏈的第一
 衝突再多輪程式碼審查也審不出來,只有真的把整條路走到底(裝完、發現
 SSH 不在)才會逼出來。
 
+**第二十輪(使用者要求:預設帳密都設成 gonas,系統帳號跟 Web 超級
+管理員都是,且第一次登入強制改密碼;另外確認開機會有 GoNAS logo +
+網路資訊)**:
+
+- [x] **系統帳號(OS 登入)**:preseed 的維運帳號從 `gonasadmin` /
+      `gonas-change-me-now` 改成帳號 `gonas`、密碼 `gonas`;強制第一次
+      改密碼的機制(late-command.sh 的 `chage -d 0`)保留,所以 gonas
+      這組預設密碼只有第一次登入前有效。全專案(preseed、late-command、
+      README、程序文件)所有 `gonasadmin`/`gonas-change-me-now` 的
+      功能性引用都一併更新(只留 preseed 一處明確的「從 gonasadmin 改成
+      gonas」歷史說明註解)。
+- [x] **Web 超級管理員(admin)**:原本 Web 介面是「第一個連進來的人
+      自己建立 admin 帳號」,沒有預設帳密。新增一整套「預設 admin +
+      強制改密碼」:
+      - `internal/state.AdminAccount` 加 `MustChangePassword` 旗標;
+        `Store.SeedAdminIfEmpty()`(冪等,只在完全沒帳號時建一組
+        role=admin、MustChangePassword=true 的帳號,雜湊由呼叫端算好
+        傳入,避免 state 相依 security)。
+      - `cmd/gonasd` 新增 `-seed-default-admin`:沒有任何 Web 帳號時
+        建立 admin 帳密皆 `gonas`、標記強制改密碼,印完就結束、不啟動
+        daemon;已有帳號則什麼都不做。
+      - `internal/api`:`/auth/me` 跟登入回應多回 `mustChangePassword`;
+        `handleAuthChangePassword` 改完密碼清掉旗標;**requireAdmin
+        中介層在旗標為 true 時擋掉所有 admin 操作(403
+        password_change_required)**——就算有人繞過前端直接打 API 也
+        擋得住,不是只靠前端。
+      - 前端 app.js:登入後 / 回到頁面時若 `mustChangePassword` 為
+        true,強制跳到「修改密碼」畫面、擋住其他操作,改完才進主畫面;
+        i18n 三語系都加了對應字串。
+      - late-command.sh 新增 1.8 節:裝完用
+        `GONAS_DATA_DIR=/var/lib/gonas gonasd -seed-default-admin`
+        預先建好這組帳號(best-effort)。
+      - 測試:`state` 測 SeedAdminIfEmpty(新增/冪等/持久化/旗標);
+        `api` 測「旗標為 true 時 requireAdmin 回 403、/auth/me 回報、
+        改密碼後清旗標並放行」。`go test ./... -race` 全綠。
+- [x] **確認「開機有 GoNAS logo + 網路資訊」**:會有——這就是使用者
+      當初選的「精簡狀態畫面」路線(gonas-console.service,見 overlay/
+      usr/local/sbin/gonas-console)。開機後 tty1 顯示 GONAS 的 ASCII
+      logo + 版本 + 主機名 + `http://<IP>:8291` 網址,每 5 秒刷新;
+      還沒拿到 IP 時顯示「尚未偵測到網路」。之前沒出現純粹是因為
+      late-command.sh 那個 `-x` 根本 bug 讓整個佈署中斷(第十九輪已修)。
+
+依 gonas/gonas 是好記但眾所周知的預設值,兩邊(OS + Web)都保留「第一次
+強制改密碼」作為安全底線。這一整套的 Go 部分有單元測試撐著(高信心),
+但「真的用 gonas/gonas 登入 Web、被強制改密碼」的完整前端流程,一樣要
+使用者實際重裝一次才能端對端確認。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

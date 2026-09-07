@@ -56,6 +56,12 @@ var (
 	errCannotDeleteOwnAccount = errors.New("you cannot delete your own account while logged in as it: log in as a different admin account first")
 	errCannotDeleteLastAdmin  = errors.New("cannot delete the last remaining admin-role account: at least one must always exist")
 
+	// 第十九輪:預設 admin(gonas/gonas)第一次登入必須先改密碼,改掉
+	// 之前 requireAdmin 會用這個錯誤擋掉所有 admin 操作。前端主要靠
+	// /auth/me 回傳的 mustChangePassword 旗標來強制導向改密碼畫面,這個
+	// 403 是「就算有人繞過前端直接打 API 也擋得住」的伺服器端硬性保險。
+	errPasswordChangeRequired = errors.New("you must change the default password before performing this action")
+
 	// Phase 17：自我更新(internal/api/system_update_handlers.go)共用的
 	// sentinel 錯誤。跟這個檔案裡其他錯誤一樣固定用英文——前端
 	// i18n.js 的 errorMap 負責翻成使用者介面語言,見該檔案開頭的說明。
