@@ -29,11 +29,16 @@
 
 set -e
 
-# INSTALL_MEDIA 是這個腳本執行當下，安裝媒體（USB/光碟映像）被掛載
-# 的路徑——d-i 環境裡通常是 /cdrom，用 in-target 執行時仍然可以透過
-# bind mount 存取到，實際路徑由 build-iso.sh 產生 ISO 時決定，這裡
-# 用環境變數讓 preseed late_command 那一行可以覆寫，不用寫死。
-INSTALL_MEDIA="${GONAS_INSTALL_MEDIA:-/cdrom}"
+# INSTALL_MEDIA 是這支腳本自己（跟 release tarball、debs/、overlay/）
+# 實際能找到的路徑。**不是** /cdrom 本身——第二十三輪的實機測試(ESXi)
+# 抓到「/cdrom 掛載點不保證在 in-target chroot 裡看得到」這件事之後,
+# preseed.cfg 的 late_command 改成先在安裝程式自己的環境裡（此時
+# /cdrom 保證還掛著）把整個 gonas/ 目錄複製進 /target/var/lib/
+# gonas-install/gonas,這支腳本再用 in-target 從那份複製好的檔案執行
+# ——這裡預設值改成那個複製後的位置，不是 /cdrom，理由見 preseed.cfg
+# 裡 late_command 那一行完整的說明。用環境變數讓呼叫端可以覆寫，方便
+# 手動除錯時指到別的路徑測試,不用寫死。
+INSTALL_MEDIA="${GONAS_INSTALL_MEDIA:-/var/lib/gonas-install}"
 GONAS_DIR="$INSTALL_MEDIA/gonas"
 
 log() { echo "[gonas-late-command] $*"; }

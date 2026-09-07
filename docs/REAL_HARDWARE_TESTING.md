@@ -1978,6 +1978,43 @@ netinst ISO 中途失敗,`make` 只印出毫無資訊量的 `Error 4`)**:
   真的可讀」這件事跟這個 Phase 大多數改動一樣,沙盒完全沒辦法驗證,
   需要使用者下一次重新建置、重新安裝時確認。
 
+**第二十三輪(續:真正的錯誤訊息挖出來了)**:改對備援訊息之後,使用者
+馬上就從 `/var/log/installer/syslog` 挖出真正的原因:
+
+```
+in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or directory
+```
+
+- **根本原因**:`late_command` 那一行原本寫的是
+  `in-target sh -c "... sh /cdrom/gonas/late-command.sh ..."`——這裡
+  搞錯了 `in-target` 的語意。`in-target COMMAND` 是先 chroot 進
+  `/target`(剛裝好的目標系統)才執行 COMMAND,但 **chroot 進去之後,
+  `/cdrom` 這個掛載點不保證在裡面也看得到**。Debian 官方文件裡能找到
+  的 preseed 範例,凡是要把安裝媒體上的檔案弄進 `/target`,寫法都是
+  「不加 `in-target`,直接在安裝程式自己的環境裡 `cp /cdrom/x
+  /target/y`」(這個時間點 `/cdrom` 保證還掛著,`/target` 也已經是
+  可以寫入的最終檔案系統)——而不是「先 chroot 進 `/target`,再指望
+  從裡面找得到 `/cdrom`」,這兩件事表面上很像,實際上是完全不同的
+  檔案系統視角。這個假設錯了多久跟前面幾輪的模式一樣:arm64/
+  Parallels 那次測試沒有踩到(不代表假設原本是對的,比較可能只是
+  Parallels 虛擬光碟機的行為剛好沒有暴露這個問題),ESXi 的虛擬光碟機
+  上第一次真的踩到。
+- **修法**:`late_command` 改成先(不加 `in-target`)把整個 `gonas/`
+  目錄複製一份到 `/target/var/lib/gonas-install/gonas`,`late-command.sh`
+  之後改成從這份複製好的檔案執行(`GONAS_INSTALL_MEDIA=/var/lib/
+  gonas-install`),不再依賴 `/cdrom` 在 chroot 裡看不看得到。
+  `late-command.sh` 本身原本就支援用環境變數覆寫安裝媒體路徑
+  (`GONAS_INSTALL_MEDIA`),這裡只需要改 `preseed.cfg` 傳進去的值跟
+  `late-command.sh` 開頭那個預設值的說明註解,程式邏輯本身不用改。
+- **驗證邊界**:跟前面所有這類 preseed/late_command 改動一樣,沙盒
+  沒有真的 debian-installer 可以驗證這個修法本身有沒有效——`sh -n`
+  跟既有測試全部重跑一次確認沒有連帶壞掉,但「複製這一步會不會成功、
+  複製完 late-command.sh 從新路徑執行會不會一樣正常跑完」需要使用者
+  下一次重新建置、重新安裝來確認。如果這次修完還是同樣的錯誤(檔案
+  找不到),把新的 `/var/log/installer/syslog`(或
+  `/var/log/gonas-late-command.log`,如果這次有跑到那一步的話)內容
+  帶回來。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
