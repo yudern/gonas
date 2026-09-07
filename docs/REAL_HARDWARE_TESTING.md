@@ -1890,6 +1890,52 @@ netinst ISO 中途失敗,`make` 只印出毫無資訊量的 `Error 4`)**:
   或類似字樣),把那段訊息帶回來,才能判斷是網路本身不穩、還是
   Wi-Fi/VPN/防火牆擋掉了長時間的大檔案下載連線。
 
+**第二十二輪(使用者實測:amd64 + ESXi 真機安裝,preseed.cfg 明明已經
+寫了 `debian-installer/locale`,語系跟國家選單卻整個跳出來要手動選,
+違反「除了選硬碟 + 必要確認,其餘都自動」的原始設想)**:
+
+- **症狀**:使用者在真正的 ESXi 8.0 上開機安裝(第一次真的走出 QEMU/
+  Parallels,在企業級 hypervisor 上測),`Graphical install` 選好之後
+  (實際上因為顯示卡只有 16MB 顯存,自動退回文字模式安裝程式),接著
+  出現一長串語言清單要選、選完又出現「Select your location」的國家
+  清單,兩題都需要手動輸入數字才能繼續。
+- **根本原因**:preseed.cfg 裡確實有 `d-i debian-installer/locale
+  string en_US.UTF-8`,但這一題(連同國家、鍵盤這幾題,統稱
+  localechooser)是整個 debian-installer 流程裡問得最早的幾題,早到
+  「掛載光碟、讀取 gonas/preseed.cfg 檔案內容」這件事本身都還沒發生
+  ——debconf 在這幾題問完之前,根本還沒機會讀到 preseed.cfg 裡寫的
+  答案,所以就算檔案裡確實寫了,一樣會被問。這是 Debian 官方文件明確
+  記載過的 preseeding 陷阱,跟 `build-iso.sh` 裡 `priority=high`(刻意
+  選擇,不是 critical)完全是两回事,不衝突:priority 只影響「還沒有
+  答案的問題要不要跳出來問」,這裡的根本問題是「答案的來源(preseed
+  檔案)根本還沒被讀到」。
+  這條路徑之前的 arm64(Parallels)測試沒有明確回報遇到這一題,不代表
+  bug 只在 amd64/ESXi 才有——同一套 `build-iso.sh`/`patch-boot-menu.sh`
+  邏輯兩個架構共用,理論上 arm64 一樣會問;比較可能的解釋是使用者當時
+  只是很快按過去、沒有特別意識到這幾題不該出現(對照
+  `APPLIANCE_BUILD_AND_TEST_PROCEDURE.md` 步驟 6 其實白紙黑字寫了
+  「語系、鍵盤」是不該出現的例外情況),這次是第一次真的被明確截圖
+  抓出來。
+- **修法**:在 `build-iso.sh` 組合開機參數的 `APPEND_EXTRA` 裡,額外
+  加上 Debian 官方文件建議的「裸」核心參數
+  `language=en country=US locale=en_US.UTF-8 keymap=us`——這幾個是
+  installer 認得的早期簡寫參數,在開機當下就直接生效,不需要等
+  preseed.cfg 被讀到,跳過「先讀檔案才知道答案」這個時序問題。
+  preseed.cfg 裡原本那行 `debian-installer/locale` 保留不動,兩邊寫的
+  值一致(en_US.UTF-8 / us),互相印證。
+- **驗證邊界**:改動本身只是在既有的開機參數字串裡多接幾個 Debian
+  官方文件記載的標準參數,`sh -n` 語法檢查跟既有
+  `test-boot-menu-patch.sh`(測的是「往設定檔裡插入這一整串參數」這個
+  機制本身,不是驗證安裝程式看到參數之後的實際行為)都過,但「加了這幾
+  個參數之後,語系/國家/鍵盤這幾題真的不會再跳出來問」這件事本身,
+  沙盒完全沒辦法驗證(沒有真的 debian-installer 可以跑)——**需要
+  使用者用這次修好的包重新建置一次 ISO、重新開機安裝一次來確認**。
+  如果加了這幾個參數之後仍然被問,代表這個 Debian 版本(13.6.0)的
+  installer 行為跟官方文件描述的不完全一致,需要把新截圖帶回來。
+  另外也留意到這台 ESXi VM 的顯示卡只有 16MB,导致自動退回文字模式
+  安裝程式(不是 bug,只是順手記錄——純文字模式不影響 preseed 生不
+  生效,兩種模式共用同一套 debconf 邏輯)。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致

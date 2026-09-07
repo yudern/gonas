@@ -440,7 +440,21 @@ echo "==> patching boot menu configs to auto-load the GoNAS preseed"
 # 安全。代價是如果真的遇到某個沒被涵蓋到的 medium/low 優先權問題,
 # 会跳出來要人工回答,不算「完全零互動」,但對一份還沒有實機驗證過
 # 的 preseed 來說，這是刻意要接受的取捨。
-APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# 第二十二輪(使用者實測:amd64 + ESXi 真機安裝,preseed.cfg 明明已經
+# 寫了 `d-i debian-installer/locale string en_US.UTF-8`,語系/國家選單
+# 卻還是整個跳出來要手動選)新增 `language=`/`country=`/`locale=`/
+# `keymap=` 這幾個「裸」核心參數,理由是 Debian 官方文件明確記載的一個
+# preseed 陷阱:語系/國家/鍵盤這幾題(localechooser)是整個安裝流程裡
+# 問得最早的幾題,早到「掛載光碟、讀取 preseed.cfg 檔案內容」這件事
+# 本身都還沒發生——這幾題問完之前,debconf 根本還不知道 preseed.cfg
+# 裡寫了什麼答案,所以就算檔案裡確實有寫,一樣會被問一次。這跟上面
+# `priority=high` 那個決定完全是兩回事,不衝突:priority 只影響「還沒
+# 有答案的問題要不要跳出來問」,這幾題的根本問題是「答案根本還沒被
+# 讀到」,唯一解法是官方文件建議的做法——直接把這幾個值當成核心參數
+# 寫在開機這一行,跳過「先讀 preseed.cfg 才知道答案」這個時序問題。
+# preseed.cfg 裡原本那行 `debian-installer/locale` 保留不動,兩邊寫的
+# 值一致,互相印證、不衝突。
+APPEND_EXTRA="auto=true priority=high language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 # 拿來事後驗證「真的注入成功了嗎」的一小段獨特字串——不會跟 ISO 裡
 # 其他既有內容重複，之後可以直接 grep 這個字串確認注入是否生效。
 APPEND_MARKER="gonas/preseed.cfg"
