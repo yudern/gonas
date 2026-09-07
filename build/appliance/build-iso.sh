@@ -168,7 +168,20 @@ if [ -f "$CACHED_ISO" ] && [ "$(gonas_sha256sum "$CACHED_ISO" | awk '{print $1}'
 else
     echo "==> downloading $BASE_ISO_URL/$BASE_ISO_NAME"
     echo "    (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)"
-    wget -q --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"
+    # 這支下載曾經在真實測試中失敗過(wget exit 4 = network failure,
+    # 通常是幾百 MB 的大檔案傳輸中途網路斷線/逾時),但因為原本用的是
+    # `wget -q`,wget 自己的錯誤訊息(DNS 失敗?連線被拒?逾時?)整個
+    # 被吞掉,使用者只會在 `make` 那一層看到毫無資訊量的 `Error 4`,
+    # 完全不知道該怎麼辦、也沒辦法判斷是不是同一種問題再發生一次。改成
+    # 不加 `-q`(保留 `--show-progress` 顯示下載進度)讓 wget 真正的
+    # 錯誤訊息印出來,並且明確檢查結束碼、給一個看得懂的提示,而不是讓
+    # `set -e` 直接把腳本悶聲弄死。
+    if ! wget --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"; then
+        echo "error: download of $BASE_ISO_NAME failed (see the wget error above for the real reason — DNS, connection refused, timeout, or the connection dropped mid-transfer are the common causes for a ~700MB file over an unstable network)" >&2
+        echo "  nothing was cached, so simply re-running this command will retry the full download from scratch" >&2
+        rm -f "$WORK_DIR/base.iso" 2>/dev/null || true
+        exit 1
+    fi
 fi
 
 # --- 2.6 驗證 base.iso 完整性 -------------------------------------------

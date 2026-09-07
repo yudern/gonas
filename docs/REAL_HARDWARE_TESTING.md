@@ -1841,6 +1841,55 @@ SSH 不在)才會逼出來。
 但「真的用 gonas/gonas 登入 Web、被強制改密碼」的完整前端流程,一樣要
 使用者實際重裝一次才能端對端確認。
 
+**第二十一輪(使用者實測:Mac mini 上 `make iso-amd64` 下載官方 amd64
+netinst ISO 中途失敗,`make` 只印出毫無資訊量的 `Error 4`)**:
+
+- **症狀**:使用者依照 `docs/X86_AMD64_BURN_AND_TEST.md` 的步驟在
+  Mac mini 上跑 `make iso-amd64`,SHA256SUMS 抓取、找到官方檔名
+  (`debian-13.6.0-amd64-netinst.iso`)這兩步都成功,接著開始下載
+  ~700MB 的官方 ISO 本體,畫面上只看到:
+  ```
+  ==> downloading https://cdimage.debian.org/.../debian-13.6.0-amd64-netinst.iso
+      (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)
+  make: *** [iso-amd64] Error 4
+  ```
+  中間完全沒有任何 wget 自己的錯誤訊息,不知道是 DNS 失敗、連線被拒、
+  逾時,還是傳輸中途斷線。
+- **根本原因**:`build-iso.sh` 下載 base.iso 那一行用的是
+  `wget -q --show-progress -O ...`——`-q`(quiet)會把 wget 自己所有的
+  診斷訊息全部吞掉(只留 `--show-progress` 硬擠出來的進度條),而且
+  這一行完全沒有 `if ! wget ...; then ...; fi` 的錯誤處理,純粹靠
+  `set -e` 讓腳本悶聲退出。腳本退出碼直接沿用 wget 的退出碼——`Error 4`
+  正是 wget 自己的 exit code 表裡「network failure」那一類(DNS、連線
+  被拒、逾時、傳輸中斷都會落在這個分類),但因為 `-q` 把說明文字吞掉,
+  使用者完全看不到具體是哪一種、也無從判斷是不是同一個問題再發生一次。
+  這跟第十八輪 `find`+`set -e`、第十九輪 `install.sh` 用 `-x` 這兩個
+  bug 是同一類「靜默失敗吃掉真正錯誤訊息」的問題,只是這次出現在
+  下載這一步,而且是這個檔案裡**唯一一處沒有明確錯誤處理的 wget 呼叫**
+  (抓 SHA256SUMS 那次有 `if ! wget ...`,抓 base.iso 這次沒有)。
+  這個 bug 存在多久跟第十七輪那個 `debian-bookworm-*.iso` 檔名假設一樣
+  ——沙盒完全沒有真實網路可以觸發這條下載路徑,17 輪覆閱都碰不到它,
+  只有真的在有網路的機器上跑一次才會暴露。
+- **修法**:拿掉 `-q`,讓 wget 真正的錯誤訊息印出來;明確用
+  `if ! wget --show-progress -O ...; then ...; fi` 包起來,失敗時印出
+  一行講清楚「幾百 MB 的檔案在不穩定的網路上傳輸,常見原因是 DNS 失敗/
+  連線被拒/逾時/傳輸中途斷線,實際原因看上面 wget 自己印的訊息」,並
+  提醒「因為失敗時什麼都不會被寫進快取,直接重跑同一個指令就會重新
+  完整下載一次,不用清什麼快取」。
+- **驗證邊界**:修法本身是「讓失敗訊息不要被吞掉」這種診斷性質的改動,
+  在沙盒裡沒辦法真的觸發一次網路中斷來驗證訊息長什麼樣子(一樣是網路
+  白名單擋住 Debian 鏡像)——`sh -n` 語法檢查跟既有的
+  `test-portable-checksum.sh`/其餘六支測試全部照跑一次確認沒有連帶壞掉,
+  但這個下載錯誤路徑本身沒有專屬的 lib 函式可以像 `find-boot-menu-cfgs`
+  /`deb-closure` 那樣抽出來做假資料測試(邏輯本身就是「呼叫 wget、檢查
+  結束碼」,沒有可以脫離真實網路獨立驗證的部分)。
+  **給使用者的立即行動**:這個 bug 修的是「看不看得到錯誤訊息」,不是
+  下載失敗本身的原因——網路中途斷線這種情況通常重跑一次就會過。建議
+  直接重新執行 `make iso-amd64`;如果再次卡在同一步,這次應該會看到
+  wget 自己印出的真正原因(例如 `Resolving cdimage.debian.org failed`
+  或類似字樣),把那段訊息帶回來,才能判斷是網路本身不穩、還是
+  Wi-Fi/VPN/防火牆擋掉了長時間的大檔案下載連線。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
