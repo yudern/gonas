@@ -1936,6 +1936,48 @@ netinst ISO 中途失敗,`make` 只印出毫無資訊量的 `Error 4`)**:
   安裝程式(不是 bug,只是順手記錄——純文字模式不影響 preseed 生不
   生效,兩種模式共用同一套 debconf 邏輯)。
 
+**第二十三輪(使用者實測:amd64 + ESXi,late-command.sh 真的失敗了一次,
+但照 motd 提示去找 `/var/log/syslog` 卻根本找不到這個檔案)**:
+
+- **症狀**:裝完開機登入後 motd 顯示 `GoNAS late-command.sh failed —
+  see /var/log/syslog on first boot`(這是 preseed.cfg 裡 late_command
+  失敗時的既有備援訊息),但 `sudo grep -i late-command /var/log/syslog`
+  跟 `sudo grep -i gonas /var/log/syslog` 都回報
+  `grep: /var/log/syslog: No such file or directory`——連檔案本身都
+  不存在,不是內容裡沒有那幾行。
+- **根本原因**:這則備援訊息的檔案路徑從一開始寫的時候就是錯的,只是
+  之前 17 輪覆閱加上 arm64/Parallels 那幾次測試都沒有真的觸發過
+  late_command 失敗(第十九輪修好 install.sh 的 `-x` bug 之後,arm64
+  那條路徑一路順利跑完,從來沒有機會走到這個備援分支),這次是第一次
+  真的因為某個原因觸發 late_command 失敗,才第一次發現這則訊息本身
+  就沒有實際驗證過對不對。原因有兩層:(1)Debian 13 預設只用
+  journald,不會自動裝 rsyslog 把訊息寫成傳統的 `/var/log/syslog`
+  純文字檔;(2)就算裝了 rsyslog,late-command.sh 執行的時間點是
+  debian-installer 的 in-target chroot 階段,目標系統這時候根本還沒
+  真正開機、rsyslog 也還沒啟動,late-command.sh 的輸出本來就寫不進
+  目標系統自己的 `/var/log/syslog`——查過 Debian 官方安裝手冊
+  「Troubleshooting the Installation Process」一節,原文寫的是「開機
+  進到裝好的系統之後,相關訊息在 `/var/log/installer/`」,從來就不是
+  `/var/log/syslog`。
+- **修法**:與其繼續依賴 d-i 這個間接、沒有明確記載保證行為的機制,
+  直接讓 `preseed.cfg` 的 late_command 那一行把 late-command.sh 自己
+  的 stdout/stderr 明確導向一個固定檔案
+  `/var/log/gonas-late-command.log`(`>/var/log/gonas-late-command.log
+  2>&1`),不管 d-i 未來版本怎麼處理它自己的安裝紀錄,這個檔案一定會在
+  目標系統上。失敗時 motd 的提示文字也一併改成指向這個新檔案(順便
+  提一句「如果連這個檔案都沒有,改看 /var/log/installer/」當備援)。
+- **給這次卡住的使用者的立即行動**:你手上這台 VM 是用舊版 preseed
+  裝的,新的 log 檔案不會存在,**改查
+  `/var/log/installer/syslog`**——`sudo grep -i late-command
+  /var/log/installer/syslog` 或 `sudo grep -i gonas
+  /var/log/installer/syslog`,如果那個檔案本身也不存在,先
+  `sudo ls -la /var/log/installer/` 看實際有哪些檔案,把結果截圖回報。
+- **驗證邊界**:preseed.cfg 這一行改動本身沒有專屬的語法檢查工具(不是
+  shell,是 debconf 格式),`sh -n` 對既有腳本全部重跑一次確認沒有
+  連帶壞掉,但「加了這個重導向之後,失敗時這個新檔案真的會存在、內容
+  真的可讀」這件事跟這個 Phase 大多數改動一樣,沙盒完全沒辦法驗證,
+  需要使用者下一次重新建置、重新安裝時確認。
+
 ## 完成之後
 
 把這份清單裡實際測出來的問題(尤其是「加了某項 systemd 加固導致
