@@ -390,7 +390,19 @@ else
        gzip -dc "$WORK_DIR/Packages.gz" > "$WORK_DIR/Packages" 2>/dev/null; then
         # gzip -dc 在 GNU 跟 macOS(BSD)底下都存在、行為一致,不需要
         # 額外的相容性包裝(不像 xz 在 stock macOS 上沒有)。
-        mkdir -p "$DEBS_DIR"
+        #
+        # 第二十四輪覆閱(主動複查「宣稱是 best-effort 的區塊,是不是
+        # 每一行真的都有擋 set -eu」時抓到的):這裡原本是裸的
+        # `mkdir -p "$DEBS_DIR"`,沒有任何錯誤處理——這支腳本一開頭是
+        # `set -eu`,萬一這裡失敗(例如建置機器磁碟空間不夠、或權限
+        # 問題),會直接中止整支 build-iso.sh,卻跟上面「整段是
+        # best-effort,失敗只印警告、不會讓整個 ISO 建置失敗」這段
+        # 註解講的完全不一致——SSH 只是選用便利功能,不應該因為離線
+        # 打包這一步的目錄建不起來,就連 gonasd 本體都裝不進 ISO。
+        # 改成失敗時只記警告、直接跳過整個離線打包區塊,不中止建置。
+        if ! mkdir -p "$DEBS_DIR" 2>/dev/null; then
+            echo "    WARNING: could not create $DEBS_DIR — skipping offline package bundling; SSH will NOT be preinstalled" >&2
+        else
         CLOSURE_LIST="$WORK_DIR/deb-closure.list"
         echo "==> (offline SSH) computing dependency closure for: $SEED_PACKAGES"
         # 排除 required/important——debootstrap 建的 base 一定已經有這兩個
@@ -417,6 +429,7 @@ else
         if [ "$_deb_ok" = "0" ]; then
             echo "    WARNING: no packages were bundled — the installed system will NOT have a preinstalled SSH server" >&2
             rmdir "$DEBS_DIR" 2>/dev/null || true
+        fi
         fi
     else
         echo "    WARNING: could not fetch/decompress the package index from $PKG_INDEX_URL — skipping offline package bundling; SSH will NOT be preinstalled. (set GONAS_DEBIAN_PKG_MIRROR to a reachable mirror, or GONAS_SKIP_OFFLINE_PACKAGES=1 to silence this)" >&2
