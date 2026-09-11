@@ -43,9 +43,46 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, errNotAuthenticated)
 			return
 		}
+
+		// 第三十一輪(測試工程師覆核的後續強化):如果這個帳號被標記為
+		// 「必須先改密碼」(appliance 預設 gonas/gonas 第一次登入),在這裡
+		// 就擋掉「除了看自己是誰、改密碼、登出以外」的所有請求——不只是
+		// 會改東西的 admin 端點。原本這道封鎖只在 requireAdmin 裡,代表
+		// 還沒改預設密碼的帳號,仍然可以打 requireAuth 的「唯讀」端點
+		// (列檔案、下載、讀文字檔)跟設定自己 TOTP——對一組公開記載的
+		// 預設帳密(gonas/gonas)來說,這是一段不必要的曝險窗:有人搶在
+		// 機主完成初次設定前用預設帳密登入,就能讀檔、甚至先設好 TOTP。
+		// 把封鎖上移到 requireAuth,配合下面的白名單(查自己/改密碼/登出),
+		// 讓「改掉預設密碼」成為這個帳號能做任何其他事情之前的硬性前置。
+		// 允許清單要夠、但只夠讓前端完成「偵測到要改密碼 → 改 → 生效」
+		// 這條路:/auth/me(前端據此跳改密碼畫面)、/auth/password(改)、
+		// /auth/logout(放棄改、登出)。其餘一律 403,前端同樣靠
+		// /auth/me 的旗標導向,繞過前端直接打 API 也一樣擋得住。
+		if !passwordChangeExempt(r.Method, r.URL.Path) {
+			if account, ok := findAdmin(s.store.Snapshot().Admins, sess.Username); ok && account.MustChangePassword {
+				writeError(w, http.StatusForbidden, errPasswordChangeRequired)
+				return
+			}
+		}
+
 		ctx := context.WithValue(r.Context(), sessionContextKey, sess)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// passwordChangeExempt 回報某個端點在「帳號被標記必須先改密碼」時是否仍然
+// 放行。只放行讓前端完成改密碼流程最低限度需要的三支端點,其餘一律擋下。
+// 用精確比對方法 + 路徑,不是前綴比對,避免不小心放行到別的子路徑。
+func passwordChangeExempt(method, path string) bool {
+	switch path {
+	case "/api/v1/auth/me":
+		return method == http.MethodGet
+	case "/api/v1/auth/password":
+		return method == http.MethodPost
+	case "/api/v1/auth/logout":
+		return method == http.MethodPost
+	}
+	return false
 }
 
 // requireAdmin 在 requireAuth 的基礎上多一層檢查:目前登入的帳號必須是
@@ -72,13 +109,13 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 第十九輪:如果這個帳號被標記為「必須先改密碼」(appliance 預設
-		// admin gonas/gonas 第一次登入的情況),擋掉所有 admin 操作,回一個
-		// 前端認得的 403——使用者只能先去 /auth/password(那支走的是
-		// requireAuth,不經過這裡,所以永遠開著)把預設密碼改掉,改完
-		// handleAuthChangePassword 會清掉旗標,這道封鎖就自動解除。這是
-		// 伺服器端的硬性強制,就算有人繞過前端直接打 API 也一樣擋得住,
-		// 不是只靠前端畫面擋。
+		// 「必須先改密碼」的硬性封鎖,第三十一輪起主要的執行點已經上移到
+		// requireAuth(見那裡的說明:不只擋 admin 操作,連唯讀端點也擋,
+		// 只放行改密碼流程需要的三支)。因為 requireAdmin 本身就是包在
+		// requireAuth 外面,任何走到這裡的請求其實都已經先通過 requireAuth
+		// 那道檢查了,所以這裡這一段在正常情況下是到不了的。保留它純粹
+		// 當第二道保險(萬一日後有人調整中介層包裝順序),成本只是多一次
+		// 布林判斷,不影響正確性。
 		if account.MustChangePassword {
 			writeError(w, http.StatusForbidden, errPasswordChangeRequired)
 			return

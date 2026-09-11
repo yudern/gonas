@@ -2286,6 +2286,42 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   開發沙盒連不上 cdimage.debian.org、也沒有 debian-installer,全部需要
   使用者下一次實際建置(這次要抓 ~3.7GB 的 DVD-1)+ 重裝一次才能確認。
 
+**第三十輪/第三十一輪(以軟體測試工程師流程做的一次完整覆核 + 隨之的
+安全強化)**:
+
+- **測試範圍與結果**:靜態分析(`go vet` 乾淨、無 TODO/FIXME/HACK);
+  全套 `go test ./... -race` 全過、無 data race;安全面實測——檔案管理員
+  路徑逃逸(12 種惡意路徑)+ symlink 逃逸都擋得住(並固化成
+  `internal/filemanager/security_escape_test.go` 回歸測試);外部指令
+  全部用 arg 陣列執行、無 shell 字串注入面;認證面用真 HTTP 實測:
+  未登入擋 401、強制改密碼伺服器端硬擋、改密後 session 全失效、登入
+  暴力破解 5 次後鎖定(429、按 IP)、密碼最短 8 位強制;appliance 的
+  tty1 狀態畫面用 mock 的 systemctl/ss 跑過四種健康狀態分支都正確;
+  build-iso.sh 的 md5sum 批次化(含空白檔名、排除項、格式)正確;
+  CI 每個 `run: sh <file>` 都對得上現存檔案。
+- **找到的唯一功能性 bug(第二十九輪已修)**:CI 仍在跑已刪除的
+  test-deb-closure.sh,會讓每次 CI 紅燈——已修,這次覆核確認對齊。
+- **覆核順帶做的一個安全強化(第三十一輪)**:覆核時發現「強制改密碼」
+  原本只擋 requireAdmin(會改東西的)端點,代表還在用預設密碼
+  gonas/gonas 的帳號,仍可打 requireAuth 的唯讀端點(列檔案、下載、
+  讀文字檔)、甚至設定自己的 TOTP。對一組**公開記載**的預設帳密來說,
+  這是一段不必要的曝險窗(有人搶在機主完成初次設定前用預設帳密登入,
+  就能讀檔/先設好 TOTP/甚至先一步改掉密碼)。雖然有「全新機器還沒配
+  存儲池 → 檔案端點一律 409」這個很強的緩解,仍值得做縱深防禦:把
+  封鎖上移到 requireAuth,改密碼前只放行三支(/auth/me、/auth/password、
+  /auth/logout),其餘一律 403。已用真 HTTP 實測(唯讀端點、TOTP 設定
+  改密前都 403,改密後放行)並加上 Go 回歸測試
+  `TestMustChangePassword_BlocksReadEndpointsToo`。
+- **仍建議、但這次沒做的小項(非 bug,列出來備查)**:`internal/config`
+  /`internal/cmdrunner` 覆蓋率 0%(都是薄封裝,風險低);build-iso.sh
+  的 md5sum 批次用了 `xargs` 沒加 `-r`,理論上空檔案樹會讓 md5sum 讀
+  stdin——真實 ISO 永遠非空,觸發不了,且 `-r` 在 macOS 的 BSD xargs
+  上不存在,硬加反而傷可攜性,故維持現狀。
+- **仍然只能靠實機驗證的關鍵假設(重申)**:DVD-1 的
+  `pkgsel/include openssh-server sudo` 離線安裝——這個沙盒沒有
+  debian-installer 也連不上 Debian,無法驗證,必須等使用者下一次用
+  DVD-1 實際建置 + 安裝一次才算數。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

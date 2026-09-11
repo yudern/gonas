@@ -383,3 +383,52 @@ func TestMustChangePassword_BlocksAdminUntilChanged(t *testing.T) {
 		t.Fatalf("expected admin endpoint to pass after password change, got %d: %s", recAfter.Code, recAfter.Body.String())
 	}
 }
+
+// TestMustChangePassword_BlocksReadEndpointsToo 固化第三十一輪的強化:在
+// 改掉預設密碼之前,連「唯讀」的 requireAuth 端點(列檔案、讀 TOTP 設定等)
+// 都該被擋下來,只有改密碼流程需要的三支(/auth/me、/auth/password、
+// /auth/logout)放行。這道封鎖在 requireAuth 層,所以不管端點後面是
+// requireAuth 還是 requireAdmin 都一體適用。
+func TestMustChangePassword_BlocksReadEndpointsToo(t *testing.T) {
+	s := newAuthTestServer(t)
+	cookie := seedMustChangeAdmin(t, s, "gonas", "gonas")
+
+	// 一支純 requireAuth 的唯讀端點:改密碼前應該被擋 (403)。
+	readEndpoint := s.requireAuth(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	reqRead := httptest.NewRequest(http.MethodGet, "/api/v1/files/list", nil)
+	reqRead.AddCookie(cookie)
+	recRead := httptest.NewRecorder()
+	readEndpoint(recRead, reqRead)
+	if recRead.Code != http.StatusForbidden {
+		t.Fatalf("expected read-only requireAuth endpoint to be blocked (403) before password change, got %d", recRead.Code)
+	}
+
+	// 白名單端點:/auth/me 必須仍然放行 (200),否則前端無法偵測到要改密碼。
+	reqMe := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	reqMe.AddCookie(cookie)
+	recMe := httptest.NewRecorder()
+	s.requireAuth(s.handleAuthMe)(recMe, reqMe)
+	if recMe.Code != http.StatusOK {
+		t.Fatalf("expected /auth/me to stay open during MustChangePassword, got %d", recMe.Code)
+	}
+
+	// passwordChangeExempt 的精確比對:只放行那三支,其餘(含相近路徑)一律不放行。
+	cases := []struct {
+		method, path string
+		want         bool
+	}{
+		{http.MethodGet, "/api/v1/auth/me", true},
+		{http.MethodPost, "/api/v1/auth/password", true},
+		{http.MethodPost, "/api/v1/auth/logout", true},
+		{http.MethodPost, "/api/v1/auth/me", false},        // 正確路徑但錯誤方法
+		{http.MethodGet, "/api/v1/auth/password", false},   // 同上
+		{http.MethodGet, "/api/v1/files/list", false},      // 唯讀資料端點
+		{http.MethodPost, "/api/v1/auth/totp/setup", false},// TOTP 設定不該在改密碼前開放
+		{http.MethodGet, "/api/v1/auth/me/extra", false},   // 前綴相近但不是同一支
+	}
+	for _, c := range cases {
+		if got := passwordChangeExempt(c.method, c.path); got != c.want {
+			t.Errorf("passwordChangeExempt(%s %s) = %v, want %v", c.method, c.path, got, c.want)
+		}
+	}
+}
