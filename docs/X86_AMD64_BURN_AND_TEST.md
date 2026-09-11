@@ -16,11 +16,16 @@
 
 | | arm64(你已測過) | amd64(這份文件要做的) |
 |---|---|---|
-| 來源 Debian ISO | `debian-13.x-arm64-netinst.iso` | `debian-13.x-amd64-netinst.iso` |
+| 來源 Debian ISO | `debian-13.x-arm64-DVD-1.iso`(~3.7GB) | `debian-13.x-amd64-DVD-1.iso`(~3.7GB) |
 | 內嵌的 gonasd | `dist/gonasd-linux-arm64` | `dist/gonasd-linux-amd64` |
 | 建置指令 | `make iso-arm64` | `make iso-amd64` |
-| 離線 .deb(SSH/sudo) | 抓自 `binary-arm64` | 抓自 `binary-amd64` |
+| SSH/sudo 怎麼來 | preseed `pkgsel` 從 DVD-1 離線裝 | preseed `pkgsel` 從 DVD-1 離線裝 |
 | 開機模式 | 純 UEFI | BIOS + UEFI 都支援 |
+
+> 註:第二十八輪起底層 ISO 從 netinst(~700MB)換成 DVD-1 完整版
+> (~3.7GB)——openssh-server/sudo 直接在 DVD 的套件庫裡,由 preseed
+> 的 `pkgsel/include` 離線裝好,不再需要之前那套自己打包 .deb 的做法。
+> 代價是映像大 5 倍、下載/燒錄/build 都更久、也更吃磁碟。
 
 腳本邏輯(`build-iso.sh`/`preseed.cfg`/`late-command.sh`)兩邊共用同一份
 原始碼,靠 `$ARCH` 參數切換——但**產出的 `.iso` 檔案本身是兩個完全獨立、
@@ -29,11 +34,12 @@
 ## 步驟 1:在 Mac mini 上編出 amd64 映像檔
 
 跟你上次編 arm64 用的是同一台 Mac mini、同一份程式碼,差別只有指令換成
-`iso-amd64`。這一步**需要網路**(要下載官方 Debian amd64 netinst ISO)。
+`iso-amd64`。這一步**需要網路**(要下載官方 Debian amd64 DVD-1 ISO,
+~3.7GB,第一次會相當慢;建議這台 Mac 至少留 ~12GB 可用空間)。
 
 ```
 cd gonas
-git log --oneline -1   # 確認是最新的 commit(第二十輪或更新)
+git log --oneline -1   # 確認是最新的 commit(第二十八輪或更新,訊息含 DVD-1)
 make iso-amd64
 ```
 
@@ -75,8 +81,9 @@ qemu-system-x86_64 \
 
 ## 步驟 3:燒到真正的 USB 隨身碟
 
-在 Mac mini 上把 amd64 那顆 ISO 燒錄到 USB(準備一支至少 4GB、內容可以
-清空的隨身碟):
+在 Mac mini 上把 amd64 那顆 ISO 燒錄到 USB(DVD-1 底的成品 ISO 有
+~3.7GB+,準備一支**至少 8GB**、內容可以清空的隨身碟;之前 netinst 時代
+一支 4GB 就夠,現在不夠了):
 
 ```
 diskutil list
@@ -115,9 +122,11 @@ sudo dd if=dist/release/gonas-<version>-amd64.iso of=/dev/rdiskN bs=4m
   啟動,只是找不到品牌畫面上顯示的網址,改到你的路由器/DHCP 伺服器的
   用戶端清單裡找這台機器的 IP。
 - 真實硬體上如果跳出「缺少韌體,請插入另一份媒體」的畫面——這是某些
-  網卡/儲存控制器需要專屬韌體檔案、而 netinst ISO 沒有內附的已知限制
-  (VM 用 virtio 裝置不會遇到,是真機才會踩到的差異),遇到的話把型號
-  記下來告訴我。
+  網卡/儲存控制器需要專屬韌體檔案才能被完整偵測的已知限制(VM 用
+  virtio 裝置不會遇到,是真機才會踩到的差異)。官方 DVD-1 通常比
+  netinst 內附更多 non-free 韌體,踩到的機率較低,但不保證涵蓋所有
+  硬體;preseed 對這一題一律回答「不要等額外媒體」讓安裝繼續走完,
+  對應硬體事後若不能用,把型號記下來告訴我。
 
 ## 步驟 5:開機安裝,全程不需要按鍵
 

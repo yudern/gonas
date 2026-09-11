@@ -100,20 +100,21 @@ arm64 QEMU 開機參數在步驟 8。
 建置/preseed/late-command 邏輯完全共用,差別主要在 QEMU 開機參數跟
 UEFI 韌體這一層。
 
-**磁碟空間**:粗抓一下,建置一個架構的過程中同時間可能佔用到:官方
-netinst ISO 一份快取在 `dist/.cache/`(約 700MB)、同一份 ISO 的工作
-副本在系統暫存目錄(`/tmp`,同樣約 700MB)、解開後的完整目錄樹(約
-1GB)、最後包裝出來的成品 ISO 在 `dist/release/`(約 700MB)——保守
-估計建置過程中**暫時**需要 3GB 左右的可用空間才不會卡在中途(如果
-`/tmp` 跟這個 repo 所在的磁碟是同一個分割區,兩邊加起來一起算)。
-加上步驟 4 的 20GB 測試磁碟映像(那個是稀疏檔案,實際用量看安裝了
-多少東西,通常遠小於 20GB),建議至少預留 10GB 以上的可用空間再開始,
-免得建到一半才發現 `No space left on device`。
+**磁碟空間**:第二十八輪起底層 ISO 從 netinst(~700MB)換成 DVD-1
+完整版(~3.7GB),所以這裡的估計要大幅上修。建置一個架構的過程中
+同時間可能佔用到:官方 DVD-1 ISO 一份快取在 `dist/.cache/`(約
+3.7GB)、同一份 ISO 的工作副本在系統暫存目錄(`/tmp`,同樣約
+3.7GB)、解開後的完整目錄樹(約 3.7GB)、最後包裝出來的成品 ISO 在
+`dist/release/`(約 3.7GB)——保守估計建置過程中**暫時**需要 12GB
+左右的可用空間才不會卡在中途(如果 `/tmp` 跟這個 repo 所在的磁碟是
+同一個分割區,兩邊加起來一起算)。加上步驟 4 的 20GB 測試磁碟映像
+(那個是稀疏檔案,實際用量通常遠小於 20GB),建議至少預留 20GB 以上
+的可用空間再開始,免得建到一半才發現 `No space left on device`。
 
 ## 步驟 2:跑一次完全離線的快速自我檢查(不需要網路,幾秒鐘)
 
-在真正花時間下載幾百 MB 的官方 ISO 之前,先確認幾段最容易壞掉的邏輯
-本身沒問題(在 Linux 或 macOS 上都一樣執行,不用另外做什麼):
+在真正花時間下載 ~3.7GB 的官方 DVD-1 ISO 之前,先確認幾段最容易壞掉的
+邏輯本身沒問題(在 Linux 或 macOS 上都一樣執行,不用另外做什麼):
 
 ```
 sh build/appliance/test-boot-menu-patch.sh
@@ -122,7 +123,6 @@ sh build/appliance/test-detect-arch.sh
 sh build/appliance/test-portable-checksum.sh
 sh build/appliance/test-portable-sed.sh
 sh build/appliance/test-find-boot-menu-cfgs.sh
-sh build/appliance/test-deb-closure.sh
 ```
 
 第一支應該看到 5 個 `PASS` 跟 `==> all boot-menu-patch test cases
@@ -145,10 +145,10 @@ test cases passed`;第三支(檢查 `late-command.sh` 判斷架構時,
 isolinux/grub 設定檔時,如果 isolinux 目錄不存在(arm64 官方 ISO
 本來就沒有這個目錄),`find` 自己的 exit code 在 `set -e` 底下會讓
 整支腳本沉默死掉)應該看到 3 個 `PASS` 跟
-`==> all find-boot-menu-cfgs test cases passed`;第七支(第十九輪覆閱
-新增,「模式一:離線 SSH」的核心——算 openssh-server / sudo 的相依
-封閉集、決定要打包哪些 .deb 進 ISO 的邏輯)應該看到 11 個 `PASS` 跟
-`==> all deb-closure test cases passed`。
+`==> all find-boot-menu-cfgs test cases passed`。
+(第七支 `test-deb-closure.sh` 已在第二十八輪隨著離線 .deb 打包邏輯
+一併刪除——換成 DVD-1 完整版之後,openssh-server/sudo 改由 preseed
+的 `pkgsel/include` 直接從 DVD 離線裝,不再需要自己算相依封閉集。)
 如果這裡就失敗了,代表程式碼在傳輸過程中被改動或損毀,不用往下做,
 先確認拿到的程式碼是完整的。這六支測試也已經寫進
 `.github/workflows/ci.yml`(而且特地也在 macOS 的 GitHub Actions
@@ -165,7 +165,7 @@ make iso-amd64
 
 1. `make release`(純 Go 交叉編譯,不需要網路,產出
    `dist/release/gonas-<version>-linux-amd64.tar.gz`)。
-2. 下載官方 Debian netinst ISO(需要網路,幾百 MB,第一次會比較慢;
+2. 下載官方 Debian DVD-1 完整版 ISO(需要網路,~3.7GB,第一次會相當慢;
    之後重跑會從 `dist/.cache/debian-iso/` 讀快取,雜湊值對得上才會重用,
    不用每次都重新下載)。
 3. 驗證下載回來的 ISO 雜湊值,解開、塞進 gonasd 執行檔跟客製化腳本、
@@ -283,13 +283,15 @@ qemu-system-x86_64 \
 問題截圖或抄下來告訴我。
 
 **額外留意套件安裝那一段**(畫面上通常會看到 `tasksel`/`pkgsel` 相關的
-進度畫面):`preseed.cfg` 選的是 `standard`(標準系統工具)、
-`ssh-server`、`sudo` 這三個套件集/套件,理論上 Debian netinst ISO
-本身內附的套件池就夠裝這些,不需要連網——但這件事到目前為止只是
-「理論上應該夠用」,這個專案從來沒有實際驗證過。如果這一步順利跑完
-沒有停下來報錯,就代表這個假設是對的,不需要你額外做什麼;如果卡在
-這裡跳出「找不到套件」或類似的錯誤,把完整訊息帶回來,這會是一個
-之前完全沒被抓到過的新問題。
+進度畫面):第二十八輪換成 DVD-1 完整版之後,`preseed.cfg` 選的是
+`standard`(標準系統工具)加上 `pkgsel/include` 的 `openssh-server`
+跟 `sudo`——這三樣 DVD-1 的套件庫裡都有,`apt-setup/use_mirror false`
+(離線)下直接從 DVD 裝,不需要連網。**這一段正是這次換 DVD-1 最想
+驗證的地方**:如果這一步順利跑完沒停下來報錯,代表「DVD-1 上確實有
+這些套件、pkgsel 真的能離線從 DVD 裝好」這個核心假設成立;如果卡在
+這裡跳出「找不到套件 / package not found」或類似錯誤,把完整訊息帶
+回來——那代表要嘛 DVD 沒被正確當成 apt 來源、要嘛某個套件其實不在
+DVD-1 上,是需要回頭調整的新問題。
 
 安裝完成後會自動重開機(不會停在「移除安裝媒體」那個畫面)。
 
@@ -340,12 +342,13 @@ Debian 登入畫面,登入時會顯示 motd)——這個備援機制本身也還
      執行權限(這是第十四輪覆閱補上的——appliance 裝完之後安裝媒體
      會被退出,系統上原本完全沒有 `uninstall.sh` 可以用,現在
      `late-command.sh` 會順手留一份在這裡)。
-   - `systemctl is-enabled ssh`:應該是 `enabled`(第十九輪「模式一:
-     離線 SSH」新增——openssh-server 是在建置 ISO 時預先打包進去、
-     安裝時離線 `dpkg -i` 上去的,不需要安裝過程連網)。接著從你的
-     Mac 用 `ssh gonas@<這台機器的IP>` 應該連得進來。
+   - `systemctl is-enabled ssh`:應該是 `enabled`(第二十八輪起
+     openssh-server 由 preseed 的 `pkgsel/include` 在安裝時從 DVD-1
+     離線裝上,`late-command.sh` 1.7 節再補確認開機啟動、產生 host key、
+     寫 sshd drop-in)。接著從你的 Mac 用 `ssh gonas@<這台機器的IP>`
+     應該連得進來,第一次登入會被要求立刻改掉預設密碼 `gonas`。
    - `sudo -v` 或 `sudo id`:gonas 應該能用 sudo(sudo 這個套件
-     同樣是離線打包安裝的,gonas 也已經被加進 sudo 群組)。
+     同樣由 pkgsel 從 DVD-1 離線裝上,gonas 也已經被加進 sudo 群組)。
 5. 重開機一次(`sudo reboot`),確認 tty1 的狀態畫面在下一次開機一樣
    會自動出現,不需要每次都手動介入。
 6. 額外測「開機當下沒有網路」的情境:把 QEMU 指令裡的
