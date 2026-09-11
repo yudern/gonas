@@ -420,11 +420,11 @@ func TestMustChangePassword_BlocksReadEndpointsToo(t *testing.T) {
 		{http.MethodGet, "/api/v1/auth/me", true},
 		{http.MethodPost, "/api/v1/auth/password", true},
 		{http.MethodPost, "/api/v1/auth/logout", true},
-		{http.MethodPost, "/api/v1/auth/me", false},        // 正確路徑但錯誤方法
-		{http.MethodGet, "/api/v1/auth/password", false},   // 同上
-		{http.MethodGet, "/api/v1/files/list", false},      // 唯讀資料端點
-		{http.MethodPost, "/api/v1/auth/totp/setup", false},// TOTP 設定不該在改密碼前開放
-		{http.MethodGet, "/api/v1/auth/me/extra", false},   // 前綴相近但不是同一支
+		{http.MethodPost, "/api/v1/auth/me", false},         // 正確路徑但錯誤方法
+		{http.MethodGet, "/api/v1/auth/password", false},    // 同上
+		{http.MethodGet, "/api/v1/files/list", false},       // 唯讀資料端點
+		{http.MethodPost, "/api/v1/auth/totp/setup", false}, // TOTP 設定不該在改密碼前開放
+		{http.MethodGet, "/api/v1/auth/me/extra", false},    // 前綴相近但不是同一支
 	}
 	for _, c := range cases {
 		if got := passwordChangeExempt(c.method, c.path); got != c.want {
