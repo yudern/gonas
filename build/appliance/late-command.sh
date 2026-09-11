@@ -93,9 +93,9 @@ log "target architecture: $ARCH"
 # build-iso.sh 會把對應架構的 release tarball 解壓到
 # $GONAS_DIR/release-$ARCH/ 底下（跟使用者手動下載 tarball 解壓縮後的
 # 目錄結構完全一樣：gonasd/install.sh/uninstall.sh/gonas.service）,
-# 所以這裡直接呼叫同一份 install.sh，不需要網路連線 —— 這也是為什麼
-# 這個 ISO 可以做到「離線安裝」，不像一般 debian-installer netinst
-# 映像那樣還需要在安裝過程連網抓套件。
+# 所以這裡直接呼叫同一份 install.sh，不需要網路連線 —— gonasd 本體
+# 來自 ISO 上內嵌的 release tarball,加上 openssh-server/sudo 由 pkgsel
+# 從 DVD-1 的套件庫離線裝好,整個安裝過程完全不需要連網。
 #
 # 用 `sh ./install.sh` 明確指定直譯器，不用 `./install.sh` 靠執行位元
 # 觸發——理由跟 preseed.cfg 的 late_command 改成 `sh
@@ -188,44 +188,31 @@ else
     log "WARNING: $RELEASE_DIR/uninstall.sh not found — no persistent copy could be saved; uninstalling later will require re-mounting the original install media"
 fi
 
-# --- 1.7. (模式一:離線 SSH)安裝打包進 ISO 的 .deb --------------------
-# build-iso.sh 的 4.5 節(見那裡的說明)會在「建置 ISO 的機器上(有
-# 網路)」預先把 openssh-server 及其相依套件的 .deb 抓下來、放進 ISO
-# 的 gonas/debs/。這裡在目標系統的 in-target chroot 裡直接 `dpkg -i`
-# 這些本地檔案,安裝當下完全不需要網路——這就是這個 appliance 能同時
-# 做到「安裝過程完全離線」跟「裝完就有 SSH 可以用」的方法。
+# --- 1.7. SSH 加固(openssh-server 已由 preseed 的 pkgsel 從 DVD 裝好)---
+# 第二十八輪(換成 DVD-1 完整版):openssh-server / sudo 已經由
+# preseed.cfg 的 `pkgsel/include` 在安裝階段從 DVD-1 離線裝好了(不再
+# 需要前幾輪那套自己打包 .deb 再 dpkg -i 的脆弱做法,那一整段連同
+# build-iso.sh 4.5 節、lib/deb-closure.sh 都已刪除)。這裡只做「裝好
+# 之後的加固/確認」,不再負責安裝本身。整段仍是 best-effort:SSH 是
+# 遠端管理的便利/救援管道,不是 appliance 核心(核心是 gonasd + Web
+# 介面 + tty 主控台),每個可能失敗的指令都用 `if`/`|| true` 擋住,
+# 不讓它有能力用 `set -e` 拖垮整支 late-command.sh(第十九輪的教訓)。
 #
-# 整段刻意做成 best-effort,絕對不能讓它中止整個 late-command.sh:
-# SSH 是選用便利功能,不是 appliance 的核心(核心是上面已經裝好的
-# gonasd 本體 + Web 介面 + 下面的 tty 主控台)。這一點是第十九輪覆閱
-# 特別記取的教訓——這支腳本用 `set -e`,之前就是因為第 1 步 install.sh
-# 一失敗、整支腳本連品牌化都沒做就中止,才害整台機器變成陽春 Debian;
-# 選用功能更不該有能力用同樣的方式拖垮整支腳本,所以這裡每一個可能
-# 失敗的指令都明確用 `if`/`|| true` 包起來,不受 `set -e` 影響。
-DEBS_DIR="$GONAS_DIR/debs"
-if [ -d "$DEBS_DIR" ] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
-    log "installing bundled offline packages (SSH server + deps) from $DEBS_DIR"
-    # 一次把全部 .deb 交給 dpkg -i,讓它自己排相依設定順序;base 已經
-    # 裝好的相依會被視為已滿足。有些套件(例如 openssh-server)的
-    # postinst 在這種「沒有真正在跑的 systemd、裝置節點可能不完整」的
-    # chroot 環境裡不一定能完全設定完成,所以失敗時再補一次
-    # `dpkg --configure -a`,還是失敗也只記警告、不中止。
-    if dpkg -i "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
-        log "bundled offline packages installed"
-    else
-        dpkg --configure -a >/dev/null 2>&1 || true
-        log "WARNING: 'dpkg -i' on bundled packages reported problems; if SSH does not work after first boot, run 'sudo dpkg --configure -a'"
-    fi
+# 用 sshd 這個執行檔存不存在判斷「SSH 到底裝了沒」——理論上 pkgsel
+# 一定裝好了,但萬一 DVD 上真的沒有(不該發生)或 pkgsel 出了狀況,
+# 這裡優雅跳過、留一行明確的 log,不硬做。
+if [ -x /usr/sbin/sshd ] || command -v sshd >/dev/null 2>&1; then
+    log "openssh-server present (installed from DVD by pkgsel) — applying SSH hardening"
     # 保險:確保 SSH host key 真的產生了。openssh-server 的 postinst
-    # 正常會自己跑 `ssh-keygen -A`,但那是在這種「沒有真正在跑的 systemd
-    # /裝置節點可能不完整」的 in-target chroot 環境裡執行的,不保證每次
+    # 正常會自己跑 `ssh-keygen -A`,但那是在「沒有真正在跑的 systemd、
+    # 裝置節點可能不完整」的 in-target chroot 環境裡執行的,不保證每次
     # 都成功;這裡再明確補跑一次(ssh-keygen -A 是冪等的——已經存在的
     # host key 不會重新產生),沒有 host key 的話 sshd 開機會起不來。
     if command -v ssh-keygen >/dev/null 2>&1; then
         ssh-keygen -A >/dev/null 2>&1 || true
     fi
-    # 確保 SSH 服務開機自動啟動(openssh-server 的 postinst 通常已經
-    # enable 過,這裡再補一次確保;ssh / sshd 兩種 unit 名稱都試一下)。
+    # 確保 SSH 服務開機自動啟動(postinst 通常已經 enable 過,這裡再補
+    # 一次確保;ssh / sshd 兩種 unit 名稱都試一下)。
     if systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null; then
         log "ssh service enabled for boot"
     else
@@ -261,15 +248,14 @@ EOF
             log "WARNING: could not write sshd drop-in — if the first SSH login with the expired 'gonas' password is rejected, log in on tty2 to change it first"
         fi
     fi
-    # 確保 gonas 真的在 sudo 群組裡:preseed 的 user-setup 會在建立
-    # 帳號時把它加進 `sudo` 群組(base-passwd 內建這個群組,所以即使
-    # sudo 套件當時還沒裝,群組本身也存在、加得進去),這裡在 sudo 套件
-    # 離線裝好之後再 `usermod -aG` 補一次確保,冪等、失敗也不影響。
+    # 確保 gonas 真的在 sudo 群組裡:preseed 的 user-setup 會在建立帳號
+    # 時把它加進 `sudo` 群組,sudo 套件也已由 pkgsel 從 DVD 裝好,這裡
+    # 再 `usermod -aG` 補一次確保,冪等、失敗也不影響。
     if command -v usermod >/dev/null 2>&1; then
         usermod -aG sudo gonas 2>/dev/null || true
     fi
 else
-    log "no bundled offline packages found under $DEBS_DIR — this image was built without offline package bundling (SSH server will not be preinstalled; install it later with network access via 'apt install openssh-server')"
+    log "WARNING: openssh-server not found on the target — expected pkgsel to install it from the DVD. Remote SSH will be unavailable until you 'apt install openssh-server' after first boot (needs network)."
 fi
 
 # --- 1.8. 預先建立 Web 介面的預設 admin 帳號(gonas/gonas)----------------

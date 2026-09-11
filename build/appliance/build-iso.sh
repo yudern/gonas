@@ -1,9 +1,24 @@
 #!/bin/sh
-# build-iso.sh 把官方 Debian netinst ISO 改造成一份「插上就能自動裝好
-# GoNAS」的映像檔:下載官方 ISO -> 解開 -> 塞進 preseed.cfg / 這個目錄
-# 裡的其他檔案 / 已經編譯好的 gonasd release tarball -> 修改開機選單
+# build-iso.sh 把官方 Debian DVD-1 完整版 ISO 改造成一份「插上就能自動
+# 裝好 GoNAS」的映像檔:下載官方 ISO -> 解開 -> 塞進 preseed.cfg / 這個
+# 目錄裡的其他檔案 / 已經編譯好的 gonasd release tarball -> 修改開機選單
 # 的標題跟預設開機參數(自動套用 preseed，不需要在安裝畫面手動選)
 # -> 用 xorriso 重新包裝成一份新的、一樣可開機的 ISO。
+#
+# 第二十八輪(使用者決定):底層 ISO 從 netinst(~700MB,只含 base
+# 系統的最小套件,裝任何額外套件都要連網)換成 DVD-1 完整版(~3.7GB,
+# 本身就是一個很大的離線套件庫)。這樣做的直接好處:openssh-server、
+# sudo 這些「netinst 光碟上沒有、非得連網或自己打包 .deb 才裝得到」的
+# 套件,DVD-1 上本來就有,安裝程式用官方的 tasksel/pkgsel 機制就能在
+# 完全離線的情況下裝好——因此把前面幾輪為了在 netinst 上硬做「離線
+# SSH」而寫的那一整段脆弱的自訂 .deb 相依封閉集計算 + 逐一下載打包
+# (原本的 4.5 節 + late-command.sh 的 1.7 節 + lib/deb-closure.sh)
+# 整個刪掉,改回用 Debian 官方支援的 `pkgsel/include`。誠實邊界:DVD-1
+# 只含「最熱門的一部分套件」,GoNAS 的冷門相依(mergerfs/snapraid/
+# docker.io 等)不保證在 DVD-1 上;而且安裝媒體裝完會退出,所以「開機
+# 後才裝的東西」一律還是走網路(late-command.sh 3.5 節會把 apt 來源
+# 改指向網路鏡像)——DVD-1 的好處集中在「安裝當下」把 SSH/sudo 這類
+# 一定會用到的套件可靠地離線裝好,不是讓日後所有 apt install 都免網路。
 #
 # !!! 這支腳本沒有辦法在目前這個開發沙盒裡執行過一次 !!!
 # 這個環境的網路出口白名單會直接擋掉 deb.debian.org(用
@@ -27,7 +42,9 @@
 #   - macOS(例如用 Homebrew):`brew install xorriso wget`——checksum
 #     工具改用系統內建的 shasum/md5(見 lib/portable-checksum.sh),
 #     一樣不用另外裝。
-# 需要能連上網路下載官方 netinst ISO 跟(可選)驗證 GPG 簽章。
+# 需要能連上網路下載官方 DVD-1 ISO 跟(可選)驗證 GPG 簽章。DVD-1 有
+# ~3.7GB,下載、解開、重新包裝都比 netinst 久、也更吃磁碟空間(WORK_DIR
+# 在 /tmp 底下,解開一份 + 重新包裝一份,建議至少留 ~12GB 可用空間)。
 
 set -eu
 
@@ -73,11 +90,11 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 第十八輪覆閱(使用者實測 arm64 建置)抓到的問題:找開機選單設定檔的
 # `find` 呼叫,理由/實作見 lib/find-boot-menu-cfgs.sh 開頭的說明。
 . "$SCRIPT_DIR/lib/find-boot-menu-cfgs.sh"
-# 第十九輪覆閱「模式一:離線 SSH」——算 openssh-server 相依封閉集、
-# 決定要打包哪些 .deb 進 ISO 的核心邏輯,見 lib/deb-closure.sh 開頭的
-# 說明。真正的下載步驟在下面 4.5 節,是 best-effort(失敗只記警告、
-# 不會讓整個建置或 appliance 壞掉)。
-. "$SCRIPT_DIR/lib/deb-closure.sh"
+# 第二十八輪:換成 DVD-1 之後,原本第十九輪為了在 netinst 上硬做離線
+# SSH 而寫的 lib/deb-closure.sh(算 openssh-server 相依封閉集、決定要
+# 打包哪些 .deb)已經整個用不到了——openssh-server/sudo 直接由
+# preseed.cfg 的 pkgsel/include 從 DVD-1 離線裝好。該檔案跟它的離線
+# 回歸測試 test-deb-closure.sh 已一併刪除,這裡不再 source。
 
 echo "==> building GoNAS appliance ISO for $ARCH (version $VERSION)"
 echo "==> work dir: $WORK_DIR"
@@ -98,27 +115,22 @@ if [ ! -f "$RELEASE_TARBALL" ]; then
     exit 1
 fi
 
-# --- 2. 下載官方 Debian netinst ISO ----------------------------------
-# 第十八輪覆閱(使用者實測)才真的抓到的問題:這裡以前假設
-# cdimage.debian.org 的 netinst 檔名是用「版本代號」組出來的(例如
-# `debian-bookworm-amd64-netinst.iso`),這個假設從一開始就是錯的,
-# 而且錯得很基本——這個開發沙盒完全連不到 cdimage.debian.org,前
-# 17 輪不管做多仔細的靜態審查都不可能發現。使用者實測第一次真的呼叫
-# `wget`/`awk` 去比對真正的 SHA256SUMS 內容,才第一次真正暴露:
-# `debian-cd/current/<arch>/iso-cd/` 底下的檔名實際上是用完整版本
-# 號組出來的(例如 `debian-13.6.0-arm64-netinst.iso`),不是代號,
-# 「代號」只用在 APT 的套件庫路徑(`/debian/dists/bookworm/`)這種
-# 完全不同的地方,兩者是兩套不相干的命名慣例,不能套用同一個假設。
-# 修法:不再自己組出一個「猜測的」檔名,而是先把 SHA256SUMS 抓下來,
-# 再從裡面實際找出符合 `debian-<版本號>-<arch>-netinst.iso` 這個格式
-# 的那一行,檔名跟版本號都直接來自 Debian 官方當下真正發布的內容,
-# 不管 Debian 之後從 trixie 換到下一個代號、或同一個穩定版又出新的
-# point release(12.11.0 -> 12.12.0 這種),都不需要回來改這支腳本。
+# --- 2. 下載官方 Debian DVD-1 完整版 ISO ------------------------------
+# 第二十八輪:從 netinst 換成 DVD-1。兩者在 cdimage.debian.org 上是
+# 不同的目錄跟檔名:
+#   - netinst:`debian-cd/current/<arch>/iso-cd/debian-<版本>-<arch>-netinst.iso`
+#   - DVD-1:  `debian-cd/current/<arch>/iso-dvd/debian-<版本>-<arch>-DVD-1.iso`
+# 沿用第十八輪的做法(那一輪使用者實測才抓到「檔名是完整版本號、不是
+# 代號」這個真相):不自己組出一個猜測的檔名,而是先抓該目錄的
+# SHA256SUMS,再從裡面實際找出符合 `debian-<版本號>-<arch>-DVD-1.iso`
+# 格式的那一行,檔名跟版本號都直接來自 Debian 官方當下真正發布的內容,
+# 不管之後換代號或出新的 point release 都不需要回來改這支腳本。
+# 可用 GONAS_DEBIAN_ISO_URL 覆寫整個目錄網址(例如指到本地鏡像)。
 case "$ARCH" in
     amd64) DEBIAN_ARCH_DIR="amd64" ;;
     arm64) DEBIAN_ARCH_DIR="arm64" ;;
 esac
-BASE_ISO_URL="${GONAS_DEBIAN_ISO_URL:-https://cdimage.debian.org/debian-cd/current/$DEBIAN_ARCH_DIR/iso-cd}"
+BASE_ISO_URL="${GONAS_DEBIAN_ISO_URL:-https://cdimage.debian.org/debian-cd/current/$DEBIAN_ARCH_DIR/iso-dvd}"
 
 # 先抓 SHA256SUMS(每次都重新抓,不快取——這份清單很小,而且要用它來
 # 判斷「快取的 base.iso 還算不算數」,快取 SHA256SUMS 本身會讓這個判斷
@@ -131,18 +143,18 @@ if ! wget -q -O "$WORK_DIR/SHA256SUMS" "$SHA256SUMS_URL"; then
 fi
 
 # 從 SHA256SUMS 實際列出的檔名裡,找符合
-# debian-<版本號,例如 13.6.0>-<arch>-netinst.iso 格式的那一行——不是
+# debian-<版本號,例如 13.6.0>-<arch>-DVD-1.iso 格式的那一行——不是
 # 事先假設好一個檔名再回頭比對。`grep -o` 在 GNU 跟 BSD(macOS 內建)
-# grep 底下都支援,不需要額外的相容性包裝。`head -n1` 是防呆:目前
-# 這個目錄底下就只會有一個 netinst 映像檔,理論上只會有一個結果,
-# 但如果 Debian 未來改變目錄結構、同時列出多個候選,寧可明確只取第一個
-# 也不要整個比對邏輯壞掉。
-BASE_ISO_NAME="$(grep -o 'debian-[0-9][0-9.]*-'"$DEBIAN_ARCH_DIR"'-netinst\.iso' "$WORK_DIR/SHA256SUMS" | head -n1)"
+# grep 底下都支援,不需要額外的相容性包裝。`head -n1` 是防呆:iso-dvd
+# 目錄下只有一個 DVD-1 映像檔,理論上只會有一個結果,但如果 Debian
+# 未來改變目錄結構、同時列出多個候選,寧可明確只取第一個也不要整個
+# 比對邏輯壞掉。注意 DVD 檔名裡的 "DVD-1" 是大寫、中間有連字號。
+BASE_ISO_NAME="$(grep -o 'debian-[0-9][0-9.]*-'"$DEBIAN_ARCH_DIR"'-DVD-1\.iso' "$WORK_DIR/SHA256SUMS" | head -n1)"
 if [ -z "$BASE_ISO_NAME" ]; then
-    echo "error: could not find a 'debian-<version>-$DEBIAN_ARCH_DIR-netinst.iso' entry in $SHA256SUMS_URL — Debian's directory layout or netinst filename convention may have changed; open the URL in a browser to see what's actually there" >&2
+    echo "error: could not find a 'debian-<version>-$DEBIAN_ARCH_DIR-DVD-1.iso' entry in $SHA256SUMS_URL — Debian's directory layout or DVD filename convention may have changed; open the URL in a browser to see what's actually there" >&2
     exit 1
 fi
-echo "==> found official netinst image: $BASE_ISO_NAME"
+echo "==> found official DVD-1 image: $BASE_ISO_NAME"
 
 EXPECTED_SHA256="$(awk -v name="$BASE_ISO_NAME" '$2 == name || $2 == "*"name {print $1}' "$WORK_DIR/SHA256SUMS")"
 if [ -z "$EXPECTED_SHA256" ]; then
@@ -153,12 +165,12 @@ fi
 # --- 2.5 下載官方 ISO(有本地快取就重用,雜湊對得上才算數)------------
 # 這支腳本在第一次真的拿去跑之前,大概率會被反覆執行很多次(preseed/
 # late-command 邏輯只要哪裡出錯就要重跑整個建置流程再進 QEMU 測一次)
-# ——netinst ISO 有幾百 MB,每次都重新下載對「反覆測試、反覆修正」這種
-# 使用情境很不友善,所以在 repo 外的 $REPO_ROOT/dist/.cache/ 底下留一份
-# 快取。快取是否可以重用完全看雜湊值是否還跟官方最新的 SHA256SUMS
-# 一致——不是看檔名或下載時間,這樣即使 Debian 之後把同一個檔名的
-# netinst ISO 換成新的內容(小版本更新常有這種情況),也不會誤用一份
-# 過期的快取。
+# ——DVD-1 ISO 有 ~3.7GB,每次都重新下載對「反覆測試、反覆修正」這種
+# 使用情境很不友善(而且比 netinst 更痛,檔案大 5 倍),所以在 repo 外的
+# $REPO_ROOT/dist/.cache/ 底下留一份快取。快取是否可以重用完全看雜湊值
+# 是否還跟官方最新的 SHA256SUMS 一致——不是看檔名或下載時間,這樣即使
+# Debian 之後把同一個檔名的 DVD-1 ISO 換成新的內容(小版本更新常有這種
+# 情況),也不會誤用一份過期的快取。
 CACHE_DIR="$REPO_ROOT/dist/.cache/debian-iso"
 mkdir -p "$CACHE_DIR"
 CACHED_ISO="$CACHE_DIR/$BASE_ISO_NAME"
@@ -307,7 +319,7 @@ fi
 # ——避免使用者分開兩次 `make iso-amd64`/`make iso-arm64` 時,這一步
 # 反而互相刪掉對方仍然有效的快取,那樣就違背了當初做這個快取機制的
 # 本意。
-for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-netinst.iso; do
+for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-DVD-1.iso; do
     [ -e "$old_cached" ] || continue
     [ "$(basename "$old_cached")" = "$BASE_ISO_NAME" ] && continue
     echo "==> removing stale cached ISO for a different Debian release ($DEBIAN_ARCH_DIR): $old_cached"
@@ -351,90 +363,15 @@ cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 mkdir -p "$GONAS_ON_ISO/lib"
 cp -a "$SCRIPT_DIR/lib/." "$GONAS_ON_ISO/lib/"
 
-# --- 4.5 (模式一:離線 SSH)把 openssh-server 及其相依 .deb 打包進 ISO ---
-# netinst 光碟官方定義就只含「裝 base 系統的最小套件」,openssh-server
-# 這種東西不在裡面,正常安裝流程要連網去鏡像站抓——但這個 appliance
-# 的設計是「安裝過程完全離線」(preseed.cfg 的 apt-setup/use_mirror
-# false)。矛盾的解法(使用者選的「模式一」):在「建置 ISO 的這台機器
-# 上(本來就需要網路去抓 netinst ISO)」順便把 openssh-server 以及它
-# 需要的所有相依套件的 .deb 抓下來、放進 ISO 的 gonas/debs/,之後
-# late-command.sh 在目標系統裡直接 `dpkg -i` 這些本地檔案,安裝當下
-# 完全不需要網路。
-#
-# 整段是 best-effort:抓不到套件索引、或某個 .deb 下載失敗,都只印警告
-# 繼續,不讓整個 ISO 建置失敗——SSH 是選用便利功能,不是 appliance
-# 的核心(核心是 gonasd 本體 + Web 介面 + tty 主控台,那些完全不依賴
-# 這一步)。設定 GONAS_SKIP_OFFLINE_PACKAGES=1 可以整段跳過。
-if [ -n "${GONAS_SKIP_OFFLINE_PACKAGES:-}" ]; then
-    echo "==> GONAS_SKIP_OFFLINE_PACKAGES set — skipping offline package bundling (SSH will NOT be preinstalled)"
-else
-    # 套件鏡像跟前面抓 netinst ISO 的 cdimage.debian.org 是兩個不同的
-    # 東西:cdimage 放的是「光碟映像」,套件本身在一般的 apt 鏡像
-    # (deb.debian.org/debian)。suite 用 `stable`——deb.debian.org 上
-    # `dists/stable` 永遠指向目前的穩定版,跟前面 `debian-cd/current/`
-    # 抓到的 netinst 是同一個穩定版,兩者版本一致(穩定版內只有 ABI
-    # 相容的安全性更新,不會動到 openssh-server 相依的 base 函式庫的
-    # 主版本,所以就算鏡像上的 openssh-server 比 ISO 的 base 稍新也裝
-    # 得起來)。都可以用環境變數覆寫。
-    DEB_MIRROR="${GONAS_DEBIAN_PKG_MIRROR:-https://deb.debian.org/debian}"
-    DEB_SUITE="${GONAS_DEBIAN_SUITE:-stable}"
-    # 預設打包 openssh-server(遠端管理)跟 sudo(gonas 帳號被加進
-    # sudo 群組,但 sudo 這個指令本身也不在 netinst 光碟裡,一樣要
-    # 離線打包才能用)。可用環境變數覆寫成別的清單。
-    SEED_PACKAGES="${GONAS_APPLIANCE_SEED_PACKAGES:-openssh-server sudo}"
-    DEBS_DIR="$GONAS_ON_ISO/debs"
-    PKG_INDEX_URL="$DEB_MIRROR/dists/$DEB_SUITE/main/binary-$DEBIAN_ARCH_DIR/Packages.gz"
-
-    echo "==> (offline SSH) fetching package index $PKG_INDEX_URL"
-    if wget -q -O "$WORK_DIR/Packages.gz" "$PKG_INDEX_URL" 2>/dev/null && \
-       gzip -dc "$WORK_DIR/Packages.gz" > "$WORK_DIR/Packages" 2>/dev/null; then
-        # gzip -dc 在 GNU 跟 macOS(BSD)底下都存在、行為一致,不需要
-        # 額外的相容性包裝(不像 xz 在 stock macOS 上沒有)。
-        #
-        # 第二十四輪覆閱(主動複查「宣稱是 best-effort 的區塊,是不是
-        # 每一行真的都有擋 set -eu」時抓到的):這裡原本是裸的
-        # `mkdir -p "$DEBS_DIR"`,沒有任何錯誤處理——這支腳本一開頭是
-        # `set -eu`,萬一這裡失敗(例如建置機器磁碟空間不夠、或權限
-        # 問題),會直接中止整支 build-iso.sh,卻跟上面「整段是
-        # best-effort,失敗只印警告、不會讓整個 ISO 建置失敗」這段
-        # 註解講的完全不一致——SSH 只是選用便利功能,不應該因為離線
-        # 打包這一步的目錄建不起來,就連 gonasd 本體都裝不進 ISO。
-        # 改成失敗時只記警告、直接跳過整個離線打包區塊,不中止建置。
-        if ! mkdir -p "$DEBS_DIR" 2>/dev/null; then
-            echo "    WARNING: could not create $DEBS_DIR — skipping offline package bundling; SSH will NOT be preinstalled" >&2
-        else
-        CLOSURE_LIST="$WORK_DIR/deb-closure.list"
-        echo "==> (offline SSH) computing dependency closure for: $SEED_PACKAGES"
-        # 排除 required/important——debootstrap 建的 base 一定已經有這兩個
-        # 優先級的所有套件,不需要我們再打包一份,見 lib/deb-closure.sh。
-        # shellcheck disable=SC2086
-        gonas_deb_closure "$WORK_DIR/Packages" "required,important" $SEED_PACKAGES > "$CLOSURE_LIST" 2>"$WORK_DIR/deb-closure.err" || true
-        if [ -s "$WORK_DIR/deb-closure.err" ]; then
-            sed 's/^/    /' "$WORK_DIR/deb-closure.err" >&2
-        fi
-        _deb_ok=0
-        _deb_fail=0
-        while IFS= read -r _relpath; do
-            [ -n "$_relpath" ] || continue
-            _out="$DEBS_DIR/$(basename "$_relpath")"
-            if wget -q -O "$_out" "$DEB_MIRROR/$_relpath" 2>/dev/null; then
-                _deb_ok=$((_deb_ok + 1))
-            else
-                echo "    WARNING: failed to download $DEB_MIRROR/$_relpath — SSH may be incomplete" >&2
-                rm -f "$_out"
-                _deb_fail=$((_deb_fail + 1))
-            fi
-        done < "$CLOSURE_LIST"
-        echo "==> (offline SSH) bundled $_deb_ok package(s) into $DEBS_DIR ($_deb_fail failed)"
-        if [ "$_deb_ok" = "0" ]; then
-            echo "    WARNING: no packages were bundled — the installed system will NOT have a preinstalled SSH server" >&2
-            rmdir "$DEBS_DIR" 2>/dev/null || true
-        fi
-        fi
-    else
-        echo "    WARNING: could not fetch/decompress the package index from $PKG_INDEX_URL — skipping offline package bundling; SSH will NOT be preinstalled. (set GONAS_DEBIAN_PKG_MIRROR to a reachable mirror, or GONAS_SKIP_OFFLINE_PACKAGES=1 to silence this)" >&2
-    fi
-fi
+# --- 4.5 (第二十八輪已移除)離線 SSH 的 .deb 打包 ---------------------
+# 這裡原本(第十九輪起)是一整段「在建置機器上算 openssh-server 的相依
+# 封閉集、逐一下載 .deb、打包進 ISO 的 gonas/debs/,再由 late-command.sh
+# 離線 dpkg -i」的自訂邏輯——那是為了在只含 base 套件的 netinst 光碟上
+# 硬做出「離線也裝得到 SSH」而寫的,脆弱(相依解析、版本比對、下載失敗
+# 都要自己處理)且踩過好幾個坑。第二十八輪換成 DVD-1 完整版之後,
+# openssh-server / sudo 本來就在光碟的套件庫裡,直接由 preseed.cfg 的
+# `pkgsel/include` 用 Debian 官方機制從光碟離線裝好,這一整段連同
+# lib/deb-closure.sh / test-deb-closure.sh 一併刪除,不再需要。
 
 # --- 5. 修改開機選單:自動套用 preseed、品牌化標題 ---------------------
 # 不同 Debian 版本的 isolinux/grub 選單檔案結構偶爾會變(例如選單項目
@@ -584,15 +521,28 @@ done < "$CFG_LIST"
 
 # --- 6. 重新計算 checksum 清單、重新包裝 -------------------------------
 echo "==> recomputing md5sum.txt"
-# 這裡原本是 `find ... -exec md5sum {} \;`——`-exec` 直接呼叫外部指令
-# `md5sum`,沒辦法像其他地方一樣改成呼叫 shell 函式
-# (`gonas_md5sum`,見上面 lib/portable-checksum.sh 的說明,原因同樣是
-# macOS 內建 BSD 使用者空間沒有 GNU 的 md5sum)。改成 `find | while read`
-# 逐一呼叫 gonas_md5sum,把結果導向同一份 md5sum.txt——這裡不需要迴圈
-# 內部設定的變數在迴圈結束後還讀得到(不是 build-iso.sh 前面
-# 「開機選單設定檔清單」那種情境),單純把每一行的輸出接力寫進檔案,
-# 用管線(而不是先寫檔案再讀)完全沒問題。
-( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' | while read -r f; do gonas_md5sum "$f"; done > md5sum.txt )
+# md5sum.txt 是 Debian ISO 給「檢查光碟完整性」自我測試用的清單。我們
+# 加了 gonas/ 檔案、也改了開機設定檔,所以重算一份才對得起來。
+#
+# 第二十八輪(換成 DVD-1)的效能考量:netinst 只有幾百個檔案,原本
+# `find | while read; do gonas_md5sum; done`(逐檔各 spawn 一個程序)還
+# 可以接受;但 DVD-1 的 pool/ 底下有「上萬個」套件檔案,逐檔 spawn 會
+# 讓這一步在使用者的 Mac mini 上慢到好幾分鐘甚至更久。改成優先用「一次
+# 吃多個檔名」的批次呼叫:Linux 建置機有 GNU `md5sum`、macOS 有內建的
+# `md5 -r`,兩者都接受多個檔名參數、輸出格式也都是「雜湊 檔名」一行一個
+# ——用 `xargs` 分批餵,程序 spawn 次數從「上萬」降到「個位數」。兩個
+# 都沒有才退回原本的逐檔 gonas_md5sum(理論上不會發生,見
+# lib/portable-checksum.sh:有 sha256 就幾乎一定有 md5 家族其一)。
+# `-print0 | xargs -0` 處理檔名含空白/特殊字元;GNU 與 BSD 的 find/xargs
+# 都支援 -print0/-0。
+if command -v md5sum >/dev/null 2>&1; then
+    ( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' -print0 | xargs -0 md5sum > md5sum.txt )
+elif command -v md5 >/dev/null 2>&1; then
+    # macOS 內建 `md5 -r` 也接受多個檔名,輸出「雜湊 檔名」格式跟 GNU 相容。
+    ( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' -print0 | xargs -0 md5 -r > md5sum.txt )
+else
+    ( cd "$EXTRACT_DIR" && find . -type f ! -name 'md5sum.txt' ! -path './isolinux/*' | while read -r f; do gonas_md5sum "$f"; done > md5sum.txt )
+fi
 
 OUT_DIR="$REPO_ROOT/dist/release"
 mkdir -p "$OUT_DIR"

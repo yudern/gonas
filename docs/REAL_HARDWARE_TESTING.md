@@ -2238,6 +2238,54 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   的實際效果、以及 console 讀到的 systemctl/ss 真實結果,都要等下次
   重建、重裝一次才會第一次真的在 debian-installer/systemd 環境裡跑到。
 
+**第二十八輪(使用者決定:底層 ISO 從 netinst 換成 DVD-1 完整版)**:
+
+- **動機**:使用者觀察到「netinst 小版本問題比較多」,提議直接換成完整
+  版(不裝桌面),讓後期安裝東西不太會報錯。經過分析後採用——但把
+  邊界講清楚(見下)。
+- **這個換法真正解決的問題**:netinst 只含 base 套件,`openssh-server`/
+  `sudo` 都不在光碟上,前幾輪為了「離線也要有 SSH」硬寫了一整套自訂
+  邏輯——在建置機器上算相依封閉集、逐一下載 .deb、打包進 ISO、再由
+  late-command.sh 離線 `dpkg -i`。這套東西脆弱、踩過好幾個坑,也是
+  使用者實測「IP 通但 SSH 連不上」的來源之一(SSH 很可能根本沒被
+  成功打包/安裝)。DVD-1 本身就是一個大的離線套件庫,openssh-server/
+  sudo 直接在光碟裡,改用 Debian 官方的 `pkgsel/include` 就能在
+  `use_mirror false`(離線)下從光碟裝好——**那一整段脆弱的自訂打包
+  邏輯因此全部刪掉**。
+- **改了什麼**:
+    - `build-iso.sh`:下載來源目錄 `iso-cd`→`iso-dvd`、檔名比對
+      `-netinst.iso`→`-DVD-1.iso`、舊快取清理樣式一併改;刪掉 4.5 節
+      (離線 .deb 打包)整段與 `. lib/deb-closure.sh`;md5sum.txt 重算
+      改成優先用批次的 `md5sum`/`md5 -r`(DVD 有上萬個檔案,原本逐檔
+      spawn 會慢到好幾分鐘)。
+    - `preseed.cfg`:加 `d-i pkgsel/include string openssh-server sudo`
+      (從 DVD 離線裝),並在該行上方明確警告「只能列確定在 DVD-1 上的
+      套件,pkgsel 遇到光碟上沒有的套件會讓安裝報錯」。
+    - `late-command.sh`:1.7 節從「離線 dpkg -i 打包的 .deb」改成「SSH
+      已由 pkgsel 裝好之後的加固」(補產 host key、確認開機啟動、寫
+      sshd drop-in、確認 gonas 在 sudo 群組),不再負責安裝本身。
+    - 刪除 `lib/deb-closure.sh`、`test-deb-closure.sh`(已無人使用)。
+    - `README.md`:更新建置步驟與「已知限制」,新增「為什麼從 netinst
+      換成 DVD-1」及其誠實邊界。
+- **誠實邊界(務必對使用者講清楚,避免過度期待)**:DVD-1 只含「最熱門
+  的一部分套件」,GoNAS 的冷門相依(mergerfs / snapraid / docker.io 等)
+  **不保證**在 DVD-1 上;而且安裝媒體裝完會退出(cdrom-detect/eject),
+  開機後 apt 一律走網路鏡像(late-command.sh 3.5 節改的來源)。所以
+  DVD-1 的好處集中在「**安裝當下**把 SSH/sudo 這類一定會用到的套件可靠
+  地離線裝好、並刪掉脆弱的自訂打包碼」,**不是**讓日後所有 `apt install`
+  都免網路——「後期安裝東西不報錯」這件事,本質上仍然要靠機器有網路
+  (跟 netinst 時代一樣),DVD-1 沒有改變這一點。
+- **這一輪沒有解決的**:前幾輪的其他 bug(round 23 的 in-target/cdrom、
+  round 24 的 set -e 陷阱、round 26 的 console 健康顯示)本來就跟
+  netinst/DVD 無關,不是換 ISO 能改變的,那些各自的修法保持不變。
+- **驗證邊界**:`sh -n` 全部腳本、剩下的 6 支 `test-*.sh`(deb-closure
+  測試已隨檔案刪除)、`gofmt`/`go vet`/`go build` 全過;確認移除 4.5 節
+  後沒有殘留對 `gonas_deb_closure`/`DEBS_DIR`/`DEB_MIRROR` 等已刪變數的
+  引用。但「DVD-1 上確實有 openssh-server/sudo、pkgsel 真的能離線從
+  DVD 裝好、換成 iso-dvd 目錄後檔名比對正確抓到 DVD-1」這幾件事,這個
+  開發沙盒連不上 cdimage.debian.org、也沒有 debian-installer,全部需要
+  使用者下一次實際建置(這次要抓 ~3.7GB 的 DVD-1)+ 重裝一次才能確認。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

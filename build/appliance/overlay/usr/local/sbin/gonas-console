@@ -216,7 +216,7 @@ render() {
         fi
     else
         echo "  SSH:  — 未安裝 not installed"
-        echo "        (建置時的離線打包未成功;開機且有網路後可用"
+        echo "        (安裝時未從 DVD 裝上;開機且有網路後可用"
         echo "         sudo apt install openssh-server 補裝)"
     fi
 

@@ -39,7 +39,7 @@ Err:3 https://download.docker.com/linux/ubuntu noble InRelease
 ```
 
 也就是說,連這個沙盒自己的 Ubuntu 24.04 都沒辦法 `apt-get update`,
-更不用說下載 Debian netinst ISO、安裝 `xorriso`/`qemu-system-x86_64`
+更不用說下載 Debian DVD-1 ISO、安裝 `xorriso`/`qemu-system-x86_64`
 這些工具了(查過 `/root/.ccr/README.md` 跟代理狀態端點,允許清單裡
 完全沒有任何 OS 套件鏡像)。因此:
 
@@ -132,12 +132,12 @@ gpg 版本差異而壞掉的邏輯還是好的。
 1. 確認/建置 `dist/release/gonas-<version>-linux-<arch>.tar.gz`(沒有
    就自動跑 `make release`——這一步是純 Go 交叉編譯,在任何機器上都
    不需要網路)。
-2. 抓官方發布的 `SHA256SUMS` 清單,從裡面實際找出符合
-   `debian-<版本號>-<arch>-netinst.iso` 格式的那一行(檔名跟版本號
-   都是當下從官方清單讀出來的,不是腳本自己猜或寫死的,見下面「已知
-   的設計限制」一節第十八輪覆閱那一條),從 `dist/.cache/` 找有沒有
-   雜湊值還對得上的快取檔案可以直接重用;沒有的話從
-   `https://cdimage.debian.org/...` 下載官方 netinst ISO(需要網路;
+2. 抓官方發布的 `SHA256SUMS` 清單(iso-dvd 目錄的那份),從裡面實際
+   找出符合 `debian-<版本號>-<arch>-DVD-1.iso` 格式的那一行(檔名跟
+   版本號都是當下從官方清單讀出來的,不是腳本自己猜或寫死的),從
+   `dist/.cache/` 找有沒有雜湊值還對得上的快取檔案可以直接重用;沒有的
+   話從 `https://cdimage.debian.org/...iso-dvd/` 下載官方 DVD-1 ISO
+   (~3.7GB,需要網路;
    鏡像位置可用 `GONAS_DEBIAN_ISO_URL` 環境變數覆寫,例如想固定用某個
    已經封存的舊版本,可以指到 `cdimage.debian.org` 底下對應的 archive
    路徑),下載完比對雜湊值,不一致就直接中止、不繼續往下做。
@@ -298,10 +298,28 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
 
 ## 已知的設計限制/尚未做的事
 
-- 只支援 Debian netinst 映像,沒有做 Ubuntu Server 或其他發行版的
-  版本。抓的是 `debian-cd/current/` 這個永遠指向「目前最新穩定版」的
-  路徑,沒有自己選代號/版本這回事(想固定用某個已經封存的舊版本,
-  改設定 `GONAS_DEBIAN_ISO_URL` 指到對應的 archive 路徑)。
+- 只支援 Debian DVD-1 完整版映像(第二十八輪從 netinst 換過來,理由見
+  下一條),沒有做 Ubuntu Server 或其他發行版的版本。抓的是
+  `debian-cd/current/<arch>/iso-dvd/` 這個永遠指向「目前最新穩定版
+  DVD-1」的路徑,沒有自己選代號/版本這回事(想固定用某個已經封存的
+  舊版本,改設定 `GONAS_DEBIAN_ISO_URL` 指到對應的 archive 路徑)。
+  DVD-1 有 ~3.7GB,下載、解開、重新包裝都比 netinst 久、也更吃磁碟
+  (建議建置機器留 ~12GB 可用空間)。
+- **為什麼從 netinst 換成 DVD-1(第二十八輪,使用者決定)**:netinst
+  只含 base 系統的最小套件,`openssh-server`/`sudo` 都不在裡面,要在
+  「完全離線安裝」的前提下裝上它們,前幾輪只能自己在建置機器上算相依
+  封閉集、逐一下載 .deb、打包進 ISO、再離線 dpkg -i——這套自訂邏輯
+  脆弱、踩過好幾個坑,而且是使用者實測「IP 通但 SSH 連不上」的來源
+  之一。DVD-1 本身就是一個很大的離線套件庫,openssh-server/sudo 直接
+  在光碟裡,改用 Debian 官方的 `pkgsel/include` 就能在離線情況下從
+  光碟裝好,那一整段脆弱的自訂打包邏輯(build-iso.sh 4.5 節、
+  late-command.sh 1.7 節的 dpkg -i、`lib/deb-closure.sh`、
+  `test-deb-closure.sh`)因此全部刪掉。**誠實邊界**:DVD-1 只含「最
+  熱門的一部分套件」,GoNAS 的冷門相依(mergerfs/snapraid/docker.io
+  等)不保證在 DVD-1 上;而且安裝媒體裝完會退出,開機後 apt 一律走
+  網路(見 late-command.sh 3.5 節),所以 DVD-1 的好處集中在「安裝
+  當下把 SSH/sudo 這類一定會用到的套件可靠地離線裝好」,不是讓日後
+  所有 `apt install` 都免網路。
 - **`build-iso.sh` 原本假設 Debian netinst ISO 的檔名是用版本代號組
   出來的(`debian-bookworm-<arch>-netinst.iso`),這個假設從一開始
   就是錯的,而且是第十八輪覆閱——使用者第一次真的在自己的機器上執行
@@ -317,36 +335,27 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   `iso-arm64` 因此**從第一天開始就不可能成功執行**,只是這個開發
   沙盒完全沒有網路去實際驗證這件事,所以一直沒有人發現。已修正:
   不再自己組一個「猜測的」檔名,改成先把 `SHA256SUMS` 抓下來,直接
-  從裡面找出符合 `debian-<版本號>-<arch>-netinst.iso` 格式的那一行,
-  檔名跟版本號都來自 Debian 當下真正發布的內容——這樣不管 Debian
-  之後從 trixie 換到下一個代號、或同一個穩定版又出新的 point
-  release,都不需要回來改這支腳本,原本的 `GONAS_DEBIAN_RELEASE`
-  環境變數也因此整個拿掉(它原本要選的東西,`current/` 這個路徑本來
-  就只會有一份,沒有代號可選)。這個 bug 目前只在文件層面驗證過邏輯
-  (讀真正的 Debian 鏡像站目錄列表確認檔名格式),還沒有被使用者
-  實際重跑一次 `make iso-arm64` 確認修好,見
-  `docs/REAL_HARDWARE_TESTING.md` 第十八輪的記錄。
-- 安裝過程完全離線(不連網抓套件),所以不會在裝機時自動安裝
-  mergerfs/snapraid/samba/docker.io/nfs-common/wireguard-tools/rsync
-  這些 GoNAS 的「選用」外部相依套件——開機、機器有網路之後,透過
-  Web 介面的 Doctor 頁面(或手動 `apt install`)補裝,效果跟軟體版
-  安裝路徑完全一樣。
-- **「完全離線安裝」跟「裝完就有 SSH / sudo 可以用」在 netinst 光碟上
-  本來是直接衝突的,用「模式一」解決(第十九輪覆閱)**:netinst 光碟
-  官方定義就只含「裝 base 系統的最小套件」,`openssh-server`(SSH
-  server)跟 `sudo` 都不在裡面,正常安裝要連網抓——但這個 appliance
-  設定了完全離線安裝。解法是在「建置 ISO 的機器上(本來就要連網抓
-  netinst)」預先把 openssh-server / sudo 及其相依 `.deb` 打包進 ISO
-  的 `gonas/debs/`(見 `build-iso.sh` 4.5 節與 `lib/deb-closure.sh`),
-  再由 `late-command.sh` 在目標系統離線 `dpkg -i`(見 late-command.sh
-  1.7 節)。整段是 best-effort——抓不到套件或某個 .deb 下載失敗,只會
-  少了 SSH,不會讓 ISO 建置或 appliance 核心功能(gonasd + Web 介面
-  + tty 主控台)壞掉;設定 `GONAS_SKIP_OFFLINE_PACKAGES=1` 可以整段
-  跳過。想多打包別的套件,設 `GONAS_APPLIANCE_SEED_PACKAGES`(空白
-  分隔)。**注意這只在文件/單元測試層面驗證過封閉集邏輯(見
-  `test-deb-closure.sh`),真正下載 .deb + 在目標系統 dpkg -i 還需要
-  使用者實際建置 + 安裝一次確認,見 docs/REAL_HARDWARE_TESTING.md
-  第十九輪。**
+  從裡面找出符合檔名格式的那一行(第二十八輪換 DVD-1 後,格式改成
+  `debian-<版本號>-<arch>-DVD-1.iso`),檔名跟版本號都來自 Debian
+  當下真正發布的內容——這樣不管 Debian 之後換代號、或同一個穩定版
+  又出新的 point release,都不需要回來改這支腳本。
+- 安裝過程完全離線(不連網抓套件)。openssh-server / sudo 由
+  `pkgsel/include` 從 DVD-1 離線裝好;但 mergerfs/snapraid/samba/
+  docker.io/nfs-common/wireguard-tools/rsync 這些 GoNAS 的「選用」外部
+  相依套件,不保證在 DVD-1 上、也刻意不在裝機時自動裝——開機、機器
+  有網路之後,透過 Web 介面的 Doctor 頁面(或手動 `apt install`)補裝,
+  效果跟軟體版安裝路徑完全一樣。
+- **「完全離線安裝」跟「裝完就有 SSH / sudo 可以用」——第二十八輪改用
+  DVD-1 之後不再是矛盾**:`openssh-server`/`sudo` 都在 DVD-1 的套件庫
+  裡,preseed.cfg 用官方的 `d-i pkgsel/include string openssh-server
+  sudo` 就能在離線情況下從光碟裝好,`late-command.sh` 1.7 節只負責
+  裝好之後的加固(補產 host key、確認開機啟動、寫 sshd drop-in 保證
+  過期密碼能在 SSH 上改、確認 gonas 在 sudo 群組)。前幾輪那套自己
+  算相依封閉集 + 下載 .deb + 離線 dpkg -i 的做法(以及
+  `lib/deb-closure.sh`/`test-deb-closure.sh`)已整個刪除。**想在裝機
+  階段從 DVD 多裝別的套件,改 preseed.cfg 的 `pkgsel/include` 那一行
+  ——但務必先確認該套件真的在 DVD-1 上,pkgsel 遇到光碟上找不到的
+  套件會讓套件安裝這一步報錯(見 preseed.cfg 該行上方的警告)。**
 - 沒有做 Secure Boot 簽章相關處理,規劃上假設目標機器的韌體允許
   一般(非簽章)開機或已關閉 Secure Boot。
 - **這個 appliance「開機直接看到 GoNAS 品牌畫面」的整套體驗,是建立在
