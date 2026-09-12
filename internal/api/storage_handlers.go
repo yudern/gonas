@@ -73,11 +73,12 @@ func (s *Server) handleStorageDisksSmart(w http.ResponseWriter, r *http.Request)
 // handleStorageArrayStatus 回傳目前陣列的狀態。還沒有人設定過 pool 時,
 // 回傳 "unconfigured" 而不是錯誤 —— 這是合法的初始狀態,不是異常。
 func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request) {
-	if s.array == nil {
+	array := s.getArray()
+	if array == nil {
 		writeJSON(w, http.StatusOK, storage.Status{State: "unconfigured"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.array.Status())
+	writeJSON(w, http.StatusOK, array.Status())
 }
 
 // handleStoragePoolSet 建立或取代目前的 pool 設定並持久化。刻意只驗證、
@@ -105,39 +106,43 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 
 	// 換掉記憶體裡的 Array 物件：新設定跟舊陣列的執行狀態沒有關係,
 	// 一律視為一個全新的、還沒啟動的陣列，即使舊陣列當時是 started 也一樣
-	// ——「編輯設定」不該悄悄延續舊的執行狀態。
-	s.array = storage.NewArray(pool)
+	// ——「編輯設定」不該悄悄延續舊的執行狀態。透過 setArray 在寫鎖下換
+	// 指標,跟背景監控輪詢的 getArray 讀取同步(見 Server.arrayMu)。
+	array := storage.NewArray(pool)
+	s.setArray(array)
 
 	// 監控要看的磁碟使用率也跟著換成新陣列的掛載點,不然使用者改了 pool
 	// 之後,監控頁顯示的還是舊路徑(或是還沒設定 pool 前的 "/")的用量,
 	// 跟畫面上其他地方顯示的陣列資訊對不起來。
 	s.monitorCollector.SetDiskPath(pool.MountPoint)
 
-	writeJSON(w, http.StatusOK, s.array.Status())
+	writeJSON(w, http.StatusOK, array.Status())
 }
 
 func (s *Server) handleStorageArrayStart(w http.ResponseWriter, r *http.Request) {
-	if s.array == nil {
+	array := s.getArray()
+	if array == nil {
 		writeError(w, http.StatusConflict, errNoPoolConfigured)
 		return
 	}
-	if err := s.array.Start(r.Context(), s.runner); err != nil {
+	if err := array.Start(r.Context(), s.runner); err != nil {
 		s.logger.Error("starting array failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.array.Status())
+	writeJSON(w, http.StatusOK, array.Status())
 }
 
 func (s *Server) handleStorageArrayStop(w http.ResponseWriter, r *http.Request) {
-	if s.array == nil {
+	array := s.getArray()
+	if array == nil {
 		writeError(w, http.StatusConflict, errNoPoolConfigured)
 		return
 	}
-	if err := s.array.Stop(r.Context(), s.runner); err != nil {
+	if err := array.Stop(r.Context(), s.runner); err != nil {
 		s.logger.Error("stopping array failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.array.Status())
+	writeJSON(w, http.StatusOK, array.Status())
 }

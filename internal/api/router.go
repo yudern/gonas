@@ -110,7 +110,17 @@ type Server struct {
 	// array 是目前載入的儲存陣列。啟動時如果 store 裡已經有 pool 設定,
 	// 會在這裡建立對應的 *storage.Array(但不會自動 Start —— 掛載陣列
 	// 是使用者的明確動作,不該在 daemon 重啟時靜默發生)。
-	array *storage.Array
+	//
+	// arrayMu 保護 array 這個「指標欄位」本身的讀寫。第三十二輪(全鏈路
+	// 覆核)抓到的 data race:設定儲存池的 HTTP handler 會
+	// `s.array = NewArray(...)` 重新賦值,而背景監控輪詢 goroutine
+	// (onMonitorSample)同時在讀 s.array —— 兩者沒有同步。Array 本身
+	// 的方法(Status/Start/Stop)有自己的 mu 保護其內部狀態,所以這裡
+	// 只需要一把 RWMutex 保護「換掉/讀取這個指標」這件事;透過
+	// getArray()/setArray() 存取,長時間的 Start/Stop 只在區域變數上呼叫、
+	// 不佔著 arrayMu。
+	arrayMu sync.RWMutex
+	array   *storage.Array
 
 	monitorCollector *monitor.Collector
 	monitorHistory   *monitor.History
@@ -479,12 +489,28 @@ func (s *Server) httpsCertRenewalPolicy() (validFor, renewBefore, checkInterval 
 // (state.State.Pool 是單一指標,不是陣列),分享路徑照慣例都是掛載點
 // 底下的子目錄，用掛載點當根已經涵蓋得到所有分享，同時避免「這個根
 // 目錄到底對應哪個分享」的額外心智負擔。
+// getArray 讀取目前的陣列指標(在 arrayMu 的讀鎖下),回傳的是指標本身;
+// 呼叫端拿到後可以安心呼叫它的 Start/Stop/Status(那些方法自己有鎖)。
+func (s *Server) getArray() *storage.Array {
+	s.arrayMu.RLock()
+	defer s.arrayMu.RUnlock()
+	return s.array
+}
+
+// setArray 換掉目前的陣列指標(在 arrayMu 的寫鎖下)。
+func (s *Server) setArray(a *storage.Array) {
+	s.arrayMu.Lock()
+	defer s.arrayMu.Unlock()
+	s.array = a
+}
+
 func (s *Server) fileManagerRoot() (string, error) {
 	pool := s.store.Snapshot().Pool
-	if pool == nil || s.array == nil {
+	array := s.getArray()
+	if pool == nil || array == nil {
 		return "", errNoPoolConfigured
 	}
-	if s.array.Status().State != storage.StateStarted {
+	if array.Status().State != storage.StateStarted {
 		return "", errArrayNotStarted
 	}
 	return pool.MountPoint, nil

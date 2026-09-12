@@ -247,8 +247,8 @@ func (s *Server) rebuildNotifier() {
 func (s *Server) onMonitorSample(snap monitor.Snapshot) {
 	facts := monitor.Facts{Snapshot: snap}
 
-	if s.array != nil {
-		facts.ArrayFailed = s.array.Status().State == storage.StateFailed
+	if array := s.getArray(); array != nil {
+		facts.ArrayFailed = array.Status().State == storage.StateFailed
 	}
 	facts.SmartFailed = s.anyDiskSmartFailed(context.Background())
 
