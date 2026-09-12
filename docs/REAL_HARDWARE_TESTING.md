@@ -2322,6 +2322,40 @@ in-target: sh: 0: cannot open /cdrom/gonas/late-command.sh: No such file or dire
   debian-installer 也連不上 Debian,無法驗證,必須等使用者下一次用
   DVD-1 實際建置 + 安裝一次才算數。
 
+**第三十二輪(全鏈路多角色覆核後,依建議順序修掉 4 項 + 重跑 QA)**:
+
+覆核找到的 4 個 Medium(沒有 Critical)已全部修掉,順序按「影響最廣先修」:
+
+- **② 背景 goroutine 加 panic 保護**:新增 `internal/safe.Run(logger,label,fn)`
+  (recover + 記 log,不讓一次 panic 拖垮整個 process),套用到全部 7 個長駐
+  背景 goroutine 的每輪工作(monitor poller、backup interval/cron 排程、
+  parity 排程、digest 排程、cert renewer、update checker)。原本只有 HTTP
+  請求有 recover。新增 safe 單元測試 + poller「回呼一直 panic 仍不崩潰」測試。
+- **① `s.array` 並發保護**:Server 加 `arrayMu sync.RWMutex` + getArray()/
+  setArray(),消除「設定池 handler 重賦值 vs 監控輪詢讀取」的 data race
+  (Array 自身方法已有內部鎖,長時間 Start/Stop 不佔 arrayMu)。新增
+  `go test -race` 並發迴歸測試。
+- **③ 備份失敗主動告警**:新增 `monitor.EventKindBackupFailed`,備份失敗時
+  透過跟告警同一組管道(webhook/email/log)送通知,不再只寫 log/LastRun。
+  新增端對端測試(失敗備份 → 假 webhook 收到 backup_failed)。
+- **④ 自我更新加 ed25519 簽章驗證**:新增 `selfupdate.ManifestPublicKeyHex`
+  (建置期 ldflags 內嵌公鑰,預設空)。有公鑰時抓 `<manifestURL>.sig`
+  detached 簽章驗證 manifest 原始位元組,fail-closed;無公鑰時維持 SHA256-only
+  (向後相容)但記 warn。新增簽章測試(有效/竄改被拒/缺簽章被拒/無公鑰
+  相容/公鑰設錯 fail-closed)。**發佈流程影響**:若要啟用強制驗簽,建置時
+  用 ldflags 內嵌公鑰,並對 manifest 用對應私鑰簽出 base64 的 `.sig` 放在
+  manifest 同層。（已知小限制:`.sig` 網址是 manifest 網址直接加尾綴,manifest
+  網址請用一般檔案式網址、不要帶 query string。）
+
+順帶修好 `internal/selfupdate` 一個既有的計時 flaky 測試(計數放在 httptest
+server 端,與 client Stop() 有量測窗)。
+
+**重跑 QA 結果**:`go vet` 乾淨、`gofmt` 乾淨、`go test ./... -race -count=1`
+全過**無 data race**(含新的 array 並發測試);appliance 6 支 shell 測試全過;
+`go build ./...` OK。覆蓋率:api 43.8%→45.6%、filemanager 69.2%→70.4%、
+safe 100%、其餘持平。這一輪的 4 個修法都是在沙盒內就能完整驗證的(並發/
+panic/簽章/通知都有實際執行的測試),不屬於「需實機驗證」那一類。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

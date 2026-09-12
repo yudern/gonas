@@ -32,8 +32,8 @@ func TestSecurity_PathTraversalBattery(t *testing.T) {
 		"..",
 		"../",
 		"....//secret.txt",
-		"..%2fsecret.txt",       // encoded (handler layer would decode; here literal)
-		"/../secret.txt",        // leading slash
+		"..%2fsecret.txt", // encoded (handler layer would decode; here literal)
+		"/../secret.txt",  // leading slash
 		"a/b/c/../../../../secret.txt",
 		string([]byte{'.', '.', '/', '.', '.', '/'}) + "secret.txt",
 	}
