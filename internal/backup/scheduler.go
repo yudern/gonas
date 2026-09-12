@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // JobScheduler 依照 Schedule 週期性觸發一個備份工作。跟
@@ -58,7 +60,7 @@ func (s *JobScheduler) runLoop(ctx context.Context, initialDelay, every time.Dur
 			case <-timer.C:
 			}
 
-			runOnce(ctx)
+			safe.Run(s.logger, "backup-scheduler", func() { runOnce(ctx) })
 
 			// 跑完一次之後,下一次是「現在起算再等 every」,而不是硬算
 			// 日曆上的下一個固定時刻 —— 這樣如果某次備份拖很久(資料量
@@ -104,7 +106,7 @@ func (s *JobScheduler) runCronLoop(ctx context.Context, nextFn func(after time.T
 			case <-timer.C:
 			}
 
-			runOnce(ctx)
+			safe.Run(s.logger, "backup-scheduler(cron)", func() { runOnce(ctx) })
 		}
 	}()
 }

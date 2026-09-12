@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // ParitySchedule 設定「多久做一次校驗、幾點開始」。
@@ -65,9 +67,11 @@ func (s *Scheduler) runLoop(ctx context.Context, initialDelay, every time.Durati
 			}
 
 			s.logger.Info("running scheduled parity action", "action", action)
-			if err := runOnce(ctx); err != nil {
-				s.logger.Error("scheduled parity action failed", "action", action, "err", err)
-			}
+			safe.Run(s.logger, "parity-scheduler", func() {
+				if err := runOnce(ctx); err != nil {
+					s.logger.Error("scheduled parity action failed", "action", action, "err", err)
+				}
+			})
 
 			// 跑完一次之後，下一次是「現在起算再等 every」，而不是硬算日曆
 			// 上的下一個固定時刻 —— 這樣如果某次執行拖很久(例如大型 scrub),

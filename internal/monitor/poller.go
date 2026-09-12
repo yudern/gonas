@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // Poller 定期呼叫 Collector.Sample，把結果寫進 History，並呼叫一個
@@ -46,7 +48,10 @@ func (p *Poller) Start(ctx context.Context) {
 		ticker := time.NewTicker(p.interval)
 		defer ticker.Stop()
 		for {
-			p.sampleOnce()
+			// 每一輪取樣/告警評估包一層 recover:onSample 回呼會發
+			// webhook/email、讀 SMART/陣列狀態,任何一處意外 panic 不該
+			// 拖垮整台 daemon,只記一筆 log、下一輪照常。見 internal/safe。
+			safe.Run(p.logger, "monitor-poller", p.sampleOnce)
 			select {
 			case <-ctx.Done():
 				return

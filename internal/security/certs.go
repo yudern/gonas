@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // GenerateSelfSignedCert 產生一份自簽 TLS 憑證。hosts 可以混雜 IP 位址
@@ -277,7 +279,7 @@ func (r *CertRenewer) Start(ctx context.Context, checkInterval time.Duration, ce
 
 	go func() {
 		defer close(r.done)
-		check()
+		safe.Run(r.logger, "cert-renewer", check)
 
 		ticker := time.NewTicker(checkInterval)
 		defer ticker.Stop()
@@ -286,7 +288,7 @@ func (r *CertRenewer) Start(ctx context.Context, checkInterval time.Duration, ce
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				check()
+				safe.Run(r.logger, "cert-renewer", check)
 			}
 		}
 	}()

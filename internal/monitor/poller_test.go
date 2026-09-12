@@ -40,6 +40,34 @@ func TestPoller_Start_SamplesImmediatelyAndPeriodically(t *testing.T) {
 	}
 }
 
+// TestPoller_SurvivesPanickingCallback 固化第三十二輪的修法:onSample
+// 回呼 panic 時,poller 的背景 goroutine 不能崩潰(在 Go 裡未 recover 的
+// goroutine panic 會讓整個測試進程掛掉,所以「測試能跑完」本身就是證明),
+// 而且要繼續往下一輪取樣。
+func TestPoller_SurvivesPanickingCallback(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	collector := NewCollector("/")
+	history := NewHistory(50)
+
+	var calls int32
+	p := NewPoller(logger, collector, history, 5*time.Millisecond, func(Snapshot) {
+		atomic.AddInt32(&calls, 1)
+		panic("callback boom") // 每一輪都 panic
+	})
+	p.Start(context.Background())
+	defer p.Stop()
+
+	// 如果 panic 沒被 recover,第一輪就會讓進程崩潰,根本等不到第 3 次。
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&calls) < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("poller did not survive panicking callbacks; only %d calls", atomic.LoadInt32(&calls))
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func TestPoller_Stop_EndsBackgroundGoroutineCleanly(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	collector := NewCollector("/")

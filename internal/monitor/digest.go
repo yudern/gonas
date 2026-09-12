@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // DigestScheduler 依照一個 cron 表達式週期性觸發一次「健康摘要」通知。
@@ -66,7 +68,7 @@ func (s *DigestScheduler) Start(ctx context.Context, nextFn func(after time.Time
 			case <-timer.C:
 			}
 
-			runOnce(ctx)
+			safe.Run(s.logger, "digest-scheduler", func() { runOnce(ctx) })
 		}
 	}()
 }

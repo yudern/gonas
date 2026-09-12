@@ -53,6 +53,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/bng147/gonas/internal/safe"
 )
 
 // Asset 是 Manifest 裡某個平台(GOOS-GOARCH)對應的下載資訊。
@@ -443,7 +445,7 @@ func (c *Checker) Start(ctx context.Context, checkInterval time.Duration, curren
 
 	go func() {
 		defer close(c.done)
-		check()
+		safe.Run(c.logger, "update-checker", check)
 
 		ticker := time.NewTicker(checkInterval)
 		defer ticker.Stop()
@@ -452,7 +454,7 @@ func (c *Checker) Start(ctx context.Context, checkInterval time.Duration, curren
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				check()
+				safe.Run(c.logger, "update-checker", check)
 			}
 		}
 	}()
