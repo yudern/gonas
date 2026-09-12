@@ -517,8 +517,15 @@ func TestChecker_RunsRepeatedlyAndStopsCleanly(t *testing.T) {
 		t.Errorf("expected at least 2 checks within the wait window, got %d", got)
 	}
 
-	after := count.Load()
+	// Stop() 保證 checker goroutine 不會再「發出」新請求,但計數是由
+	// httptest 的 server goroutine 加的——Stop() 回傳的當下,可能還有
+	// 一個「取消前就已經送出」的請求正在 server 端處理、稍後才 count.Add。
+	// 這不是功能 bug(checker 確實已經停了),是這個測試把計數放在
+	// server 端造成的量測窗。先睡一小段讓任何在途請求落地,再取
+	// after 基準,然後才驗「之後不再增加」——避免在滿載 CPU 下偶發假紅。
 	time.Sleep(20 * time.Millisecond)
+	after := count.Load()
+	time.Sleep(30 * time.Millisecond)
 	if got := count.Load(); got != after {
 		t.Errorf("expected no further checks after Stop(), count went from %d to %d", after, got)
 	}

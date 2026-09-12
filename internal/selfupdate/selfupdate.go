@@ -38,7 +38,9 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -91,6 +93,88 @@ func (m Manifest) AssetFor(goos, goarch string) (Asset, error) {
 // 不小心把網址填成一個超大檔案」或惡意回應撐爆記憶體的情況。
 const maxManifestBytes = 1 << 20 // 1 MiB
 
+// ManifestPublicKeyHex 是用來驗證 manifest 數位簽章的 ed25519 公鑰
+// (hex 編碼,32 bytes = 64 個 hex 字元)。**預設空字串**,透過建置時的
+// ldflags 注入,例如:
+//
+//	go build -ldflags "-X github.com/bng147/gonas/internal/selfupdate.ManifestPublicKeyHex=<hex>"
+//
+// 第三十二輪(全鏈路覆核修法 ④)的背景:原本自我更新只比對 manifest 裡
+// 的 SHA256(完整性),沒有任何簽章(真實性)——信任完全落在「manifest
+// 的 HTTPS 來源沒被竄改」上。誰能竄改那個來源,就能同時改掉 URL 跟
+// SHA256、推一個以 root 執行的任意執行檔。加上這一層之後:
+//
+//   - 有設定公鑰(非空):FetchManifest 會去抓 <manifestURL>.sig 這個
+//     detached 簽章(base64 的 ed25519 簽章),用公鑰驗證它蓋在「manifest
+//     原始位元組」上——驗不過就拒絕,fail-closed。這樣就算 manifest 來源
+//     被完全掌控,沒有對應私鑰也偽造不出有效簽章。
+//   - 沒設定公鑰(預設空字串):維持原本只有 SHA256 的行為(向後相容,
+//     不會讓既有、沒在簽章的部署突然壞掉),但 Checker 會記一筆 log 提醒
+//     「這次更新沒有經過簽章驗證」。
+//
+// 簽章那一層驗證的是「manifest(含每個 asset 的 URL 與 SHA256)確實由
+// 持有私鑰的人發佈」;下載執行檔本身仍照舊用 manifest 裡的 SHA256 驗證
+// 完整性——兩層各司其職。
+var ManifestPublicKeyHex string
+
+// manifestSignatureSuffix 是 detached 簽章相對於 manifest URL 的固定後綴,
+// 沿用 Debian「SHA256SUMS + SHA256SUMS.sign」那種 detached 簽章的慣例。
+const manifestSignatureSuffix = ".sig"
+
+// maxSignatureBytes 是願意讀取的簽章檔大小上限——base64 的 ed25519 簽章
+// 只有 88 個字元,給到 1 KiB 綽綽有餘,擋掉惡意的超大回應。
+const maxSignatureBytes = 1024
+
+// verifyManifestSignature 在有設定公鑰時,抓 detached 簽章並驗證它蓋在
+// manifest 原始位元組上。沒設定公鑰時直接回 nil(由呼叫端決定要不要記
+// 「未簽章」的提醒)。
+func verifyManifestSignature(ctx context.Context, client *http.Client, manifestURL string, manifestBody []byte) error {
+	if strings.TrimSpace(ManifestPublicKeyHex) == "" {
+		return nil // 沒設定公鑰:跳過簽章驗證(向後相容)
+	}
+	pub, err := hex.DecodeString(strings.TrimSpace(ManifestPublicKeyHex))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		// 這是建置期就該設對的東西,設錯了寧可硬失敗、也不要退回「不驗章」
+		// ——不然一個手滑打錯的公鑰會靜默地把整層防護關掉。
+		return fmt.Errorf("selfupdate: ManifestPublicKeyHex is not a valid %d-byte ed25519 public key", ed25519.PublicKeySize)
+	}
+
+	sigURL := manifestURL + manifestSignatureSuffix
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sigURL, nil)
+	if err != nil {
+		return fmt.Errorf("selfupdate: building signature request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("selfupdate: fetching manifest signature %s: %w", sigURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("selfupdate: manifest signature server returned %s (a public key is configured, so a valid %s is required)", resp.Status, manifestSignatureSuffix)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSignatureBytes+1))
+	if err != nil {
+		return fmt.Errorf("selfupdate: reading manifest signature: %w", err)
+	}
+	if len(raw) > maxSignatureBytes {
+		return fmt.Errorf("selfupdate: manifest signature exceeds %d bytes", maxSignatureBytes)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return fmt.Errorf("selfupdate: manifest signature is not valid base64: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), manifestBody, sig) {
+		return fmt.Errorf("selfupdate: manifest signature verification FAILED — refusing this update (the manifest may have been tampered with, or was not signed by the configured key)")
+	}
+	return nil
+}
+
+// ManifestSignatureEnforced 回報這個建置有沒有內嵌公鑰(也就是自我更新
+// 會不會強制驗簽)。給呼叫端拿來決定要記「已驗簽」還是「未簽章」的 log。
+func ManifestSignatureEnforced() bool {
+	return strings.TrimSpace(ManifestPublicKeyHex) != ""
+}
+
 // FetchManifest 用 client 對 manifestURL 發一個 GET 請求並解析回應的
 // JSON。client 是呼叫端注入的(而不是用 http.DefaultClient),方便測試
 // 控制逾時/傳輸行為,也讓正式呼叫端能套用專案一致的逾時設定。
@@ -116,6 +200,13 @@ func FetchManifest(ctx context.Context, client *http.Client, manifestURL string)
 	}
 	if len(body) > maxManifestBytes {
 		return Manifest{}, fmt.Errorf("selfupdate: manifest response exceeds %d bytes", maxManifestBytes)
+	}
+
+	// 第三十二輪:有內嵌公鑰時,先驗證 manifest 的 detached 簽章,驗不過
+	// 就拒絕——擋在 json.Unmarshal 跟後續下載之前,一個被竄改的 manifest
+	// 連解析都不該解析。沒設定公鑰時這裡是 no-op(向後相容)。
+	if err := verifyManifestSignature(ctx, client, manifestURL, body); err != nil {
+		return Manifest{}, err
 	}
 
 	var m Manifest
@@ -418,6 +509,13 @@ func (c *Checker) CheckNow(ctx context.Context, currentVersion, manifestURL stri
 		result.Notes = manifest.Notes
 		if newer && c.logger != nil {
 			c.logger.Info("a newer gonasd version is available", "current", currentVersion, "latest", manifest.Version)
+			if !ManifestSignatureEnforced() {
+				// 這個建置沒有內嵌公鑰,更新只靠 SHA256 + HTTPS 傳輸來源可信,
+				// 沒有數位簽章驗證。提醒運維:能掌控 manifest 來源的人就能推
+				// 任意(以 root 執行的)執行檔。要更強的保證,用內嵌公鑰的建置
+				// 並對 manifest 簽章,見 selfupdate.ManifestPublicKeyHex 的說明。
+				c.logger.Warn("gonasd self-update is NOT signature-verified (no embedded public key) — trust rests entirely on the HTTPS manifest source; whoever controls it can push an arbitrary root binary")
+			}
 		}
 	}
 
