@@ -165,10 +165,10 @@ func buildEmailMessage(cfg EmailConfig, ev Event) string {
 	var subject string
 	var body strings.Builder
 
-	if ev.Kind == EventKindDigest {
-		// Digest 郵件的標題/內文已經是組好給人看的文字(見
-		// BuildDigestEvent),這裡不用像告警事件那樣從 Rule/Value 組欄位,
-		// 直接使用 Subject/Message 即可。
+	if ev.Kind == EventKindDigest || ev.Kind == EventKindBackupFailed {
+		// Digest 與備份失敗通知的標題/內文都已經是組好給人看的文字,
+		// 這裡不用像告警事件那樣從 Rule/Value 組欄位,直接使用
+		// Subject/Message 即可。
 		subject = fmt.Sprintf("[GoNAS] %s", ev.Subject)
 		body.WriteString(ev.Message)
 	} else {

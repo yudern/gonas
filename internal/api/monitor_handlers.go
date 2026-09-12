@@ -224,7 +224,12 @@ func (s *Server) handleMonitorEmailNotifiersDelete(w http.ResponseWriter, r *htt
 // 每個已啟用的 webhook 跟 email 管道 —— 新增/刪除任一種通知端點之後
 // 都要呼叫這個方法,daemon 剛啟動時也是靠它從 state.json 裡讀回既有
 // 設定。
-func (s *Server) rebuildNotifier() {
+// buildNotifier 依目前 state 裡「已啟用」的 webhook / email 設定組出一個
+// MultiNotifier(永遠含保底的 LogNotifier)。rebuildNotifier 用它更新告警
+// 引擎的通知管道;需要送一次性通知(例如備份失敗)的地方也用它,確保
+// 走的是跟告警完全一樣的一組管道,不會出現「告警有發、備份失敗卻沒發」
+// 這種不一致。
+func (s *Server) buildNotifier() monitor.MultiNotifier {
 	notifiers := []monitor.Notifier{monitor.NewLogNotifier(s.logger)}
 	snap := s.store.Snapshot()
 	for _, cfg := range snap.Notifiers {
@@ -239,7 +244,11 @@ func (s *Server) rebuildNotifier() {
 		}
 		notifiers = append(notifiers, monitor.NewEmailNotifier(cfg, nil))
 	}
-	s.alertEngine.SetNotifier(monitor.MultiNotifier{Notifiers: notifiers})
+	return monitor.MultiNotifier{Notifiers: notifiers}
+}
+
+func (s *Server) rebuildNotifier() {
+	s.alertEngine.SetNotifier(s.buildNotifier())
 }
 
 // onMonitorSample 是餵給 monitor.Poller 的回呼：把這一輪的系統資源快照,

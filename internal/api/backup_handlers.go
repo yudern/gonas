@@ -2,12 +2,32 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/bng147/gonas/internal/backup"
+	"github.com/bng147/gonas/internal/monitor"
 	"github.com/bng147/gonas/internal/state"
 )
+
+// backupFailureMessage 組出備份失敗通知的內文(給 email/webhook/log 看)。
+func backupFailureMessage(job backup.Job, result backup.RunResult) string {
+	errText := result.Error
+	if errText == "" {
+		errText = "(no error detail)"
+	}
+	return fmt.Sprintf(
+		"GoNAS 排程備份失敗 / scheduled backup failed\n\n"+
+			"工作 Job:    %s\n"+
+			"來源 Source: %s\n"+
+			"目的 Dest:   %s\n"+
+			"時間 Time:   %s\n"+
+			"錯誤 Error:  %s\n",
+		job.Name, job.SourcePath, job.DestPath,
+		result.FinishedAt.Format(time.RFC1123Z), errText,
+	)
+}
 
 // startBackupScheduler 幫一個已經啟用的備份工作建立並啟動排程,登記進
 // s.backupSchedulers 讓之後刪除/daemon 關閉時找得到、停得掉。呼叫端
@@ -61,6 +81,21 @@ func (s *Server) runBackupJob(ctx context.Context, id string) {
 		s.logger.Info("backup job finished", "jobId", job.ID, "name", job.Name, "snapshot", result.SnapshotDir)
 	} else {
 		s.logger.Error("backup job failed", "jobId", job.ID, "name", job.Name, "err", result.Error)
+		// 第三十二輪:備份失敗不再只寫 log + 更新 LastRun(那要打開網頁
+		// 才看得到)。主動透過跟告警同一組的通知管道(webhook/email/log)
+		// 送一則「備份失敗」通知,讓「以為在備份、其實已連續失敗好幾週」
+		// 這種靜默失敗被看見。走 best-effort:通知本身失敗只記 log,不影響
+		// 下面把結果寫回 state。用獨立的 context(不綁這次備份的 ctx)——
+		// 備份可能是因為 ctx 被取消而失敗的,通知不該跟著一起被取消。
+		ev := monitor.Event{
+			Kind:    monitor.EventKindBackupFailed,
+			At:      time.Now(),
+			Subject: "備份失敗 Backup failed: " + job.Name,
+			Message: backupFailureMessage(*job, result),
+		}
+		if err := s.buildNotifier().Notify(context.Background(), ev); err != nil {
+			s.logger.Warn("sending backup-failure notification failed", "jobId", job.ID, "err", err)
+		}
 	}
 
 	if err := s.store.Update(func(st *state.State) error {

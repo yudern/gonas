@@ -25,6 +25,12 @@ type EventKind string
 const (
 	EventKindAlert  EventKind = ""
 	EventKindDigest EventKind = "digest"
+	// EventKindBackupFailed 是「一次排程備份失敗」的一次性通知。跟 digest
+	// 一樣走 Subject/Message 這組通用欄位(Rule/Firing/Value 沒有意義),
+	// 由組出 Event 的那一端(internal/api 的備份執行邏輯)決定標題與內文。
+	// 第三十二輪新增:原本備份失敗只寫 log + 更新 LastRun,使用者不打開
+	// 網頁根本不知道備份已經連續失敗——現在改成也走通知管道主動告知。
+	EventKindBackupFailed EventKind = "backup_failed"
 )
 
 // Event 是交給 Notifier 的通知內容。Kind 為零值(EventKindAlert)時,
@@ -69,6 +75,10 @@ func NewLogNotifier(logger *slog.Logger) *LogNotifier {
 func (n *LogNotifier) Notify(_ context.Context, ev Event) error {
 	if ev.Kind == EventKindDigest {
 		n.logger.Info("health digest", "subject", ev.Subject)
+		return nil
+	}
+	if ev.Kind == EventKindBackupFailed {
+		n.logger.Error("backup failed", "subject", ev.Subject, "message", ev.Message)
 		return nil
 	}
 	if ev.Firing {
