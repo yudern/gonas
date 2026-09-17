@@ -2384,6 +2384,34 @@ panic/簽章/通知都有實際執行的測試),不屬於「需實機驗證」�
 6 支 shell 測試過、`go build` OK。這 3 項都在開發端完整驗證(含 playwright
 實截),不屬於「需實機驗證」那一類。
 
+**第三十四輪(A:設定產生器注入稽核收尾 + B:UI 精品化)**:
+
+依上一輪同樣的全鏈路多角色覆核方法,加上使用者新要求的「UI 好看/高級/順眼」。
+分 A(工程)、B(UI)兩條線,都在開發端完整驗證。
+
+- **A ① 設定產生器注入稽核收尾**:延續第三十三輪只做完 samba/nfs,這輪把
+  剩下兩個由 text/template 產生的 line-based 設定補齊——WireGuard(`.conf`
+  的 Name/PublicKey/PresharedKey/Endpoint/AllowedIPs/PrivateKey/Address 擋
+  換行/控制字元/空白)與 SnapRAID(`snapraid.conf` 的 Name/MountPoint/
+  DataDisks/ParityDisks/ContentFiles 擋換行/控制字元/空白)。抽出共用
+  `internal/textcheck.HasControl`,samba/nfs 的 hasControlChars 也改成委派給
+  它。各自加注入迴歸測試。
+- **A ② appstore rollback 錯誤不再被吞**:`InstallRequest` 加
+  `OnRollbackError` 回呼,安裝失敗回滾時每個服務的錯誤都記進 daemon log
+  (原本 rollback 的錯誤被直接丟掉,回滾若也失敗會完全無聲)。
+- **B UI 精品化**(使用者確認方向後全面套用):品牌標誌從 `◇` 換成實心
+  圓角 SVG logo(側邊欄 + 登入卡);9 個導覽項各加內嵌 SVG 圖示;儀表板
+  統計磚立體化(陰影 + hover 微浮 + 磚頭圖示);其餘 8 頁(儲存/檔案/應用/
+  共享/使用者/監控/備份/安全)28 處區塊標題加 `SECTION_ICONS` 低調識別圖示
+  (與導覽/統計磚同一套線條系統);區塊層級空狀態置中留白。全數維持
+  zero-CDN、只用系統字型(離線 NAS 原則不變)。9 頁逐頁 playwright 實截
+  目視確認風格一致。
+
+**QA**:`go vet`/`gofmt` 乾淨、`go test ./... -race` 全過無 race、`go build`
+OK(Web UI 由 go:embed 內嵌,UI 改動一併經 build/vet 驗證)。A、B 兩線都在
+開發端完整驗證,不屬於「需實機驗證」那一類;唯一仍待實機(ESXi/實體)驗證的
+項目維持不變:DVD-1 pkgsel 離線安裝 openssh-server/sudo 那段。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |
