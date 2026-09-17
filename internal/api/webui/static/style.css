@@ -31,7 +31,7 @@
     --surface-2: #1d2530;
     --border: #2a343d;
     --text: #e6ece9;
-    --text-dim: #9aabA4;
+    --text-dim: #9aaba4;
     --text-faint: #6c7d78;
     --accent: #59c2b6;
     --accent-soft: rgba(89, 194, 182, 0.14);
@@ -201,6 +201,19 @@ button:hover { filter: brightness(1.05); }
 button.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 button.danger { background: var(--danger); }
 button:disabled { opacity: 0.55; cursor: default; }
+
+/* 鍵盤操作的焦點框:只在鍵盤 focus(:focus-visible)時出現,滑鼠點擊不會
+   跳出來干擾視覺。用 accent 色描邊 + 一點 offset,深淺色模式下都看得清楚。
+   第三十三輪無障礙修法——原本完全沒有自訂 focus 樣式,只靠瀏覽器預設,
+   在深色側邊欄上幾乎看不見。outline 會自動沿用元素既有的圓角,不用另設。 */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .btn-row { display: flex; gap: 8px; margin-top: 4px; }
 
