@@ -293,7 +293,7 @@ async function renderDashboard(el) {
     </div>
     ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: dockerStatus.error || t("dashboard.unknownReason") })) : ""}
     <div class="card">
-      <h2>${esc(t("dashboard.quickLinks"))}</h2>
+      ${h2i("link", esc(t("dashboard.quickLinks")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
     </div>
     ${renderSystemUpdateCard(update, version.version, isAdmin)}
@@ -312,7 +312,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
   if (!update) {
     return `
     <div class="card">
-      <h2>${esc(t("update.title"))}</h2>
+      ${h2i("download", esc(t("update.title")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("update.loadError"))}</p>
     </div>`;
   }
@@ -367,7 +367,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
 
   return `
     <div class="card">
-      <h2>${esc(t("update.title"))}</h2>
+      ${h2i("download", esc(t("update.title")))}
       <p style="margin:0">${esc(t("update.currentVersion", { version: currentVersion }))} ${statusPill}</p>
       ${checkedLine}
       ${checkErrorMsg}
@@ -513,6 +513,43 @@ function statTile(label, value, cls, icon) {
   return `<div class="stat-tile"><div class="stat-tile-head"><span class="label">${esc(label)}</span>${ic}</div><div class="value ${cls}">${esc(value)}</div></div>`;
 }
 
+// SECTION_ICONS 是各頁區塊標題(卡片 h2)前的小圖示。跟 STAT_ICONS 與
+// 導覽列圖示同一套線條風格,inline SVG、零 CDN、離線可用。第三十四輪
+// UI 精品化:給每個區塊一枚低調的識別圖示,讓八個頁面看起來成一套系統,
+// 又不搶戲(圖示用 --text-faint、細描邊)。
+const SECTION_ICONS = {
+  link: '<path d="M8 12l4-4M7.5 5.5l1-1a3.5 3.5 0 0 1 5 5l-1 1M12.5 14.5l-1 1a3.5 3.5 0 0 1-5-5l1-1"/>',
+  download: '<path d="M10 3v9M6.5 8.5 10 12l3.5-3.5M4 15.5h12"/>',
+  array: '<ellipse cx="10" cy="5" rx="6.5" ry="2.3"/><path d="M3.5 5v10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3V5"/><path d="M3.5 10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3"/>',
+  disks: '<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="2"/>',
+  sliders: '<path d="M4 6.5h9M15 6.5h1M4 13.5h1M7 13.5h9"/><circle cx="13" cy="6.5" r="1.6"/><circle cx="6" cy="13.5" r="1.6"/>',
+  trash: '<path d="M4.5 6h11M8 6V4.5h4V6M6 6l.8 9.5c.05.6.55 1 1.15 1h4.1c.6 0 1.1-.4 1.15-1L15 6"/>',
+  box: '<path d="M10 3 3.5 6.2v7.6L10 17l6.5-3.2V6.2z"/><path d="M3.5 6.2 10 9.4l6.5-3.2M10 9.4V17"/>',
+  grid: '<rect x="3" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.2"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.2"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.2"/>',
+  plus: '<path d="M10 4.5v11M4.5 10h11"/>',
+  share: '<circle cx="5" cy="10" r="2.3"/><circle cx="15" cy="5" r="2.3"/><circle cx="15" cy="15" r="2.3"/><path d="M6.95 8.9 13.05 5.8M6.95 11.1 13.05 14.2"/>',
+  users: '<circle cx="10" cy="6.5" r="3"/><path d="M4.2 16.5c0-3.1 2.6-5.2 5.8-5.2s5.8 2.1 5.8 5.2"/>',
+  chart: '<path d="M2.5 10.5h3l2-5.5 3 10 2-4.5h4.5"/>',
+  bell: '<path d="M10 3.5a4 4 0 0 0-4 4c0 4.5-1.5 5.5-1.5 5.5h11S14 12 14 7.5a4 4 0 0 0-4-4zM8.5 16a1.5 1.5 0 0 0 3 0"/>',
+  mail: '<rect x="3" y="5" width="14" height="10" rx="1.6"/><path d="M3.5 6l6.5 5 6.5-5"/>',
+  calendar: '<rect x="3.5" y="4.5" width="13" height="12" rx="1.6"/><path d="M3.5 8h13M7 3v3M13 3v3"/>',
+  key: '<circle cx="7" cy="7" r="3.2"/><path d="M9.3 9.3 16 16M13.5 13.5l1.5-1.5"/>',
+  lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.6"/><path d="M7 9V7a3 3 0 0 1 6 0v2"/>',
+  shield: '<path d="M10 2.5 4 5v4.6c0 3.6 2.5 6.8 6 7.9 3.5-1.1 6-4.3 6-7.9V5z"/>',
+  log: '<rect x="3.5" y="3" width="13" height="14" rx="1.6"/><path d="M6.5 7h7M6.5 10h7M6.5 13h4"/>',
+  otp: '<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.5 15h3"/>',
+  backup: '<path d="M3 4.5h14v3H3z"/><path d="M4.5 7.5v8.5h11V7.5"/><path d="M8 11h4"/>',
+};
+
+// h2i:帶圖示的區塊標題。label 必須是「已跳脫」的字串(呼叫端照舊傳
+// esc(t(...))),圖示只是視覺裝飾(aria-hidden),不影響螢幕報讀。
+function h2i(iconKey, label) {
+  const ic = SECTION_ICONS[iconKey]
+    ? `<svg class="card-icon" viewBox="0 0 20 20" aria-hidden="true">${SECTION_ICONS[iconKey]}</svg>`
+    : "";
+  return `<h2 class="card-h2">${ic}<span>${label}</span></h2>`;
+}
+
 function formatUptime(sec) {
   sec = sec || 0;
   if (sec < 60) return t("dashboard.uptimeSeconds", { n: sec });
@@ -544,7 +581,7 @@ async function renderStorage(el) {
     <p class="page-subtitle">${esc(t("storage.subtitle"))}</p>
 
     <div class="card">
-      <h2>${esc(t("storage.currentStatus"))}</h2>
+      ${h2i("array", esc(t("storage.currentStatus")))}
       <p style="margin:0 0 12px">
         <span class="pill ${arrayPillClass(arrayStatus.state)}">${esc(arrayLabel(arrayStatus.state))}</span>
         ${arrayStatus.mountPoint ? ` · ${esc(t("storage.mountPoint"))} <code>${esc(arrayStatus.mountPoint)}</code>` : ""}
@@ -557,7 +594,7 @@ async function renderStorage(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("storage.disksDetected"))}</h2>
+      ${h2i("disks", esc(t("storage.disksDetected")))}
       <div class="table-wrap">
         <table>
           <thead><tr><th>${esc(t("storage.colDevice"))}</th><th>${esc(t("storage.colModel"))}</th><th>${esc(t("storage.colCapacity"))}</th><th>${esc(t("storage.colType"))}</th><th>${esc(t("storage.colMountPoint"))}</th><th>${esc(t("storage.colSmart"))}</th></tr></thead>
@@ -577,7 +614,7 @@ async function renderStorage(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("storage.poolSetup"))}</h2>
+      ${h2i("sliders", esc(t("storage.poolSetup")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("storage.poolSetupHint")}</p>
       <div id="pool-msg"></div>
       <form class="stacked" id="pool-form">
@@ -733,7 +770,7 @@ async function renderFiles(el) {
       <div id="files-panel"></div>
     </div>
     <div class="card">
-      <h2>${esc(t("files.trash"))}</h2>
+      ${h2i("trash", esc(t("files.trash")))}
       <p class="hint">${esc(t("files.trashHint"))}</p>
       <div id="trash-msg"></div>
       <div id="trash-list"></div>
@@ -1125,7 +1162,7 @@ async function renderApps(el) {
     ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: dockerStatus.error || "" })) : ""}
 
     <div class="card">
-      <h2>${esc(t("apps.installed", { n: installed.length }))}</h2>
+      ${h2i("box", esc(t("apps.installed", { n: installed.length })))}
       ${installed.length ? installed.map((app) => `
         <div class="app-card">
           <div class="app-card-main">
@@ -1150,12 +1187,12 @@ async function renderApps(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("apps.catalog"))}</h2>
+      ${h2i("grid", esc(t("apps.catalog")))}
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl)).join("")}
     </div>
 
     <div class="card">
-      <h2>${esc(t("apps.customInstall"))}</h2>
+      ${h2i("plus", esc(t("apps.customInstall")))}
       <p class="hint">${esc(t("apps.customInstallHint"))}</p>
       <div id="custom-install-msg"></div>
       <form class="stacked" id="custom-install-form">
@@ -1409,7 +1446,7 @@ async function renderShares(el) {
     <p class="page-subtitle">${esc(t("shares.subtitle"))}</p>
 
     <div class="card">
-      <h2>${esc(t("shares.smbShares"))}</h2>
+      ${h2i("share", esc(t("shares.smbShares")))}
       <div class="table-wrap">
         <table>
           <thead><tr><th>${esc(t("shares.colName"))}</th><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colReadOnly"))}</th><th>${esc(t("shares.colGuest"))}</th><th></th></tr></thead>
@@ -1436,7 +1473,7 @@ async function renderShares(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("shares.nfsExports"))}</h2>
+      ${h2i("share", esc(t("shares.nfsExports")))}
       <div class="table-wrap">
         <table>
           <thead><tr><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colClientRules"))}</th></tr></thead>
@@ -1509,7 +1546,7 @@ async function renderUsers(el) {
     <p class="page-subtitle">${esc(t("users.subtitle"))}</p>
 
     <div class="card">
-      <h2>${esc(t("users.accounts", { n: users.length }))}</h2>
+      ${h2i("users", esc(t("users.accounts", { n: users.length })))}
       <div class="table-wrap">
         <table>
           <thead><tr><th>${esc(t("users.colUsername"))}</th><th>${esc(t("users.colComment"))}</th><th></th></tr></thead>
@@ -1591,7 +1628,7 @@ async function renderMonitor(el) {
     </div>
 
     <div class="card chart-card">
-      <h2>${esc(t("monitor.recentTrend"))}</h2>
+      ${h2i("chart", esc(t("monitor.recentTrend")))}
       ${history.length < 2 ? `<p class="empty-state">${esc(t("monitor.notEnoughData"))}</p>` : `<canvas id="monitor-chart"></canvas>`}
       <div class="chart-legend">
         <span><span class="swatch" style="background:var(--accent)"></span>${esc(t("monitor.legendCpu"))}</span>
@@ -1601,7 +1638,7 @@ async function renderMonitor(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("monitor.alertRules", { n: rules.length }))}</h2>
+      ${h2i("bell", esc(t("monitor.alertRules", { n: rules.length })))}
       ${rules.length ? rules.map((r) => renderRuleRow(r)).join("") : `<p class="empty-state">${esc(t("monitor.noRules"))}</p>`}
       <div id="rule-msg"></div>
       <form class="stacked" id="rule-form" style="margin-top:16px">
@@ -1632,7 +1669,7 @@ async function renderMonitor(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("monitor.notifiers", { n: notifiers.length }))}</h2>
+      ${h2i("bell", esc(t("monitor.notifiers", { n: notifiers.length })))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.notifiersHint"))}</p>
       ${notifiers.length ? notifiers.map((n) => renderNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noNotifiers"))}</p>`}
       <div id="notifier-msg"></div>
@@ -1645,7 +1682,7 @@ async function renderMonitor(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("monitor.emailNotifiers", { n: emailNotifiers.length }))}</h2>
+      ${h2i("mail", esc(t("monitor.emailNotifiers", { n: emailNotifiers.length })))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.emailNotifiersHint"))}</p>
       ${emailNotifiers.length ? emailNotifiers.map((n) => renderEmailNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noEmailNotifiers"))}</p>`}
       <div id="email-notifier-msg"></div>
@@ -1793,7 +1830,7 @@ function renderDigestCard(digest, notifiers, emailNotifiers, isAdmin) {
   if (!digest) {
     return `
     <div class="card">
-      <h2>${esc(t("monitor.digestTitle"))}</h2>
+      ${h2i("calendar", esc(t("monitor.digestTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("monitor.digestLoadError"))}</p>
     </div>`;
   }
@@ -1835,7 +1872,7 @@ function renderDigestCard(digest, notifiers, emailNotifiers, isAdmin) {
 
   return `
     <div class="card">
-      <h2>${esc(t("monitor.digestTitle"))}</h2>
+      ${h2i("calendar", esc(t("monitor.digestTitle")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.digestHint"))}</p>
       <p style="margin:0">${statusPill}</p>
       ${lastSentLine}
@@ -2021,7 +2058,7 @@ async function renderSecurity(el) {
     <p class="page-subtitle">${esc(t("security.subtitle"))}</p>
 
     <div class="card">
-      <h2>${esc(t("security.changePassword"))}</h2>
+      ${h2i("key", esc(t("security.changePassword")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("security.changePasswordHint", { username: esc(me.username) })}</p>
       <div id="password-msg"></div>
       <form class="stacked" id="password-form">
@@ -2038,7 +2075,7 @@ async function renderSecurity(el) {
 
     ${isAdmin ? `
     <div class="card">
-      <h2>${esc(t("security.accounts", { n: accounts.length }))}</h2>
+      ${h2i("users", esc(t("security.accounts", { n: accounts.length })))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.accountsHint"))}</p>
       <div class="table-wrap">
         <table>
@@ -2072,7 +2109,7 @@ async function renderSecurity(el) {
     ` : ""}
 
     <div class="card">
-      <h2>${esc(t("security.https"))}</h2>
+      ${h2i("lock", esc(t("security.https")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
         ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
         ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
@@ -2092,7 +2129,7 @@ async function renderSecurity(el) {
     </div>
 
     <div class="card">
-      <h2>${esc(t("security.vpn"))}</h2>
+      ${h2i("shield", esc(t("security.vpn")))}
       ${renderVPNSection(vpnStatus, peers)}
     </div>
 
@@ -2115,7 +2152,7 @@ function renderAuditLogCard(auditLog) {
   if (!auditLog) {
     return `
     <div class="card">
-      <h2>${esc(t("security.auditLog"))}</h2>
+      ${h2i("log", esc(t("security.auditLog")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("security.auditLogLoadError"))}</p>
     </div>`;
   }
@@ -2123,7 +2160,7 @@ function renderAuditLogCard(auditLog) {
   const entries = auditLog.entries || [];
   return `
     <div class="card">
-      <h2>${esc(t("security.auditLog"))}</h2>
+      ${h2i("log", esc(t("security.auditLog")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.auditLogHint"))}</p>
       <div class="table-wrap">
         <table>
@@ -2199,7 +2236,7 @@ function attachPasswordFormHandlers(el) {
 function renderTOTPSection(enabled) {
   if (enabled) {
     return `
-      <h2>${esc(t("security.totp"))}</h2>
+      ${h2i("otp", esc(t("security.totp")))}
       <p style="margin:0 0 12px"><span class="pill ok">${esc(t("security.totpEnabledPill"))}</span></p>
       <div id="totp-msg"></div>
       <form class="stacked" id="totp-disable-form">
@@ -2209,7 +2246,7 @@ function renderTOTPSection(enabled) {
     `;
   }
   return `
-    <h2>${esc(t("security.totp"))}</h2>
+    ${h2i("otp", esc(t("security.totp")))}
     <p style="margin:0 0 12px"><span class="pill neutral">${esc(t("security.totpDisabledPill"))}</span></p>
     <div id="totp-msg"></div>
     <div id="totp-setup-area">
@@ -2431,7 +2468,7 @@ async function renderBackup(el) {
     <p class="page-subtitle">${t("backup.subtitle")}</p>
 
     <div class="card">
-      <h2>${esc(t("backup.jobs", { n: jobs.length }))}</h2>
+      ${h2i("backup", esc(t("backup.jobs", { n: jobs.length })))}
       <div id="backup-jobs-list">${renderBackupJobRows(jobs)}</div>
       <div id="backup-msg"></div>
       <form class="stacked" id="backup-form" style="margin-top:16px">

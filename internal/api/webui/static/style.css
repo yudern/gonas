@@ -143,6 +143,15 @@ body {
 
 h1 { font-size: 22px; font-weight: 650; margin: 0 0 4px; }
 h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
+/* 第三十四輪 UI 精品化:帶圖示的區塊標題。圖示低調(faint 色、細描邊),
+   跟導覽列/統計磚是同一套線條系統,讓八個頁面看起來成一套設計語言。 */
+h2.card-h2 { display: flex; align-items: center; gap: 9px; }
+.card-icon {
+  width: 17px; height: 17px; flex: none;
+  color: var(--text-faint); opacity: .85;
+  stroke: currentColor; fill: none;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
 .page-subtitle { color: var(--text-dim); margin: 0 0 28px; font-size: 13.5px; }
 .loading { color: var(--text-faint); }
 
@@ -286,6 +295,10 @@ p.hint { color: var(--text-faint); font-size: 12.5px; }
 .install-form.open { display: grid; gap: 10px; }
 
 .empty-state { color: var(--text-faint); font-size: 13px; padding: 8px 0; }
+/* 第三十四輪 UI 精品化:區塊層級的空狀態(<p class="empty-state">)給多一點
+   呼吸空間並置中,讓「還沒有資料」看起來是刻意的留白而不是漏掉的內容;
+   表格儲存格裡的空狀態(td.empty-state)維持靠左、不受影響。 */
+p.empty-state { text-align: center; padding: 26px 12px; }
 
 a { color: var(--accent); }
 
