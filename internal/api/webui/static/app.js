@@ -40,7 +40,11 @@ function msg(kind, text) {
 function applyStaticI18n() {
   navLinks.forEach((a) => {
     const route = a.dataset.route;
-    if (route) a.textContent = t(`nav.${route}`);
+    // 只更新標籤文字的那個 span,不要動整個 <a>——裡面還有 SVG 圖示,
+    // 用 a.textContent 會把圖示一起清掉(第三十四輪 UI 精品化加了圖示)。
+    const label = a.querySelector(".nav-label");
+    if (route && label) label.textContent = t(`nav.${route}`);
+    else if (route) a.textContent = t(`nav.${route}`);
   });
   const logoutBtn = document.getElementById("logout-btn");
   if (logoutBtn) logoutBtn.textContent = t("nav.logout");
@@ -282,10 +286,10 @@ async function renderDashboard(el) {
     <h1>${esc(t("dashboard.title"))}</h1>
     <p class="page-subtitle">${esc(t("dashboard.subtitle", { version: version.version, os: version.goos, arch: version.goarch, uptime: formatUptime(health.uptimeSeconds) }))}</p>
     <div class="grid">
-      ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok")}
-      ${statTile("Docker", dockerStatus.available ? t("dashboard.dockerAvailable") : t("dashboard.dockerUnavailable"), dockerStatus.available ? "ok" : "danger")}
-      ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state))}
-      ${statTile(t("dashboard.disksDetected"), String(disks.length), "")}
+      ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok", "server")}
+      ${statTile("Docker", dockerStatus.available ? t("dashboard.dockerAvailable") : t("dashboard.dockerUnavailable"), dockerStatus.available ? "ok" : "danger", "docker")}
+      ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
+      ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
     ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: dockerStatus.error || t("dashboard.unknownReason") })) : ""}
     <div class="card">
@@ -493,8 +497,20 @@ function pollForRestartThenReload() {
   }, 2000);
 }
 
-function statTile(label, value, cls) {
-  return `<div class="stat-tile"><div class="label">${esc(label)}</div><div class="value ${cls}">${esc(value)}</div></div>`;
+// STAT_ICONS 是儀表板統計磚用的小圖示(inline SVG,不依賴任何外部圖示庫,
+// 維持這個介面「零 CDN、離線可用」的原則)。第三十四輪 UI 精品化新增。
+const STAT_ICONS = {
+  server: '<path d="M3 4.5h14v4H3zM3 11.5h14v4H3z"/><path d="M6 6.5h.01M6 13.5h.01"/>',
+  docker: '<path d="M3 11h14v1.5c0 2-1.8 3.5-4 3.5H7c-2.2 0-4-1.5-4-3.5z"/><rect x="5" y="7.5" width="2.4" height="2.4"/><rect x="8.3" y="7.5" width="2.4" height="2.4"/><rect x="11.6" y="7.5" width="2.4" height="2.4"/>',
+  array: '<ellipse cx="10" cy="5" rx="6.5" ry="2.3"/><path d="M3.5 5v10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3V5"/><path d="M3.5 10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3"/>',
+  disks: '<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="2"/>',
+};
+
+function statTile(label, value, cls, icon) {
+  const ic = icon && STAT_ICONS[icon]
+    ? `<svg class="stat-icon" viewBox="0 0 20 20" aria-hidden="true">${STAT_ICONS[icon]}</svg>`
+    : "";
+  return `<div class="stat-tile"><div class="stat-tile-head"><span class="label">${esc(label)}</span>${ic}</div><div class="value ${cls}">${esc(value)}</div></div>`;
 }
 
 function formatUptime(sec) {

@@ -22,6 +22,9 @@
   --sidebar-text: #cfd9d5;
   --sidebar-text-dim: #8a9a94;
   --sidebar-active: #223330;
+  /* 第三十四輪 UI 精品化:一組細緻的景深,取代原本全平面的白卡。 */
+  --shadow-sm: 0 1px 2px rgba(22,33,31,.04), 0 1px 3px rgba(22,33,31,.06);
+  --shadow-md: 0 4px 12px -2px rgba(22,33,31,.12), 0 2px 6px -3px rgba(22,33,31,.10);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,6 +48,8 @@
     --sidebar-text: #c7d2ce;
     --sidebar-text-dim: #74857f;
     --sidebar-active: #182420;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-md: 0 6px 18px -4px rgba(0,0,0,.5);
   }
 }
 
@@ -90,7 +95,7 @@ body {
   font-size: 16px;
   color: #fff;
 }
-.brand-mark { color: var(--accent); }
+.brand-mark { width: 24px; height: 24px; color: var(--accent); flex: none; }
 /* 漢堡選單鈕:桌面隱藏,只有窄螢幕的 @media 區塊會把它顯示出來。 */
 .nav-toggle {
   display: none;
@@ -107,15 +112,25 @@ body {
 .nav-list { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav-list li { margin-bottom: 2px; }
 .nav-list a {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 11px;
   padding: 9px 12px;
   border-radius: 8px;
   color: var(--sidebar-text);
   text-decoration: none;
   font-size: 13.5px;
 }
+.nav-icon {
+  width: 18px; height: 18px; flex: none;
+  color: var(--sidebar-text-dim);
+  stroke: currentColor; fill: none;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
 .nav-list a:hover { background: var(--sidebar-active); color: #fff; }
-.nav-list a.active { background: var(--sidebar-active); color: var(--accent); font-weight: 600; }
+.nav-list a:hover .nav-icon { color: var(--sidebar-text); }
+.nav-list a.active { background: var(--sidebar-active); color: #fff; font-weight: 600; }
+.nav-list a.active .nav-icon { color: var(--accent); }
 
 .sidebar-footer {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -137,6 +152,7 @@ h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
   border-radius: 12px;
   padding: 20px 22px;
   margin-bottom: 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 24px; }
@@ -144,11 +160,21 @@ h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; }
 .stat-tile {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 12px;
+  padding: 15px 16px 16px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .15s ease, transform .15s ease;
 }
-.stat-tile .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); margin-bottom: 6px; }
-.stat-tile .value { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat-tile:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.stat-tile-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.stat-tile .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); margin: 0; }
+.stat-icon {
+  width: 18px; height: 18px; flex: none;
+  color: var(--text-faint); opacity: .75;
+  stroke: currentColor; fill: none;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+.stat-tile .value { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .stat-tile .value.ok { color: var(--ok); }
 .stat-tile .value.danger { color: var(--danger); }
 .stat-tile .value.warn { color: var(--warn); }
