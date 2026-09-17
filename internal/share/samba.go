@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/bng147/gonas/internal/cmdrunner"
 )
@@ -42,7 +43,41 @@ func (s Share) Validate() error {
 	if strings.ContainsAny(s.Name, `[]"`) {
 		return fmt.Errorf("share %q: name cannot contain '[', ']' or '\"' (breaks smb.conf syntax)", s.Name)
 	}
+	// 第三十三輪(全鏈路第二輪覆核):smb.conf 是「一行一個設定」的格式,
+	// 而這個檔案是用 text/template 產生的——text/template 不會跳脫換行,
+	// 所以任何欄位裡的換行/控制字元都會直接寫進檔案,破壞格式、甚至注入
+	// 額外的設定指令(例如在 Path 裡塞一個換行加 "guest ok = yes")。
+	// 建共享目前是 requireAdmin,威脅有限,但這是應該擋的縱深防禦 + 正確性
+	// 問題,所以在產生設定檔之前就把含控制字元的值擋下來。
+	if hasControlChars(s.Name) {
+		return fmt.Errorf("share %q: name cannot contain control characters or line breaks", s.Name)
+	}
+	if hasControlChars(s.Path) {
+		return fmt.Errorf("share %q: path cannot contain control characters or line breaks", s.Name)
+	}
+	if hasControlChars(s.Comment) {
+		return fmt.Errorf("share %q: comment cannot contain control characters or line breaks", s.Name)
+	}
+	for _, u := range s.ValidUsers {
+		// 換行/控制字元會破壞格式;逗號是 "valid users = a, b" 的分隔符,
+		// 一個含逗號的「使用者名稱」會被 smbd 當成多個使用者(注入)。
+		if hasControlChars(u) || strings.Contains(u, ",") {
+			return fmt.Errorf("share %q: valid-user entry %q cannot contain a comma, line break, or control character", s.Name, u)
+		}
+	}
 	return nil
+}
+
+// hasControlChars 回報 s 是否含有換行、tab 或其他控制字元。這些字元寫進
+// smb.conf / exports 這類「一行一個指令」的設定檔會破壞格式甚至注入指令,
+// samba 與 nfs 的 Validate 共用這個判斷(同一個 package)。
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }
 
 const sambaConfTemplate = `# 由 GoNAS 自動產生，請勿手動修改 —— 修改請透過 Web UI 或 API。
