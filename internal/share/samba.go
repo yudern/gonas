@@ -16,9 +16,9 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
-	"unicode"
 
 	"github.com/bng147/gonas/internal/cmdrunner"
+	"github.com/bng147/gonas/internal/textcheck"
 )
 
 // Share 描述一個 SMB 共享。Path 應該指向 mergerFS 聯合掛載點底下的一個
@@ -68,16 +68,10 @@ func (s Share) Validate() error {
 	return nil
 }
 
-// hasControlChars 回報 s 是否含有換行、tab 或其他控制字元。這些字元寫進
-// smb.conf / exports 這類「一行一個指令」的設定檔會破壞格式甚至注入指令,
-// samba 與 nfs 的 Validate 共用這個判斷(同一個 package)。
+// hasControlChars 是 textcheck.HasControl 的薄包裝,保留 samba/nfs 既有
+// 呼叫點的名稱不變;實作已收斂到 internal/textcheck 讓各設定產生器共用。
 func hasControlChars(s string) bool {
-	for _, r := range s {
-		if unicode.IsControl(r) {
-			return true
-		}
-	}
-	return false
+	return textcheck.HasControl(s)
 }
 
 const sambaConfTemplate = `# 由 GoNAS 自動產生，請勿手動修改 —— 修改請透過 Web UI 或 API。

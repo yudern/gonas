@@ -1,6 +1,11 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/bng147/gonas/internal/textcheck"
+)
 
 // PoolConfig 描述一個「Unraid 式」儲存池:每顆資料硬碟各自獨立掛載、
 // 保留原始檔案系統(建議 XFS 或 BTRFS),不做傳統 RAID 條帶化;
@@ -50,6 +55,20 @@ func (c PoolConfig) Validate() error {
 	}
 	if len(c.ContentFiles) < 2 {
 		return fmt.Errorf("pool %q: at least 2 content file locations are recommended so the SnapRAID index itself isn't a single point of failure", c.Name)
+	}
+
+	// 第三十四輪(設定產生器注入稽核收尾):snapraid.conf 由 text/template
+	// 產生(不跳脫換行)、且是 line-based、以空白分隔(例如 `data d1 <path>`)。
+	// 名稱/路徑含換行會注入指令,含空白會拆錯欄位,所以這些都不能有控制
+	// 字元或空白。見 internal/textcheck。
+	if textcheck.HasControl(c.Name) || strings.ContainsAny(c.Name, " \t/") {
+		return fmt.Errorf("pool %q: name cannot contain spaces, slashes, line breaks, or control characters", c.Name)
+	}
+	pathFields := append(append(append([]string{c.MountPoint}, c.DataDisks...), c.ParityDisks...), c.ContentFiles...)
+	for _, pth := range pathFields {
+		if textcheck.HasControl(pth) || strings.ContainsAny(pth, " \t") {
+			return fmt.Errorf("pool %q: path %q cannot contain spaces, line breaks, or control characters (breaks snapraid.conf format)", c.Name, pth)
+		}
 	}
 
 	seen := make(map[string]bool, len(c.DataDisks)+len(c.ParityDisks))

@@ -24,6 +24,12 @@ type InstallRequest struct {
 	Overrides map[string]ServiceOverride
 	// OnPullProgress 是選用的拉取進度回呼，可為 nil。
 	OnPullProgress func(serviceName, status string)
+	// OnRollbackError 是選用的回呼:安裝失敗後回滾(停止/移除已建立的容器、
+	// 移除網路)過程中若有錯誤,透過它回報。可為 nil。第三十四輪加上——
+	// 原本回滾清理失敗是直接丟棄(installer 這層沒有 logger),導致「安裝
+	// 失敗、回滾又沒清乾淨」時完全無跡可尋;呼叫端(internal/api)接上
+	// 自己的 logger 就能記下來。
+	OnRollbackError func(serviceName string, err error)
 }
 
 // InstallResult 記錄安裝完成後每個服務對應到的容器 ID，方便呼叫端記錄下來
@@ -45,17 +51,25 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 	result := InstallResult{ContainerIDs: make(map[string]string, len(req.Template.Services))}
 	var createdNetwork bool
 
+	reportRollback := func(svcName string, err error) {
+		if err != nil && req.OnRollbackError != nil {
+			req.OnRollbackError(svcName, err)
+		}
+	}
 	rollback := func() {
 		for svcName, id := range result.ContainerIDs {
 			_ = client.StopContainer(ctx, id, 5)
+			// 盡力而為的清理,但清理失敗不再直接丟棄——透過 OnRollbackError
+			// 回報給呼叫端(通常接上 logger),避免「安裝失敗、回滾又沒清乾淨」
+			// 時完全無跡可尋。呼叫端仍會拿到原始的安裝失敗錯誤當回傳值。
 			if err := client.RemoveContainer(ctx, id, true); err != nil {
-				// 盡力而為的清理，記不到 log 就算了 —— 呼叫端會拿到原始錯誤,
-				// 之後 Phase 5 接上告警系統時這裡可以補上通知。
-				_ = fmt.Errorf("rollback: removing container for service %q: %w", svcName, err)
+				reportRollback(svcName, fmt.Errorf("removing container for service %q: %w", svcName, err))
 			}
 		}
 		if createdNetwork {
-			_ = client.RemoveNetwork(ctx, docker.AppNetworkName(req.Template.ID))
+			if err := client.RemoveNetwork(ctx, docker.AppNetworkName(req.Template.ID)); err != nil {
+				reportRollback("", fmt.Errorf("removing app network: %w", err))
+			}
 		}
 	}
 

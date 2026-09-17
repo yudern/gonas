@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"text/template"
+
+	"github.com/bng147/gonas/internal/textcheck"
 )
 
 // PeerConfig 是一個 WireGuard 對端(通常是使用者的手機、筆電這類要
@@ -35,6 +37,25 @@ func (p PeerConfig) Validate() error {
 	if len(p.AllowedIPs) == 0 {
 		return fmt.Errorf("peer %q: at least one allowed IP/CIDR is required", p.Name)
 	}
+	// 第三十四輪(設定產生器注入稽核收尾):wg .conf 是 line-based,由
+	// text/template 產生(不跳脫換行)。任一欄位含換行都能注入額外指令;
+	// key/CIDR/endpoint 是單一 token,含空白也代表格式已壞。Name 寫成
+	// 註解可以有空白,但一樣不能有換行/控制字元。見 internal/textcheck。
+	if textcheck.HasControl(p.Name) {
+		return fmt.Errorf("peer %q: name cannot contain line breaks or control characters", p.Name)
+	}
+	for _, field := range []struct{ label, val string }{
+		{"public key", p.PublicKey}, {"preshared key", p.PresharedKey}, {"endpoint", p.Endpoint},
+	} {
+		if textcheck.HasControl(field.val) || strings.ContainsAny(field.val, " \t") {
+			return fmt.Errorf("peer %q: %s cannot contain spaces, line breaks, or control characters", p.Name, field.label)
+		}
+	}
+	for _, ip := range p.AllowedIPs {
+		if textcheck.HasControl(ip) || strings.ContainsAny(ip, " \t") {
+			return fmt.Errorf("peer %q: allowed IP %q cannot contain spaces, line breaks, or control characters", p.Name, ip)
+		}
+	}
 	return nil
 }
 
@@ -55,6 +76,14 @@ func (i InterfaceConfig) Validate() error {
 	}
 	if i.ListenPort <= 0 || i.ListenPort > 65535 {
 		return fmt.Errorf("interface listen port must be between 1 and 65535, got %d", i.ListenPort)
+	}
+	if textcheck.HasControl(i.PrivateKey) || strings.ContainsAny(i.PrivateKey, " \t") {
+		return fmt.Errorf("interface private key cannot contain spaces, line breaks, or control characters")
+	}
+	for _, a := range i.Address {
+		if textcheck.HasControl(a) || strings.ContainsAny(a, " \t") {
+			return fmt.Errorf("interface address %q cannot contain spaces, line breaks, or control characters", a)
+		}
 	}
 	return nil
 }

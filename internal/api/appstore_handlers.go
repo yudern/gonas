@@ -87,6 +87,11 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 	result, err := appstore.Install(r.Context(), s.docker, appstore.InstallRequest{
 		Template:  tmpl,
 		Overrides: req.Overrides,
+		OnRollbackError: func(svc string, rbErr error) {
+			// 安裝失敗後的回滾清理若又出錯,記下來——不然會留下沒清乾淨的
+			// 容器/網路卻無跡可尋(第三十四輪)。
+			s.logger.Warn("app install rollback cleanup failed", "app", tmpl.ID, "service", svc, "err", rbErr)
+		},
 	})
 	if err != nil {
 		s.logger.Error("installing app failed", "app", tmpl.ID, "err", err)
