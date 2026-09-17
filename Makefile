@@ -12,7 +12,7 @@ LDFLAGS := -s -w \
 DIST := dist
 RELEASE_DIR := $(DIST)/release
 
-.PHONY: build build-amd64 build-arm64 build-all release run clean clean-cache vet fmt iso iso-amd64 iso-arm64
+.PHONY: build build-amd64 build-arm64 build-armv7 build-all release run clean clean-cache vet fmt iso iso-amd64 iso-arm64
 
 ## build: 編譯給目前這台機器用的 binary(開發用)
 build:
@@ -26,8 +26,18 @@ build-amd64:
 build-arm64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 ./cmd/gonasd
 
-## build-all: 一次產出 amd64 + arm64 兩份靜態執行檔
-build-all: build-amd64 build-arm64
+## build-armv7: 交叉編譯 32-bit ARMv7 靜態執行檔(樹莓派2/3、Zero 2、
+## 以及多數還在跑 32-bit 系統的小型/老舊 SBC)。GOARM=7 對應有硬體
+## 浮點(VFPv3)的 ARMv7 核心;這份 binary 不能跑在更舊的 ARMv6
+## (樹莓派 1/Zero)上——那類板子其實太弱、不適合當 NAS,真的需要時
+## 把 GOARM 改成 6 即可(產出的 binary 反而向下相容 ARMv6/v7,只是
+## 浮點少一點最佳化)。目前程式完全沒用到 sync/atomic 的 64-bit 操作,
+## 所以沒有 32-bit ARM 上 64-bit atomic 需要 8-byte 對齊的那個雷。
+build-armv7:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-armv7 ./cmd/gonasd
+
+## build-all: 一次產出 amd64 + arm64 + armv7 三份靜態執行檔
+build-all: build-amd64 build-arm64 build-armv7
 	@echo "built:" && ls -la $(DIST)
 
 ## release: 把 build-all 的產物打包成每個架構各一份的 tarball,裡面含
@@ -37,7 +47,7 @@ build-all: build-amd64 build-arm64
 release: build-all
 	rm -rf $(RELEASE_DIR)
 	mkdir -p $(RELEASE_DIR)
-	for arch in amd64 arm64; do \
+	for arch in amd64 arm64 armv7; do \
 		pkgdir=$(RELEASE_DIR)/gonas-$(VERSION)-linux-$$arch; \
 		mkdir -p $$pkgdir; \
 		cp $(DIST)/$(BINARY)-linux-$$arch $$pkgdir/$(BINARY); \

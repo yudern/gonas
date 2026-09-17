@@ -44,8 +44,7 @@ const (
 
 // monitorPollInterval 是系統資源取樣的週期。10 秒對一台 NAS 的監控用途
 // 已經夠即時(不是給高頻交易系統用的),又不會因為太頻繁而讓 History 的
-// 時間跨度太短、或是不必要地增加 SMART 檢查(見 monitor_handlers.go 的
-// anyDiskSmartFailed)對硬碟的存取次數。
+// 時間跨度太短。
 //
 // monitorHistoryCapacity 搭配上面的間隔,保留最近 30 分鐘的走勢
 // (180 * 10s = 1800s)給 Web UI 畫圖表 —— 這個時間長度足夠讓使用者看出
@@ -55,6 +54,15 @@ const (
 	monitorPollInterval    = 10 * time.Second
 	monitorHistoryCapacity = 180
 )
+
+// smartCheckInterval 是背景重新檢查各硬碟 SMART 健康狀態的最短間隔。
+// SMART 的整體健康(PASSED/FAILED)是以小時計才會變的東西,而每次檢查都要
+// 對每顆碟 fork 一次 `smartctl -a`、還會把休眠中的碟喚醒。所以告警評估
+// 不再每 10 秒(monitorPollInterval)都去查,而是讀快取值,快取超過這個
+// 間隔才在背景重跑一次。15 分鐘足以及時抓到「碟開始回報 FAILED」這種
+// 事件(SMART 預警通常在真正故障前數小時~數天就出現),同時讓孱弱的
+// ARM CPU 與想休眠的硬碟不再被每 10 秒的輪詢騷擾。
+const smartCheckInterval = 15 * time.Minute
 
 // auditLogCapacity 是 Phase 18b 稽核紀錄(state.State.AuditLog)保留的
 // 最大筆數,超過就從最舊的開始丟——理由跟 monitorHistoryCapacity 一樣:
@@ -126,6 +134,20 @@ type Server struct {
 	monitorHistory   *monitor.History
 	alertEngine      *monitor.AlertEngine
 	monitorPoller    *monitor.Poller
+
+	// smartMu 保護底下這組 SMART 健康檢查的快取欄位。第三十四輪(效能/
+	// ARM 稽核)修法:原本監控輪詢每 10 秒的告警評估,會對每一顆資料碟+
+	// 同位碟逐一 fork 出 `smartctl -a`。一台 6 碟的 NAS 就是每 10 秒 6 次
+	// 行程,一天約 5 萬次——在孱弱的 ARM CPU 上是持續的無謂負載,而且
+	// `smartctl -a` 會喚醒硬碟,等於讓碟永遠無法休眠(spin-down),對家用
+	// ARM NAS 是耗電/發熱/磨損的大忌。SMART 健康是「以小時計」才會變的
+	// 東西,不需要每 10 秒查。改成:告警評估只讀 smartFailed 這個快取值
+	// (非阻塞),快取過期(smartCheckInterval)時才在背景 goroutine 重跑
+	// 一次真正的 smartctl,把行程 spawn 砍掉約兩個數量級、讓硬碟能休眠。
+	smartMu       sync.Mutex
+	smartFailed   bool
+	smartChecked  time.Time
+	smartChecking bool
 
 	// digestScheduler 是 Phase 18c 新增的週期性健康摘要背景排程,
 	// state.State.Digest.Enabled 且 CronExpr 合法時才會真的啟動——跟

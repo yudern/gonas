@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bng147/gonas/internal/monitor"
+	"github.com/bng147/gonas/internal/safe"
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
 )
@@ -254,24 +255,54 @@ func (s *Server) rebuildNotifier() {
 // onMonitorSample 是餵給 monitor.Poller 的回呼：把這一輪的系統資源快照,
 // 加上目前的陣列/SMART 健康狀態,一起交給 AlertEngine 評估。
 func (s *Server) onMonitorSample(snap monitor.Snapshot) {
+	// 一輪只快照一次 state(第三十四輪效能稽核:原本這裡拿規則、
+	// anyDiskSmartFailed 裡又拿一次 pool,每 10 秒重複兩次)。
+	st := s.store.Snapshot()
+
 	facts := monitor.Facts{Snapshot: snap}
 
 	if array := s.getArray(); array != nil {
 		facts.ArrayFailed = array.Status().State == storage.StateFailed
 	}
-	facts.SmartFailed = s.anyDiskSmartFailed(context.Background())
+	// 只讀 SMART 健康的快取值(非阻塞);快取過期時會在背景重跑一次
+	// 真正的 smartctl,不會卡住這條每 10 秒一次的輪詢。見 smartCheckInterval。
+	facts.SmartFailed = s.cachedSmartFailed(st.Pool)
 
-	rules := s.store.Snapshot().AlertRules
-	s.alertEngine.Evaluate(context.Background(), rules, facts)
+	s.alertEngine.Evaluate(context.Background(), st.AlertRules, facts)
 }
 
-// anyDiskSmartFailed 對目前 pool 設定裡的每一顆碟跑一次 SMART 健康檢查。
-// 刻意把單次呼叫的逾時抓短(5 秒):告警評估是背景週期性工作,不該因為
-// 一顆碟的 smartctl 掛住就拖累整個輪詢節奏；某顆碟檢查失敗(裝置不支援
-// SMART、smartctl 沒裝等)只記 debug log 略過，不會被當成「SMART 故障」
-// 誤觸發告警 —— 只有真的讀到 Passed=false 才算數。
-func (s *Server) anyDiskSmartFailed(ctx context.Context) bool {
-	pool := s.store.Snapshot().Pool
+// cachedSmartFailed 回傳「是否有任何碟的 SMART 回報 FAILED」的快取值。
+// 快取超過 smartCheckInterval 時,啟動一個背景 goroutine 重跑真正的
+// smartctl 檢查(同時間只會有一個在跑),當下這次呼叫仍立刻回傳上一次
+// 的快取值——SMART 故障不是需要「這一秒就反應」的事件,用稍微舊一點的
+// 值換掉「每 10 秒同步 fork 一堆 smartctl、把硬碟吵醒」完全划算。
+func (s *Server) cachedSmartFailed(pool *storage.PoolConfig) bool {
+	s.smartMu.Lock()
+	failed := s.smartFailed
+	needRefresh := !s.smartChecking && time.Since(s.smartChecked) >= smartCheckInterval
+	if needRefresh {
+		s.smartChecking = true
+	}
+	s.smartMu.Unlock()
+
+	if needRefresh {
+		go safe.Run(s.logger, "smart-health-refresh", func() {
+			result := s.probeSmartFailed(context.Background(), pool)
+			s.smartMu.Lock()
+			s.smartFailed = result
+			s.smartChecked = time.Now()
+			s.smartChecking = false
+			s.smartMu.Unlock()
+		})
+	}
+	return failed
+}
+
+// probeSmartFailed 是實際去 fork smartctl 的那一段——對 pool 裡每一顆
+// 資料碟+同位碟跑一次 `smartctl -a`,任何一顆回報非 PASSED 就算失敗。
+// 只由 cachedSmartFailed 的背景 goroutine 呼叫(至多每 smartCheckInterval
+// 一次),不再掛在每 10 秒的輪詢上。
+func (s *Server) probeSmartFailed(ctx context.Context, pool *storage.PoolConfig) bool {
 	if pool == nil {
 		return false
 	}

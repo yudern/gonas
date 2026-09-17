@@ -208,40 +208,73 @@ func readMemInfo() (total, available uint64, err error) {
 // parseMemInfo 一樣只吃 io.Reader 方便測試。/proc/meminfo 每行格式是
 // `Key:            12345 kB`，這裡直接假設單位一律是 kB(核心目前所有
 // 版本都是如此),轉成 bytes 方便跟 Snapshot 其他欄位一致。
+//
+// 第三十四輪效能稽核:原本每次取樣(每 10 秒一次)都把整份 /proc/meminfo
+// 約 50 個欄位塞進一張 map,但實際只需要 3~5 個 key。改成只挑需要的欄位、
+// 拿到現代核心的 MemTotal+MemAvailable 就提早收工,省掉每次取樣一張 map
+// 的配置與後續 GC 壓力——在記憶體本來就小的 ARM 板子上,少一點無謂的
+// 短命配置就少一點 GC 喚醒。
 func parseMemInfo(r io.Reader) (total, available uint64, err error) {
+	var memFree, buffers, cached uint64
+	var haveTotal, haveAvail bool
+
 	sc := bufio.NewScanner(r)
-	values := make(map[string]uint64)
 	for sc.Scan() {
-		line := sc.Text()
-		key, rest, ok := strings.Cut(line, ":")
+		key, rest, ok := strings.Cut(sc.Text(), ":")
 		if !ok {
 			continue
 		}
-		rest = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "kB"))
-		fields := strings.Fields(rest)
-		if len(fields) == 0 {
+		switch key {
+		case "MemTotal":
+			total, haveTotal = parseMemInfoKB(rest)
+		case "MemAvailable":
+			available, haveAvail = parseMemInfoKB(rest)
+		case "MemFree":
+			memFree, _ = parseMemInfoKB(rest)
+		case "Buffers":
+			buffers, _ = parseMemInfoKB(rest)
+		case "Cached":
+			cached, _ = parseMemInfoKB(rest)
+		default:
 			continue
 		}
-		v, convErr := strconv.ParseUint(fields[0], 10, 64)
-		if convErr != nil {
-			continue
+		// 現代核心(3.14 起)都有 MemAvailable,而 /proc/meminfo 的欄位順序
+		// 是 MemTotal→MemFree→MemAvailable→…,拿到 Total+Available 就已經
+		// 有算使用率需要的一切,不用再讀完整份檔案。
+		if haveTotal && haveAvail {
+			break
 		}
-		values[strings.TrimSpace(key)] = v * 1024
 	}
 	if err := sc.Err(); err != nil {
 		return 0, 0, fmt.Errorf("reading /proc/meminfo: %w", err)
 	}
 
-	total, ok := values["MemTotal"]
-	if !ok {
+	if !haveTotal {
 		return 0, 0, fmt.Errorf("missing MemTotal in /proc/meminfo")
 	}
-	if avail, ok := values["MemAvailable"]; ok {
-		return total, avail, nil
+	if haveAvail {
+		return total, available, nil
 	}
 	// 舊核心(3.14 之前)沒有 MemAvailable，退化用 MemFree+Buffers+Cached
 	// 估算「實際可用」的記憶體，這是 free(1) 在沒有 MemAvailable 時的作法。
-	return total, values["MemFree"] + values["Buffers"] + values["Cached"], nil
+	// 缺漏的欄位對應值本來就是 0,加總仍成立。
+	return total, memFree + buffers + cached, nil
+}
+
+// parseMemInfoKB 解析 /proc/meminfo 一行冒號右側的 `   12345 kB`,回傳
+// bytes 值;格式不符(空白、非數字)時回 ok=false,呼叫端據此當成「這個
+// 欄位不存在」處理,行為跟改寫前「解析失敗就略過」一致。
+func parseMemInfoKB(rest string) (uint64, bool) {
+	rest = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "kB"))
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v * 1024, true
 }
 
 func readDiskUsage(path string) (total, used uint64, err error) {

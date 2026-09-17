@@ -2412,6 +2412,46 @@ OK(Web UI 由 go:embed 內嵌,UI 改動一併經 build/vet 驗證)。A、B 兩�
 開發端完整驗證,不屬於「需實機驗證」那一類;唯一仍待實機(ESXi/實體)驗證的
 項目維持不變:DVD-1 pkgsel 離線安裝 openssh-server/sudo 那段。
 
+**第三十五輪(全鏈路效能/記憶體/ARM 稽核,依建議順序修 4 項)**:
+
+使用者要求這輪聚焦「代碼效率、記憶體佔用、以及 ARM(孱弱 CPU/小記憶體)
+最佳化」。先確認一批「已經做對、不用動」的地方(檔案下載/上傳/打包 zip
+全程串流,不吃整檔進記憶體;API 用串流 json.Encoder,無 MarshalIndent;
+/proc 解析用 bufio 不 fork 行程;正規表達式套件層級編譯一次;排程器事件
+驅動非忙輪詢;文字編輯 2 MiB 上限;建置已 `-s -w -trimpath CGO_ENABLED=0`),
+再依影響順序修掉 4 項:
+
+- **① 高影響 — SMART 每 10 秒對每顆碟 fork smartctl(關鍵 ARM/NAS 問題)**:
+  監控輪詢每 10 秒的告警評估(onMonitorSample)原本會對 pool 裡每一顆
+  資料碟+同位碟逐一跑 `smartctl -a`。6 碟就是每 10 秒 6 次行程、一天約
+  5 萬次——在孱弱 ARM CPU 上是持續無謂負載,而且 `smartctl -a` 會喚醒
+  硬碟,等於讓碟永遠無法休眠(耗電/發熱/磨損)。SMART 健康以小時計才會
+  變,不需要每 10 秒查。改成:告警評估只讀 `smartFailed` 快取值(非阻塞),
+  快取超過 `smartCheckInterval`(15 分鐘)才在背景 goroutine 重跑一次真正的
+  smartctl(同時間只會有一個在跑)。行程 spawn 砍掉約兩個數量級,硬碟得以
+  休眠。加迴歸測試 `monitor_smart_cache_test.go`(固化「連問 50 次只 probe
+  一輪」「FAILED 仍抓得到」「無 pool 不碰 smartctl」)。
+- **② 微幅 — parseMemInfo 每次取樣建整張 map**:每 10 秒解析 /proc/meminfo
+  原本把約 50 個欄位塞進一張 map,實際只需 3~5 個 key。改成只挑需要的欄位、
+  現代核心拿到 MemTotal+MemAvailable 就提早收工,省掉每次取樣的 map 配置與
+  GC 壓力(小記憶體 ARM 板上少一點短命配置就少一點 GC 喚醒)。既有解析測試
+  照過。
+- **③ 微幅 — onMonitorSample 每輪呼叫兩次 store.Snapshot()**:一次拿規則、
+  一次(在 SMART 檢查裡)拿 pool。合併成一次快照重用。
+- **④ 選配(非 bug)— 補 32-bit ARMv7 建置目標**:原本只交叉編譯 arm64
+  (Pi 4/5)。新增 `make build-armv7`(GOARCH=arm GOARM=7)涵蓋 Pi 2/3、
+  Zero 2 與多數還跑 32-bit 系統的小型 SBC,並納入 build-all 與 release
+  tarball。附註:目前程式完全沒用到 sync/atomic 的 64-bit 操作,所以沒有
+  32-bit ARM 上「64-bit atomic 需 8-byte 對齊」那個雷;真要支援更舊的
+  ARMv6(Pi 1/Zero)把 GOARM 改 6 即可(向下相容但那類板子其實太弱)。
+
+**QA**:`go vet`/`gofmt` 乾淨、`go test ./... -race` 全過無 race、native +
+armv7 交叉編譯都 OK(armv7 產出確認是 statically linked ELF 32-bit ARM)。
+這 4 項都在開發端完整驗證,不屬於「需實機驗證」那一類;唯一仍待實機驗證的
+項目維持不變:DVD-1 pkgsel 離線安裝那段。SMART 快取的行為(15 分鐘刷新、
+硬碟得以休眠)在真機上可再用 `hdparm -C`/`smartctl` 存取計數佐證,但邏輯
+本身已由迴歸測試固化。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

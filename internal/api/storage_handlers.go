@@ -42,8 +42,10 @@ type diskSmartResult struct {
 // 就是「儲存」頁面已經顯示的硬碟表格要多加一欄,直接用當下偵測到的
 // 硬碟清單查一輪最省事,也不會有「表格顯示的硬碟」跟「查詢的硬碟」
 // 兜不起來的疑慮。每顆碟的逾時刻意抓短(5 秒,跟 monitor_handlers.go
-// 的 anyDiskSmartFailed 用同樣的值)——這是使用者主動點開頁面在等的
+// 的 probeSmartFailed 用同樣的值)——這是使用者主動點開頁面在等的
 // 前景請求,不該因為一顆碟的 smartctl 掛住就讓整個頁面卡住不轉。
+// (注意這支是「使用者開頁面時查一次」的前景請求,跟背景告警評估每
+// 15 分鐘才刷新一次的 SMART 快取是兩條獨立路徑,互不影響。)
 func (s *Server) handleStorageDisksSmart(w http.ResponseWriter, r *http.Request) {
 	disks, err := storage.DiscoverDisks(r.Context(), s.runner)
 	if err != nil {
