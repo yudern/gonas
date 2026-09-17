@@ -87,9 +87,27 @@ window.addEventListener("DOMContentLoaded", boot);
 
 let showingApp = false;
 
+// wireNavToggle 讓窄螢幕(手機)的漢堡鈕生效:點一下展開/收起側邊欄導覽,
+// 點任何一個導覽連結後自動收起(不然選單會一直蓋著內容)。桌面版這顆鈕
+// 用 CSS 藏起來,所以這段在桌面上等於沒作用。第三十三輪響應式修法。
+function wireNavToggle() {
+  const sidebar = document.getElementById("sidebar");
+  const toggle = document.getElementById("nav-toggle");
+  if (!sidebar || !toggle) return;
+  toggle.addEventListener("click", () => {
+    const open = sidebar.classList.toggle("nav-open");
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  navLinks.forEach((a) => a.addEventListener("click", () => {
+    sidebar.classList.remove("nav-open");
+    toggle.setAttribute("aria-expanded", "false");
+  }));
+}
+
 async function boot() {
   applyStaticI18n();
   wireLangSwitcher();
+  wireNavToggle();
   setUnauthorizedHandler(showLoginGate);
 
   document.getElementById("logout-btn").addEventListener("click", async () => {

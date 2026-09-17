@@ -91,6 +91,18 @@ body {
   color: #fff;
 }
 .brand-mark { color: var(--accent); }
+/* 漢堡選單鈕:桌面隱藏,只有窄螢幕的 @media 區塊會把它顯示出來。 */
+.nav-toggle {
+  display: none;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--sidebar-active);
+  color: var(--sidebar-text);
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
 
 .nav-list { list-style: none; margin: 0; padding: 0; flex: 1; }
 .nav-list li { margin-bottom: 2px; }
@@ -345,4 +357,37 @@ a { color: var(--accent); }
   white-space: pre-wrap;
   word-break: break-all;
   overflow-x: auto;
+}
+
+/* ---------- 響應式:窄螢幕(手機/平板直立)----------
+   第三十三輪(全鏈路第二輪覆核)修法:原本整個介面沒有任何寬度斷點,
+   固定 208px 的深色側邊欄在手機上會吃掉超過一半螢幕、內容被擠成一條。
+   窄螢幕改成:側邊欄變成頂部一列(品牌 + 漢堡鈕),導覽/頁尾預設收起,
+   點漢堡才展開;內容區改用全寬、縮小 padding。這只影響窄螢幕,桌面
+   版面完全不變。 */
+@media (max-width: 720px) {
+  .shell { flex-direction: column; min-height: 100vh; }
+
+  .sidebar {
+    width: 100%;
+    flex-direction: column;
+    padding: 10px 14px;
+  }
+  .brand { padding: 4px 4px; }
+  .nav-toggle { display: inline-flex; align-items: center; }
+
+  /* 導覽清單與頁尾預設收起,加上 .nav-open 才展開 */
+  .nav-list { display: none; margin-top: 8px; }
+  .sidebar-footer { display: none; }
+  .sidebar.nav-open .nav-list { display: block; }
+  .sidebar.nav-open .sidebar-footer { display: flex; margin-top: 10px; }
+
+  .nav-list a { padding: 11px 12px; font-size: 15px; } /* 手機上點按目標放大 */
+
+  .content { padding: 20px 16px; max-width: none; }
+  h1 { font-size: 20px; }
+
+  /* 統計磚在窄螢幕一律單欄,不要硬塞兩欄擠成細條 */
+  .grid { grid-template-columns: 1fr; }
+  form.stacked { max-width: none; }
 }
