@@ -132,7 +132,7 @@ jobs:
           echo "=== 建置後磁碟狀況 ==="
           df -h / /mnt
 
-      - name: 掛 ISO + checksum 到本版 Release
+      - name: 切成 <2GiB 分割檔並掛到本版 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -144,17 +144,37 @@ jobs:
               *) VERSION="$(git describe --tags --always)" ;;
             esac
           fi
-          gh release upload "$VERSION" \
-            dist/release/gonas-*-${{ matrix.arch }}.iso \
-            dist/release/gonas-*-${{ matrix.arch }}.iso.sha256 \
-            --clobber
+          cd dist/release
+          ISO="$(ls gonas-*-${{ matrix.arch }}.iso)"
+          echo "ISO 大小:$(ls -lh "$ISO" | awk '{print $5}')"
 
-      - name: 同時也存一份到 workflow artifact(Release 之外的備援)
-        uses: actions/upload-artifact@v4
-        with:
-          name: gonas-iso-${{ matrix.arch }}
-          path: |
-            dist/release/gonas-*-${{ matrix.arch }}.iso
-            dist/release/gonas-*-${{ matrix.arch }}.iso.sha256
-          if-no-files-found: error
-          retention-days: 14
+          # GitHub Release 單檔上限 2GiB,DVD-1 based ISO ~3.7GB 超過,
+          # 所以切成每塊 1900MiB(<2GiB)的分割檔。GNU split 的後綴是
+          # .part-aa / .part-ab …,照字母排序,合併時 `cat *` 順序正確。
+          split -b 1900M -d -a 2 "$ISO" "$ISO.part-"
+
+          # 產一份「如何合併 + 校驗」的說明,一起掛上去(用 printf 避免
+          # heredoc 在 YAML 縮排下的相容問題)。
+          WHOLE_SHA="$(cut -d' ' -f1 "$ISO.sha256")"
+          printf '%s\n' \
+            "這份 ISO 因為超過 GitHub Release 單檔 2GiB 上限,被切成多個 .part-NN 分割檔。" \
+            "下載「全部」的 ${ISO}.part-* 之後,在同一個資料夾執行:" \
+            "" \
+            "  cat ${ISO}.part-* > ${ISO}        # macOS / Linux 都適用" \
+            "" \
+            "合併後校驗,要跟這個 SHA256 一致:" \
+            "  ${WHOLE_SHA}" \
+            "  # macOS: shasum -a 256 ${ISO}" \
+            "  # Linux: sha256sum ${ISO}" \
+            "" \
+            "校驗一致就可以拿 ${ISO} 去 ESXi/實體機安裝了。" \
+            > "$ISO.HOWTO.txt"
+
+          echo "=== 產出的分割檔 ===" && ls -lh "$ISO".part-* "$ISO.sha256" "$ISO.HOWTO.txt"
+
+          # 掛上 Release:分割檔 + 全檔 SHA256 + 合併說明(都遠小於 2GiB)。
+          gh release upload "$VERSION" \
+            "$ISO".part-* \
+            "$ISO.sha256" \
+            "$ISO.HOWTO.txt" \
+            --clobber
