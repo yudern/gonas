@@ -2552,6 +2552,32 @@ QA:gofmt/vet 乾淨、`go test`(內嵌 UI)過、node --check 前端 JS 過、pla
 跑,沒問題;若日後改非 root 執行需另配 polkit)。關機後要在實體機/ESXi/IPMI
 手動再開機。QA:gofmt/vet/test -race 全綠、node --check 過。待辦剩:UPS。
 
+**第四十輪(UPS 不斷電系統整合——四大待辦的第 4 項,收尾)**:
+
+使用者提到「說好的 UPS」。先前確認 UPS 從未實作、README 也沒承諾;這輪補上,
+建在 NUT(Network UPS Tools)之上——業界標準、驅動涵蓋最廣,不自己重造 USB/
+SNMP 協定。跟 smartctl/mergerfs 一樣是「選用外部依賴」,沒裝不影響 daemon。
+
+- `internal/ups`:`upsc` 查詢/解析(List/Query/parseUPSC),回傳市電/電池、
+  電量、續航、負載;`ShouldShutdown` 純函式判斷「靠電池且電量過低(LB 或續航
+  低於門檻)才關機,市電正常永不關」;`Monitor` 背景守護每 20 秒依設定自我
+  開關,判定該關機時呼叫 onShutdown(走跟網頁電源鍵同一條 systemctl poweroff)
+  且只觸發一次。完整單元測試(解析、旗標、ShouldShutdown 各情境、Monitor 只
+  在啟用+低電量時觸發、觸發一次、設定 gate)。
+- state 加 UPSConfig(enabled/upsName/shutdownOnLowBattery/runtimeThreshold)。
+- API:GET /ups/status、/ups/list、/ups/config(requireAuth)、PUT /ups/config
+  (requireAdmin);查不到 UPS 一律回 200+present:false(不是錯誤)。監控在
+  New() 一律啟動、Close() 停;getConfig 每輪讀當下設定,改設定存檔即生效。
+- 前端:監控頁新增 UPS 卡片(狀態表 + 管理者專屬設定表單),三語 i18n;
+  playwright 實測卡片渲染、設定存檔並持久化、無 JS error。
+
+實機提醒:auto-shutdown 的判斷邏輯已由單元測試固化,但「真的接一台 UPS、
+NUT 設定好、拔市電看它自動關機」這條端到端只能在真有 UPS 的機器上驗——這是
+本功能唯一無法在沙盒完成的部分,跟當初 DVD-1 離線 SSH 是同一類保留項。
+
+QA:gofmt/vet/`go test ./... -race` 全綠、node --check 過、playwright 實測。
+**四大待辦(錯誤在地化 / 新手嚮導 / 電源 / UPS)全部完成。**
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

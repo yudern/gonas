@@ -551,6 +551,7 @@ const SECTION_ICONS = {
   otp: '<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.5 15h3"/>',
   backup: '<path d="M3 4.5h14v3H3z"/><path d="M4.5 7.5v8.5h11V7.5"/><path d="M8 11h4"/>',
   power: '<path d="M10 2.5v7"/><path d="M6 5.2a6 6 0 1 0 8 0"/>',
+  battery: '<rect x="2.5" y="6.5" width="13" height="7" rx="1.5"/><path d="M17 9v2"/><rect x="4" y="8" width="7" height="4" rx="0.6" fill="currentColor" stroke="none"/>',
 };
 
 // h2i:帶圖示的區塊標題。label 必須是「已跳脫」的字串(呼叫端照舊傳
@@ -1829,8 +1830,77 @@ function isBooleanMetric(metric) {
   return metric === "arrayFailed" || metric === "smartFailed";
 }
 
+// renderUPSCard 畫 UPS(不斷電系統)狀態 + 設定。狀態:查到就顯示市電/電池、
+// 電量、預估續航、負載;查不到(NUT 沒裝/沒設定)顯示提示。設定表單只有
+// 管理者看得到(啟用、UPS 名稱、市電中斷自動關機、續航門檻)。
+function renderUPSCard(status, cfg, names, isAdmin) {
+  status = status || { present: false };
+  cfg = cfg || {};
+  let statusHTML;
+  if (!status.present) {
+    statusHTML = `<p class="empty-state" style="text-align:left">${esc(t("ups.notDetected"))}</p>`;
+  } else {
+    const pillCls = status.lowBattery ? "danger" : (status.onBattery ? "warn" : "ok");
+    const pillTxt = status.lowBattery ? t("ups.stateLow") : (status.onBattery ? t("ups.stateBattery") : t("ups.stateOnline"));
+    const rows = [];
+    if (status.model) rows.push([t("ups.model"), esc(status.model)]);
+    rows.push([t("ups.state"), `<span class="pill ${pillCls}">${esc(pillTxt)}</span>` + (status.status ? ` <code>${esc(status.status)}</code>` : "")]);
+    if (status.batteryCharge != null) rows.push([t("ups.battery"), `${status.batteryCharge}%`]);
+    if (status.runtimeSeconds != null) rows.push([t("ups.runtime"), formatUptime(status.runtimeSeconds)]);
+    if (status.loadPercent != null) rows.push([t("ups.load"), `${status.loadPercent}%`]);
+    statusHTML = `<table><tbody>${rows.map((r) => `<tr><td style="color:var(--text-dim)">${r[0]}</td><td>${r[1]}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  const nameOptions = (names || []).map((n) => `<option value="${esc(n)}" ${cfg.upsName === n ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const configHTML = isAdmin ? `
+    <div id="ups-msg"></div>
+    <form class="stacked" id="ups-form" style="margin-top:14px;border-top:1px dashed var(--border);padding-top:14px">
+      <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${cfg.enabled ? "checked" : ""}> ${esc(t("ups.enable"))}</label></div>
+      <div class="field">
+        <label>${esc(t("ups.name"))}</label>
+        ${names && names.length
+          ? `<select name="upsName">${nameOptions || `<option value="">—</option>`}</select>`
+          : `<input type="text" name="upsName" value="${esc(cfg.upsName || "")}" placeholder="ups"><span class="hint">${esc(t("ups.nameHint"))}</span>`}
+      </div>
+      <div class="checkbox-row"><label><input type="checkbox" name="shutdownOnLowBattery" ${cfg.shutdownOnLowBattery ? "checked" : ""}> ${esc(t("ups.autoShutdown"))}</label></div>
+      <div class="field"><label>${esc(t("ups.runtimeThreshold"))}</label><input type="number" name="runtimeThresholdSeconds" min="0" value="${Number(cfg.runtimeThresholdSeconds) || 0}"><span class="hint">${esc(t("ups.runtimeThresholdHint"))}</span></div>
+      <div class="btn-row"><button type="submit">${esc(t("common.save"))}</button></div>
+    </form>` : "";
+
+  return `
+    <div class="card">
+      ${h2i("battery", esc(t("ups.title")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("ups.hint"))}</p>
+      ${statusHTML}
+      ${configHTML}
+    </div>`;
+}
+
+function wireUPS(el) {
+  const form = el.querySelector("#ups-form");
+  if (!form) return;
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const cfg = {
+      enabled: f.get("enabled") === "on",
+      upsName: (f.get("upsName") || "").trim(),
+      shutdownOnLowBattery: f.get("shutdownOnLowBattery") === "on",
+      runtimeThresholdSeconds: parseInt(f.get("runtimeThresholdSeconds"), 10) || 0,
+    };
+    const box = el.querySelector("#ups-msg");
+    try {
+      await api.setUpsConfig(cfg);
+      box.innerHTML = msg("ok", t("ups.saved"));
+      await renderMonitor(el);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
 async function renderMonitor(el) {
-  const [system, history, rules, notifiers, emailNotifiers, digest, me] = await Promise.all([
+  const [system, history, rules, notifiers, emailNotifiers, digest, me, upsStat, upsCfg, upsNames] = await Promise.all([
     api.monitorSystem().catch(() => null),
     api.monitorHistory().catch(() => []),
     api.alertRules().catch(() => []),
@@ -1838,6 +1908,9 @@ async function renderMonitor(el) {
     api.emailNotifiers().catch(() => []),
     api.digest().catch(() => null),
     api.me().catch(() => ({ role: "" })),
+    api.upsStatus().catch(() => ({ present: false })),
+    api.upsConfig().catch(() => ({})),
+    api.upsList().catch(() => []),
   ]);
   const isAdmin = me.role === "admin";
 
@@ -1861,6 +1934,8 @@ async function renderMonitor(el) {
         <span><span class="swatch" style="background:var(--ok)"></span>${esc(t("monitor.legendDisk", { path: system ? `(${system.diskPath})` : "" }))}</span>
       </div>
     </div>
+
+    ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
     <div class="card">
       ${h2i("bell", esc(t("monitor.alertRules", { n: rules.length })))}
@@ -1940,6 +2015,8 @@ async function renderMonitor(el) {
       disk: history.map((h) => h.diskPercent),
     });
   }
+
+  wireUPS(el);
 
   const metricSelect = el.querySelector("#rule-metric");
   const toggleBooleanFields = () => {

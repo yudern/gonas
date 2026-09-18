@@ -45,6 +45,7 @@ type State struct {
 	Update         UpdateConfig            `json:"update"`
 	AuditLog       []AuditEntry            `json:"auditLog"`
 	Digest         DigestConfig            `json:"digest"`
+	UPS            UPSConfig               `json:"ups"`
 }
 
 // DigestConfig 是 Phase 18c 新增的週期性健康摘要設定。CronExpr 留空
@@ -65,6 +66,18 @@ type DigestConfig struct {
 	NotifierIDs      []string   `json:"notifierIds,omitempty"`
 	EmailNotifierIDs []string   `json:"emailNotifierIds,omitempty"`
 	LastSentAt       *time.Time `json:"lastSentAt,omitempty"`
+}
+
+// UPSConfig 是 UPS(不斷電系統)整合的持久化設定。UPSName 是 NUT 裡的
+// UPS 名稱(upsc 用),Enabled 決定要不要顯示/輪詢狀態,
+// ShutdownOnLowBattery 決定「市電中斷且電量過低」時要不要自動安全關機,
+// RuntimeThresholdSeconds 是「預估續航低於這個秒數就關機」的門檻(0=只看
+// NUT 的 LB 低電量旗標,不看續航)。見 internal/ups。
+type UPSConfig struct {
+	Enabled                 bool   `json:"enabled"`
+	UPSName                 string `json:"upsName,omitempty"`
+	ShutdownOnLowBattery    bool   `json:"shutdownOnLowBattery"`
+	RuntimeThresholdSeconds int    `json:"runtimeThresholdSeconds"`
 }
 
 // Validate 只在 Enabled 為 true 時要求 CronExpr 是合法的 cron 表達式——

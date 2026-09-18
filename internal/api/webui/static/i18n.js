@@ -142,6 +142,19 @@ const dict = {
       rebootSent: "重開機指令已送出,系統即將重新啟動;約一兩分鐘後可再連線。",
       shutdownSent: "關機指令已送出,系統即將關閉。之後需要在實體機/ESXi/IPMI 上手動重新開機。",
     },
+    ups: {
+      title: "不斷電系統(UPS)",
+      hint: "透過 NUT(Network UPS Tools)監看 UPS 狀態,並可在市電中斷、電量過低時自動安全關機,保護資料。需要先在系統上安裝並設定好 NUT。",
+      notDetected: "尚未偵測到 UPS。請先在系統上安裝並設定 NUT(sudo apt install nut),讓 upsc 能查到你的 UPS 後再回來。",
+      model: "型號", state: "狀態", battery: "電量", runtime: "預估續航", load: "負載",
+      stateOnline: "市電正常", stateBattery: "靠電池供電", stateLow: "電量過低",
+      enable: "啟用 UPS 監控", name: "UPS 名稱(NUT)",
+      nameHint: "NUT 設定裡的 UPS 名稱,例如 ups 或 ups@localhost。留空會自動抓第一台。",
+      autoShutdown: "市電中斷且電量過低時自動安全關機",
+      runtimeThreshold: "續航門檻(秒)",
+      runtimeThresholdHint: "預估續航低於這個秒數就關機。0 = 只在 NUT 回報「電量過低(LB)」時才關。",
+      saved: "UPS 設定已儲存。",
+    },
     files: {
       title: "檔案",
       subtitle: "直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，不需要另外掛載 SMB/NFS 或安裝用戶端軟體。",
@@ -487,6 +500,19 @@ const dict = {
       rebootSent: "重启指令已送出,系统即将重新启动;约一两分钟后可再连接。",
       shutdownSent: "关机指令已送出,系统即将关闭。之后需要在物理机/ESXi/IPMI 上手动重新开机。",
     },
+    ups: {
+      title: "不间断电源(UPS)",
+      hint: "通过 NUT(Network UPS Tools)监看 UPS 状态,并可在市电中断、电量过低时自动安全关机,保护数据。需要先在系统上安装并配置好 NUT。",
+      notDetected: "尚未检测到 UPS。请先在系统上安装并配置 NUT(sudo apt install nut),让 upsc 能查到你的 UPS 后再回来。",
+      model: "型号", state: "状态", battery: "电量", runtime: "预估续航", load: "负载",
+      stateOnline: "市电正常", stateBattery: "靠电池供电", stateLow: "电量过低",
+      enable: "启用 UPS 监控", name: "UPS 名称(NUT)",
+      nameHint: "NUT 配置里的 UPS 名称,例如 ups 或 ups@localhost。留空会自动抓第一台。",
+      autoShutdown: "市电中断且电量过低时自动安全关机",
+      runtimeThreshold: "续航阈值(秒)",
+      runtimeThresholdHint: "预估续航低于这个秒数就关机。0 = 只在 NUT 报告「电量过低(LB)」时才关。",
+      saved: "UPS 设置已保存。",
+    },
     files: {
       title: "文件",
       subtitle: "直接在浏览器里浏览、上传、下载、整理阵列里的文件,不需要另外挂载 SMB/NFS 或安装客户端软件。",
@@ -831,6 +857,19 @@ const dict = {
       confirmPrompt: "This will interrupt services. Type \"{word}\" to confirm.",
       rebootSent: "Restart command sent — the system is rebooting; you should be able to reconnect in a minute or two.",
       shutdownSent: "Shutdown command sent — the system is powering off. You'll need to power it back on from the physical machine / ESXi / IPMI.",
+    },
+    ups: {
+      title: "UPS (uninterruptible power supply)",
+      hint: "Monitor your UPS via NUT (Network UPS Tools), and optionally shut down safely when mains power fails and the battery runs low, to protect your data. NUT must be installed and configured on the system first.",
+      notDetected: "No UPS detected yet. Install and configure NUT on the system first (sudo apt install nut) so that upsc can see your UPS, then come back.",
+      model: "Model", state: "State", battery: "Battery", runtime: "Est. runtime", load: "Load",
+      stateOnline: "On line power", stateBattery: "On battery", stateLow: "Battery low",
+      enable: "Enable UPS monitoring", name: "UPS name (NUT)",
+      nameHint: "The UPS name from your NUT config, e.g. ups or ups@localhost. Leave blank to auto-detect the first one.",
+      autoShutdown: "Shut down safely when on battery and the battery is low",
+      runtimeThreshold: "Runtime threshold (seconds)",
+      runtimeThresholdHint: "Shut down when estimated runtime drops below this many seconds. 0 = only when NUT reports low battery (LB).",
+      saved: "UPS settings saved.",
     },
     files: {
       title: "Files",
@@ -1221,6 +1260,9 @@ const errorMap = {
   },
   "the mount point cannot contain '..'": {
     "zh-Hant": "掛載點不可含 '..'。", "zh-Hans": "挂载点不可含 '..'。", "en": "The mount point cannot contain '..'.",
+  },
+  "the runtime threshold cannot be negative": {
+    "zh-Hant": "續航門檻不可為負數。", "zh-Hans": "续航阈值不可为负数。", "en": "The runtime threshold cannot be negative.",
   },
 };
 

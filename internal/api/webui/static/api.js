@@ -55,6 +55,11 @@ export const api = {
 
   powerShutdown: () => request("POST", "/api/v1/system/power/shutdown"),
   powerReboot: () => request("POST", "/api/v1/system/power/reboot"),
+
+  upsStatus: () => request("GET", "/api/v1/ups/status"),
+  upsList: () => request("GET", "/api/v1/ups/list"),
+  upsConfig: () => request("GET", "/api/v1/ups/config"),
+  setUpsConfig: (cfg) => request("PUT", "/api/v1/ups/config", cfg),
   arrayStatus: () => request("GET", "/api/v1/storage/array"),
   setPool: (pool) => request("PUT", "/api/v1/storage/pool", pool),
   startArray: () => request("POST", "/api/v1/storage/array/start"),

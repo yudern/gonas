@@ -20,6 +20,7 @@ import (
 	"github.com/bng147/gonas/internal/selfupdate"
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
+	"github.com/bng147/gonas/internal/ups"
 	"github.com/bng147/gonas/internal/version"
 )
 
@@ -63,6 +64,11 @@ const (
 // 事件(SMART 預警通常在真正故障前數小時~數天就出現),同時讓孱弱的
 // ARM CPU 與想休眠的硬碟不再被每 10 秒的輪詢騷擾。
 const smartCheckInterval = 15 * time.Minute
+
+// upsPollInterval 是「市電中斷自動關機」背景監控查 UPS 的週期。停電時要夠
+// 即時反應(20 秒足以在電量見底前抓到 LB/續航過低),但又不必更密——UPS
+// 狀態不是每秒都在變。監控本身會依設定自我開關(見 ups.Monitor)。
+const upsPollInterval = 20 * time.Second
 
 // auditLogCapacity 是 Phase 18b 稽核紀錄(state.State.AuditLog)保留的
 // 最大筆數,超過就從最舊的開始丟——理由跟 monitorHistoryCapacity 一樣:
@@ -186,6 +192,10 @@ type Server struct {
 	// new 一個)方便測試替換,正式執行時就是一個帶合理逾時的 client。
 	updateHTTPClient *http.Client
 
+	// upsMonitor 是「市電中斷且電量過低就安全關機」的背景守護。一律啟動,
+	// 每一輪自己讀設定決定要不要動作(見 ups.Monitor 與 upsPollInterval)。
+	upsMonitor *ups.Monitor
+
 	// restartRequested 是 self-update 實際把新執行檔換上去之後,通知
 	// cmd/gonasd/main.go「該重啟程序了」的訊號,內容是重啟要用的執行檔
 	// 路徑。buffered size 1 是因為送訊號那個 goroutine
@@ -303,6 +313,28 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		s.startDigestScheduler(snap.Digest.CronExpr)
 	}
 
+	// UPS 監控一律啟動,但每輪自己讀設定決定要不要動作(沒啟用/沒開自動
+	// 關機時等於空轉,不查也不動)。getConfig 每輪讀當下持久化設定,所以
+	// 使用者改設定存檔後不必重啟就生效;onShutdown 走跟網頁電源按鈕同一條
+	// systemctl poweroff。
+	s.upsMonitor = ups.NewMonitor(logger, s.runner, upsPollInterval,
+		func() ups.MonitorConfig {
+			c := s.store.Snapshot().UPS
+			return ups.MonitorConfig{
+				Enabled:                 c.Enabled,
+				ShutdownOnLowBattery:    c.ShutdownOnLowBattery,
+				UPSName:                 c.UPSName,
+				RuntimeThresholdSeconds: c.RuntimeThresholdSeconds,
+			}
+		},
+		func() {
+			if _, err := s.runner.Run(context.Background(), "systemctl", "poweroff"); err != nil {
+				s.logger.Error("ups-monitor: safe shutdown command failed", "err", err)
+			}
+		},
+	)
+	s.upsMonitor.Start(context.Background())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/version", s.handleVersion)
@@ -346,6 +378,11 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/system/update/check", s.requireAdmin(s.handleSystemUpdateCheck))
 	mux.HandleFunc("POST /api/v1/system/power/shutdown", s.requireAdmin(s.handleSystemPowerShutdown))
 	mux.HandleFunc("POST /api/v1/system/power/reboot", s.requireAdmin(s.handleSystemPowerReboot))
+
+	mux.HandleFunc("GET /api/v1/ups/status", s.requireAuth(s.handleUPSStatus))
+	mux.HandleFunc("GET /api/v1/ups/list", s.requireAuth(s.handleUPSList))
+	mux.HandleFunc("GET /api/v1/ups/config", s.requireAuth(s.handleUPSConfigGet))
+	mux.HandleFunc("PUT /api/v1/ups/config", s.requireAdmin(s.handleUPSConfigSet))
 	mux.HandleFunc("POST /api/v1/system/update/apply", s.requireAdmin(s.handleSystemUpdateApply))
 	mux.HandleFunc("POST /api/v1/system/update/rollback", s.requireAdmin(s.handleSystemUpdateRollback))
 
@@ -452,6 +489,9 @@ func (s *Server) HTTPSConfig() state.HTTPSConfig {
 func (s *Server) Close() {
 	if s.monitorPoller != nil {
 		s.monitorPoller.Stop()
+	}
+	if s.upsMonitor != nil {
+		s.upsMonitor.Stop()
 	}
 
 	s.backupMu.Lock()
