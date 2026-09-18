@@ -2452,6 +2452,47 @@ armv7 交叉編譯都 OK(armv7 產出確認是 statically linked ELF 32-bit ARM)
 硬碟得以休眠)在真機上可再用 `hdparm -C`/`smartctl` 存取計數佐證,但邏輯
 本身已由迴歸測試固化。
 
+**第三十六輪(實機 ESXi 驗證通過 + 網頁準備硬碟功能 + console 修外觀)**:
+
+使用者在真的 ESXi 上用建出來的 amd64 ISO 完成安裝,實機結果:開機進入 GoNAS
+狀態畫面、gonasd 服務 running(8291)、**SSH available**——DVD-1 pkgsel 離線
+安裝 openssh-server/sudo 這個從頭到尾唯一無法在沙盒驗證、只能等實機的項目,
+至此在真機上驗證通過。整條 appliance 鏈路端到端打通。
+
+依實機回饋新增/修正三項:
+
+- **新增「準備硬碟」網頁功能**(使用者要求「用戶可以自己手動選擇」):實機發現
+  組儲存池要求資料碟/校驗碟是「已格式化並掛載好的路徑」,但先前沒有任何 UI
+  幫使用者做這件事(要自己 SSH mkfs/mount)。新增:
+  - `internal/storage/prepare.go` 的 `PrepareDisk`:把使用者明確選定的一顆
+    整碟格式化成 ext4、掛載、寫 fstab。層層設防——device 只收合法整碟路徑
+    (擋注入)、mountpoint 必須在 /mnt 底下且無空白/控制字元/".."、動手前用
+    lsblk 確認是整碟(非分割區)且本身與其分割區都未掛載(這條同時擋掉系統碟)。
+    附完整單元測試(happy/拒絕已掛載/拒絕分割區/拒絕非法 device/拒絕非法
+    mountpoint/fstab 冪等)。
+  - API `POST /api/v1/storage/disks/prepare`(requireAdmin)+ handler 測試。
+  - `DiscoverDisks` 加 `InUse` 欄位(本身或任一分割區已掛載),前端據此只列
+    「未掛載的整碟」為候選,系統碟不會出現;後端獨立再擋一次,不倚賴前端。
+  - 前端儲存頁新增「準備硬碟」卡片:列候選碟、填掛載點、確認後格式化掛載;
+    三語 i18n。playwright 實截確認渲染正常、無 JS error。
+- **修 gonas-console 一閃一閃**:原本每 5 秒 `clear` 清屏再重畫→閃爍。改成
+  游標移左上角、逐行原地覆蓋(行尾 \033[K)、最後 \033[J 清多餘舊行,全程
+  不清屏;進迴圈前藏游標。不再閃。
+- **修 console 主控台一堆 ♦**:VM 文字主控台字型沒有中文與 ●/⚠/✗/— 的字模,
+  原本整片變 ♦。狀態畫面改成純 ASCII/英文([OK]/[!!]/[X] 取代符號);方塊字
+  logo 是 CP437 字型本來就有的,實機顯示正常,保留。中文/雙語留給有字型的
+  網頁介面。
+
+**明確為「設計如此、非 bug」向使用者說明的兩點**:開機讀秒選單與 Debian 安裝
+程式畫面仍是 Debian 品牌(我們品牌化的是裝好後的系統,不改 d-i 自身 UI);
+tty1 是產品狀態畫面不是登入提示(要 shell 按 Ctrl+Alt+F2 或 SSH),畫面本身
+已註明。
+
+**QA**:`go vet`/`gofmt` 乾淨、`go test ./... -race` 全過無 race、`go build` OK
+(UI 由 go:embed 內嵌一併驗證)、`sh -n` 過 gonas-console。準備硬碟的破壞性
+操作邏輯全由 fake runner 單元測試固化(尤其「絕不對已掛載/系統碟跑 mkfs」),
+但「真的格式化一顆實體碟並掛載」仍建議在實機再走一次確認。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

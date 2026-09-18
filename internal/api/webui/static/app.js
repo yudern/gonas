@@ -614,6 +614,13 @@ async function renderStorage(el) {
     </div>
 
     <div class="card">
+      ${h2i("disks", esc(t("storage.prepareTitle")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("storage.prepareHint")}</p>
+      <div id="prepare-msg"></div>
+      <div id="prepare-list">${renderPrepareList(disks)}</div>
+    </div>
+
+    <div class="card">
       ${h2i("sliders", esc(t("storage.poolSetup")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("storage.poolSetupHint")}</p>
       <div id="pool-msg"></div>
@@ -633,6 +640,8 @@ async function renderStorage(el) {
 
   if (disks.length) loadSmartData(el);
 
+  wirePrepareDisk(el);
+
   el.querySelector("#pool-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -651,6 +660,54 @@ async function renderStorage(el) {
     } catch (err) {
       box.innerHTML = msg("error", err.message);
     }
+  });
+}
+
+// renderPrepareList 畫出「可以拿來準備」的候選硬碟:只列未掛載的整碟
+// (d.inUse === false)。系統碟與使用中的碟因為 inUse 被過濾掉,不會出現,
+// 避免使用者誤選(後端 PrepareDisk 也會再擋一次,不倚賴前端過濾)。
+function renderPrepareList(disks) {
+  const candidates = (disks || []).filter((d) => !d.inUse);
+  if (!candidates.length) {
+    return `<p class="empty-state">${esc(t("storage.prepareNoCandidates"))}</p>`;
+  }
+  return candidates.map((d, i) => {
+    const suggested = `/mnt/disk${i + 1}`;
+    return `<div class="prepare-row" data-device="${esc(d.path)}">
+      <div class="prepare-info">
+        <code>${esc(d.path)}</code>
+        <span class="prepare-meta">${formatBytes(d.sizeBytes)} · ${d.rotational ? "HDD" : "SSD/NVMe"}${d.model ? " · " + esc(d.model) : ""}</span>
+      </div>
+      <div class="prepare-action">
+        <input type="text" class="prepare-mount" value="${esc(suggested)}" aria-label="${esc(t("storage.prepareMountLabel"))}">
+        <button type="button" class="prepare-btn secondary">${esc(t("storage.prepareBtn"))}</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// wirePrepareDisk 綁定每一列「格式化並掛載」按鈕:先跳確認(破壞性操作),
+// 使用者確認後呼叫 API,成功就重畫整頁(讓新掛載的碟出現在硬碟表格、也從
+// 候選清單消失)。
+function wirePrepareDisk(el) {
+  const box = el.querySelector("#prepare-msg");
+  el.querySelectorAll(".prepare-row").forEach((row) => {
+    const btn = row.querySelector(".prepare-btn");
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      const device = row.getAttribute("data-device");
+      const mount = row.querySelector(".prepare-mount").value.trim();
+      if (!window.confirm(t("storage.prepareConfirm", { device }))) return;
+      btn.disabled = true;
+      try {
+        const res = await api.prepareDisk(device, mount);
+        box.innerHTML = msg("ok", t("storage.prepareDone", { device: res.device, mount: res.mountpoint }));
+        await renderStorage(el);
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+        btn.disabled = false;
+      }
+    });
   });
 }
 

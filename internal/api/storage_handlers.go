@@ -121,6 +121,36 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, array.Status())
 }
 
+// prepareDiskRequest 是 POST /api/v1/storage/disks/prepare 的請求主體。
+type prepareDiskRequest struct {
+	Device     string `json:"device"`
+	MountPoint string `json:"mountPoint"`
+}
+
+// handleStoragePrepareDisk 把使用者「明確選定」的一顆整碟格式化成 ext4、
+// 掛載到指定路徑、並寫進 fstab(開機自動掛載)。這是破壞性操作,所以是
+// requireAdmin;所有安全防護(只接受整碟、拒絕使用中/系統碟、掛載點路徑
+// 驗證、擋指令注入)都在 storage.PrepareDisk 裡。GoNAS 不會自動挑碟或
+// 自動格式化——一定是使用者在網頁上選了特定的碟、明確確認才會到這裡。
+func (s *Server) handleStoragePrepareDisk(w http.ResponseWriter, r *http.Request) {
+	var req prepareDiskRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	fstabPath := s.fstabPath
+	if fstabPath == "" {
+		fstabPath = storage.DefaultFstabPath
+	}
+	res, err := storage.PrepareDisk(r.Context(), s.runner, req.Device, req.MountPoint, fstabPath)
+	if err != nil {
+		s.logger.Warn("prepare disk refused or failed", "device", req.Device, "mountPoint", req.MountPoint, "err", err)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.logger.Info("prepared disk", "device", res.Device, "mountPoint", res.Mountpoint, "uuid", res.UUID)
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleStorageArrayStart(w http.ResponseWriter, r *http.Request) {
 	array := s.getArray()
 	if array == nil {

@@ -295,6 +295,18 @@ p.hint { color: var(--text-faint); font-size: 12.5px; }
 .install-form.open { display: grid; gap: 10px; }
 
 .empty-state { color: var(--text-faint); font-size: 13px; padding: 8px 0; }
+
+/* 準備硬碟:一列一顆候選碟,左邊裝置資訊、右邊掛載點輸入 + 動作鈕。 */
+.prepare-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.prepare-row:last-child { border-bottom: none; }
+.prepare-info { display: flex; flex-direction: column; gap: 2px; }
+.prepare-meta { font-size: 12px; color: var(--text-faint); }
+.prepare-action { display: flex; align-items: center; gap: 8px; }
+.prepare-action .prepare-mount { width: 160px; }
+@media (max-width: 720px) {
+  .prepare-action { width: 100%; }
+  .prepare-action .prepare-mount { flex: 1; width: auto; }
+}
 /* 第三十四輪 UI 精品化:區塊層級的空狀態(<p class="empty-state">)給多一點
    呼吸空間並置中,讓「還沒有資料」看起來是刻意的留白而不是漏掉的內容;
    表格儲存格裡的空狀態(td.empty-state)維持靠左、不受影響。 */

@@ -125,7 +125,13 @@ get_ssh_state() {
     fi
 }
 
-render() {
+# render_body 只負責「產生」畫面內容(echo 到 stdout),不清屏、不做游標
+# 控制——那些交給下面的 paint。第三十五輪改成純 ASCII/英文輸出:VM 的
+# 文字主控台內建字型沒有中文與 ●/⚠/✗/— 這些符號的字模,原本會整片變成
+# ♦。中文/雙語留給有字型的網頁介面;這個低階狀態畫面維持全 ASCII 才能在
+# 任何主控台字型下都完整顯示。方塊字 logo(█ 與 box-drawing)是 CP437
+# 主控台字型本來就有的字模,實機上顯示正常,保留。
+render_body() {
     version=$(get_version)
     addr=$(get_listen_addr)
     port=$(get_port "$addr")
@@ -133,7 +139,6 @@ render() {
     now=$(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)
     svc_state=$(get_service_state)
 
-    clear
     echo ""
     echo "  ██████╗  ██████╗ ███╗   ██╗ █████╗ ███████╗"
     echo " ██╔════╝ ██╔═══██╗████╗  ██║██╔══██╗██╔════╝"
@@ -142,30 +147,23 @@ render() {
     echo " ╚██████╔╝╚██████╔╝██║ ╚████║██║  ██║███████║"
     echo "  ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝"
     echo ""
-    echo "  版本 Version: ${version}          主機名稱 Host: ${hostname_val}"
+    echo "  Version: ${version}          Host: ${hostname_val}"
     echo "  ------------------------------------------------------------"
 
     # --- 服務健康狀態 ------------------------------------------------
-    # 先把 gonasd 服務的狀態明確秀出來,而不是直接印網址讓使用者以為
-    # 一切正常。三種情況分開處理,每一種都直接告訴使用者「網頁能不能連」
-    # 以及「不能的話下一步該做什麼」。
     if [ "$svc_state" = "active" ]; then
-        # 服務在跑,再確認埠真的綁上了(把「服務活著」跟「網頁連得上」
-        # 分清楚)。port_is_listening 回傳:0=有在聽,1=沒在聽,2=無法判斷。
         if port_is_listening "$port"; then
-            echo "  GoNAS 服務 Service: ● 運作中 running(正在監聽埠 port ${port})"
+            echo "  GoNAS service: [OK] running (listening on port ${port})"
         else
             _pil_rc=$?
             if [ "$_pil_rc" = "1" ]; then
-                echo "  GoNAS 服務 Service: ⚠ 已啟動但尚未監聽埠 ${port} running but not yet listening"
-                echo "     (剛開機時可能需要幾秒;若持續如此,請見下方疑難排解)"
+                echo "  GoNAS service: [!!] running but not yet listening on port ${port}"
+                echo "       (may take a few seconds after boot; see troubleshooting below if it persists)"
             else
-                # 無法判斷(沒有 ss),就只報 systemd 的狀態,不誤報故障。
-                echo "  GoNAS 服務 Service: ● 運作中 running"
+                echo "  GoNAS service: [OK] running"
             fi
         fi
         echo "  ------------------------------------------------------------"
-        echo "  請用瀏覽器連到下面的網址開始設定 GoNAS:"
         echo "  Open one of these addresses in a browser to set up GoNAS:"
         echo ""
         have_addr=0
@@ -174,68 +172,69 @@ render() {
             echo "      http://${ip}:${port}"
         done
         if [ "$have_addr" -eq 0 ]; then
-            echo "      (尚未偵測到網路連線 / no network detected yet — 網卡或"
-            echo "       DHCP 可能還沒就緒;畫面每 5 秒自動更新)"
+            echo "      (no network detected yet - NIC or DHCP may not be ready;"
+            echo "       this screen refreshes every 5s)"
         fi
     else
-        # 服務沒在跑——這就是「IP 加端口打不開頁面」最直接的原因。明確
-        # 標紅字級的警告,並給出不需要猜測的下一步:切到 tty2 看服務狀態。
-        echo "  GoNAS 服務 Service: ✗ 尚未運作 NOT running(狀態 state: ${svc_state:-unknown})"
+        echo "  GoNAS service: [X] NOT running (state: ${svc_state:-unknown})"
         echo "  ------------------------------------------------------------"
-        echo "  ⚠ 網頁介面現在會連不上(這就是頁面打不開的原因)。"
-        echo "  ⚠ The web UI is NOT reachable yet — this is why the page won't open."
+        echo "  The web UI is NOT reachable yet - this is why the page won't open."
         echo ""
         if [ "$svc_state" = "activating" ]; then
-            echo "  服務正在啟動中,請稍候幾秒,畫面每 5 秒會自動更新。"
             echo "  The service is still starting up; this screen refreshes every 5s."
         else
-            echo "  請切換到 tty2(Ctrl+Alt+F2)、用 gonas 帳號登入後執行:"
             echo "  Switch to tty2 (Ctrl+Alt+F2), log in as 'gonas', then run:"
             echo ""
             echo "      sudo systemctl status gonas.service"
             echo "      sudo journalctl -u gonas -n 50 --no-pager"
             echo ""
-            echo "  這兩行會顯示服務為什麼沒起來。"
             echo "  Those show why the service did not start."
         fi
     fi
 
     # --- SSH 狀態(遠端管理用的緊急備援管道) -------------------------
-    # 使用者實測回報「IP 通但 SSH 連不上」——這一段把 SSH 到底裝了沒、
-    # 有沒有在跑、port 22 有沒有在聽,直接秀在畫面上,不用使用者自己去猜。
     echo ""
     if ssh_installed; then
         ssh_state=$(get_ssh_state)
         if [ "$ssh_state" = "active" ] && port_is_listening 22; then
-            echo "  SSH:  ● 可用 available(帳號 user: gonas,port 22)"
+            echo "  SSH:  [OK] available (user: gonas, port 22)"
         elif [ "$ssh_state" = "active" ]; then
-            echo "  SSH:  ● 服務運作中 running(port 22 尚未就緒或無法確認)"
+            echo "  SSH:  [OK] running (port 22 not confirmed yet)"
         else
-            echo "  SSH:  ✗ 已安裝但未運作 installed but not running(狀態 state: ${ssh_state})"
-            echo "        切到 tty2 執行 sudo systemctl status ssh 看原因。"
+            echo "  SSH:  [X] installed but not running (state: ${ssh_state})"
+            echo "        Switch to tty2 and run: sudo systemctl status ssh"
         fi
     else
-        echo "  SSH:  — 未安裝 not installed"
-        echo "        (安裝時未從 DVD 裝上;開機且有網路後可用"
-        echo "         sudo apt install openssh-server 補裝)"
+        echo "  SSH:  -  not installed"
+        echo "        (add it later with: sudo apt install openssh-server)"
     fi
 
     echo ""
     echo "  ------------------------------------------------------------"
-    echo "  這個畫面只顯示狀態,所有設定請在網頁介面完成。"
-    echo "  This screen is informational only — all setup happens in the web UI."
-    echo "  需要指令列存取,請切換到 tty2(Ctrl+Alt+F2)。"
+    echo "  This screen is informational only - all setup happens in the web UI."
     echo "  For command-line access, switch to tty2 (Ctrl+Alt+F2)."
     echo ""
     echo "  ${now}"
 }
 
-# 每 5 秒重新整理一次——夠即時反映開機後才拿到 DHCP 位址這種情況，又
-# 不會像更短的間隔那樣沒有必要地一直重繪整個畫面。這支程序本身是
-# gonas-console.service 的 ExecStart，systemd 已經處理了「終端機關掉/
-# 這支程序結束時該怎麼辦」（Restart=always，見該 unit 檔），所以這裡
-# 單純寫一個無窮迴圈就好，不需要自己處理訊號或背景化。
+# paint 把游標移到左上角、逐行原地覆蓋重畫,每行結尾用 \033[K 清到行尾
+# (讓變短的新行蓋掉舊內容),最後 \033[J 清掉任何多餘的舊行。全程「不清
+# 屏」,所以不會像原本用 `clear` 那樣每次刷新都閃一下(第三十五輪修:
+# 使用者實測回報 VM 主控台畫面一閃一閃)。
+paint() {
+    body=$(render_body)
+    printf '\033[H'
+    printf '%s\n' "$body" | while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\033[K\n' "$line"
+    done
+    printf '\033[J'
+}
+
+# 進迴圈前清一次屏、並把游標藏起來(閃爍的游標也是視覺雜訊)。這支程序被
+# systemd 收掉時終端機會自行重置,不需要自己還原游標。之後每 5 秒 paint
+# 一次——夠即時反映開機後才拿到 DHCP 位址,又因為是原地覆蓋、不再閃爍。
+printf '\033[2J\033[?25l'
 while true; do
-    render
+    paint
     sleep 5
 done

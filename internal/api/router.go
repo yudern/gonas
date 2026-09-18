@@ -95,6 +95,9 @@ type Server struct {
 	logger    *slog.Logger
 	startedAt time.Time
 	runner    storage.Runner
+	// fstabPath 是「準備硬碟」寫入開機自動掛載設定的檔案,正式環境是
+	// /etc/fstab;抽成欄位是為了讓測試指到暫存檔,不去動真的 /etc/fstab。
+	fstabPath string
 	docker    *docker.Client
 	store     *state.Store
 
@@ -232,6 +235,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		logger:           logger,
 		startedAt:        time.Now(),
 		runner:           storage.NewExecRunner(),
+		fstabPath:        storage.DefaultFstabPath,
 		docker:           docker.NewClient(""),
 		store:            store,
 		dataDir:          dataDir,
@@ -352,6 +356,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/storage/disks", s.requireAuth(s.handleStorageDisks))
 	mux.HandleFunc("GET /api/v1/storage/disks/smart", s.requireAuth(s.handleStorageDisksSmart))
 	mux.HandleFunc("GET /api/v1/storage/array", s.requireAuth(s.handleStorageArrayStatus))
+	mux.HandleFunc("POST /api/v1/storage/disks/prepare", s.requireAdmin(s.handleStoragePrepareDisk))
 	mux.HandleFunc("PUT /api/v1/storage/pool", s.requireAdmin(s.handleStoragePoolSet))
 	mux.HandleFunc("POST /api/v1/storage/array/start", s.requireAdmin(s.handleStorageArrayStart))
 	mux.HandleFunc("POST /api/v1/storage/array/stop", s.requireAdmin(s.handleStorageArrayStop))

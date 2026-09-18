@@ -17,6 +17,10 @@ type Disk struct {
 	FSType     string `json:"fsType,omitempty"`
 	Mountpoint string `json:"mountpoint,omitempty"`
 	Rotational bool   `json:"rotational"` // true=傳統硬碟, false=SSD/NVMe
+	// InUse 表示這顆碟本身或其上任何一個分割區目前正被掛載——包含系統碟
+	// (它的分割區掛在 / 與 /boot)。前端「準備硬碟」用它把不能碰的碟濾掉,
+	// 後端 PrepareDisk 也會獨立再擋一次(不倚賴前端過濾)。
+	InUse bool `json:"inUse"`
 }
 
 // lsblkOutput 對應 `lsblk -J` 的最外層 JSON 結構。
@@ -72,6 +76,7 @@ func DiscoverDisks(ctx context.Context, r Runner) ([]Disk, error) {
 			FSType:     dev.FSType,
 			Mountpoint: dev.Mountpoint,
 			Rotational: dev.Rota,
+			InUse:      deviceHasMount(dev),
 		})
 	}
 	return disks, nil
@@ -82,4 +87,17 @@ func devicePath(dev lsblkDevice) string {
 		return dev.Path
 	}
 	return "/dev/" + dev.Name
+}
+
+// deviceHasMount 回報某顆碟本身或它底下任何一層分割區目前是否有掛載點。
+func deviceHasMount(dev lsblkDevice) bool {
+	if dev.Mountpoint != "" {
+		return true
+	}
+	for _, c := range dev.Children {
+		if deviceHasMount(c) {
+			return true
+		}
+	}
+	return false
 }
