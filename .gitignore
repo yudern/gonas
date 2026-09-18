@@ -1,3 +1,5 @@
 /dist/
 /devdata/
 *.log
+__pycache__/
+*.pyc

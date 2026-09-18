@@ -424,23 +424,15 @@ echo "==> patching boot menu configs to auto-load the GoNAS preseed"
 # 寫在開機這一行,跳過「先讀 preseed.cfg 才知道答案」這個時序問題。
 # preseed.cfg 裡原本那行 `debian-installer/locale` 保留不動,兩邊寫的
 # 值一致,互相印證、不衝突。
-# 第二十九輪(使用者要求「安裝全過程都看不到 debian 標誌,要像是在裝
-# GoNAS」):加上 `DEBIAN_FRONTEND=text`。debian-installer 有兩種前端:
-# 圖形(gtk)前端會在畫面正上方放一張大大的 Debian 螺旋 logo 圖(那張
-# logo_installer.png 是烙在 gtk 安裝程式的 initrd 裡的,要換掉必須把
-# initrd 拆開重打包——這個沙盒沒辦法驗證重打包後的 initrd 還能不能開機,
-# 風險太高,刻意不做);文字(text/newt)前端整個安裝過程「沒有任何
-# logo 圖片」,只有純文字的進度畫面。把前端強制切成 text,就用一個
-# 開機核心參數、零 initrd 手術、絕對不會把安裝弄到開不了機的方式,達成
-# 「安裝過程看不到 Debian 標誌」這個核心要求。附帶好處:文字前端在孱弱
-# 的 ARM/低階硬體上更輕、更快(不用起 X/gtk),跟這個專案一路以來對
-# ARM 的考量一致;而且純文字、極簡的安裝畫面,觀感上本來就更接近群暉
-# 那種「一條進度條裝到好」的樣子。
-# 誠實邊界:text 前端最上緣那條狀態列裡,cdebconf 仍可能顯示這一版
-# Debian 的版本字串(那是文字、不是 logo 圖,且同樣烙在安裝程式的
-# 模板裡,不重編安裝程式改不掉)——但「Debian 標誌/logo 圖」在整個
-# 安裝過程確實不會再出現。裝完重開機後全面是 GoNAS 品牌(late-command.sh)。
-APPEND_EXTRA="auto=true priority=high DEBIAN_FRONTEND=text language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# 第二十九輪一度加了 `DEBIAN_FRONTEND=text`,想用「切成文字前端、根本
+# 不載入 gtk 的 Debian logo」來閃避圖形安裝器的 Debian 標誌。第三十一輪
+# 使用者明確否決:他要的就是「圖形安裝界面」,而且要把那個圖形界面裡的
+# Debian logo 換成 GoNAS,不是改成陽春的文字安裝。所以這裡把
+# `DEBIAN_FRONTEND=text` 拿掉——讓圖形安裝器照常跑(使用者在開機選單選
+# 「Graphical install」,或預設就是它),而它畫面上那張 Debian logo 由
+# 下面第 5c 步(lib/rebrand-installer-initrd.py)在 gtk initrd 裡直接
+# 換成 GoNAS logo。
+APPEND_EXTRA="auto=true priority=high language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 # 拿來事後驗證「真的注入成功了嗎」的一小段獨特字串——不會跟 ISO 裡
 # 其他既有內容重複，之後可以直接 grep 這個字串確認注入是否生效。
 APPEND_MARKER="gonas/preseed.cfg"
@@ -632,6 +624,62 @@ else
     echo "==> boot menu background: $BG_REPLACED target image(s) replaced with the GoNAS splash"
     if [ "$BG_REPLACED" = "0" ]; then
         echo "warning: found no boot-menu background image to replace — the menu text was rebranded to GoNAS, but the background graphic (if any) may still be the stock one; verify on a real boot" >&2
+    fi
+fi
+
+# --- 5c. 把圖形(gtk)安裝器裡的 Debian logo 換成 GoNAS -----------------
+# 第三十一輪(使用者要求「圖形安裝界面的 Debian logo 要換成 GoNAS」)。
+# 圖形安裝器畫面正上方那張最顯眼的 Debian 標誌,是 gtk installer initrd
+# 裡的一個 PNG(usr/share/graphics/logo_installer.png)。lib/ 底下的
+# rebrand-installer-initrd.py 會把 initrd 拆開、把那張圖換成
+# branding/logo_installer.png、再原封不動打包回去(邏輯有離線單元測試:
+# test-rebrand-installer-initrd.py,驗證無修改時 byte-identical、換圖後
+# 其他檔不動、gzip/xz 都能來回)。
+#
+# 誠實邊界(這一步只換得動「圖片」):圖形安裝器每個畫面標題那些「文字」
+# 上的 Debian 字樣,是編譯進安裝程式模板/翻譯檔裡的,不重建整個
+# debian-installer 改不掉——見 README.md。這一步把「最顯眼的 logo 圖」
+# 換掉,是「保留 Debian 安裝器」前提下能做到的最大品牌化。
+#
+# 依賴:python3(裝了 Xcode CLT 的 Mac 一定有)。沒有 python3 就跳過、
+# 印 warning、不中斷建置——寧可少換這張圖,也不要讓整個 ISO 建不出來。
+GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/logo_installer.png"
+if [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
+    echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: python3 not found on this build machine — skipping graphical-installer logo rebranding (the boot menu is still GoNAS-branded; install python3 to also rebrand the graphical installer logo)" >&2
+else
+    echo "==> rebranding the graphical installer logo (Debian -> GoNAS) inside gtk initrd(s)"
+    # 找出所有 initrd 檔(不同版本/架構路徑不同:install.amd/gtk/initrd.gz、
+    # install.a64/gtk/initrd.gz 等)。對每個都跑一次 rebrander——沒有 logo
+    # 的 initrd(例如純文字安裝的那個)會回傳 2、原檔不動,無害;有 logo
+    # 的(gtk 那個)才會真的被改寫。用 -print0/read -d 處理路徑含空白。
+    GTK_LOGO_REPLACED=0
+    INITRD_FOUND=0
+    # shellcheck disable=SC2044
+    find "$EXTRACT_DIR" -type f \( -name 'initrd' -o -name 'initrd.gz' -o -name 'initrd.xz' \) -print > "$WORK_DIR/initrd-files.list" 2>/dev/null || true
+    while IFS= read -r initrd; do
+        [ -n "$initrd" ] || continue
+        INITRD_FOUND=$((INITRD_FOUND + 1))
+        # rebrander 回傳:0=換到、2=這個 initrd 沒 logo(略過)、1=出錯。
+        if python3 "$SCRIPT_DIR/lib/rebrand-installer-initrd.py" "$initrd" "$GONAS_INSTALLER_LOGO"; then
+            GTK_LOGO_REPLACED=$((GTK_LOGO_REPLACED + 1))
+            echo "    - rebranded logo in ${initrd#"$EXTRACT_DIR"/}"
+        else
+            _rc=$?
+            # 2 是「這個 initrd 裡沒有 logo」,是正常情況(文字安裝的 initrd),
+            # 不當錯誤。只有 1(真的出錯)才印出來提醒——但仍不中斷建置,
+            # 因為開機選單品牌化已經生效,少換這張圖不至於毀掉整份 ISO。
+            if [ "$_rc" != "2" ]; then
+                echo "warning: rebrander failed on ${initrd#"$EXTRACT_DIR"/} (rc=$_rc) — leaving it unchanged; the graphical installer for that image may still show the Debian logo" >&2
+            fi
+        fi
+    done < "$WORK_DIR/initrd-files.list"
+    echo "==> graphical installer logo: rebranded $GTK_LOGO_REPLACED of $INITRD_FOUND initrd file(s) (initrds without an installer logo are skipped, which is normal)"
+    if [ "$INITRD_FOUND" = "0" ]; then
+        echo "warning: found no initrd files under the ISO tree — the graphical installer logo could not be rebranded; verify the ISO layout" >&2
+    elif [ "$GTK_LOGO_REPLACED" = "0" ]; then
+        echo "warning: found initrd files but none contained an installer logo to replace — the graphical installer may still show the Debian logo; this Debian build may store the logo elsewhere (verify on a real boot and report back)" >&2
     fi
 fi
 

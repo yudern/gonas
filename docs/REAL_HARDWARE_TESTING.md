@@ -2635,6 +2635,46 @@ isolinux/grub timeout 三情境模擬)都做了、全過。但「潑濺圖在真
 QA:`sh -n` 過、`build/appliance/test-*.sh` 全 6 支通過(boot-menu patch 7
 案例)、背景替換邏輯假 ISO 樹測試通過、SVG xmllint 過;Go 完全沒動。
 
+**第四十二輪(圖形安裝器的 Debian logo 換成 GoNAS——使用者明確要求「保留
+圖形界面、把裡面的 logo 換掉」)**:
+
+使用者看了第四十一輪後糾正:他之前是用**圖形安裝界面**裝的,要的是把那個
+圖形界面裡的 Debian logo 換成 GoNAS(不只選單、整個過程都要),不是我上一版
+用 `DEBIAN_FRONTEND=text` 切成文字安裝去「閃避」logo。用 AskUserQuestion 給
+了兩條路(A:保留 Debian 安裝器、只換 logo;B:換成 Calamares 之類完整自訂
+品牌的安裝器,大工程),使用者選 A「先換 logo,現在就做」。
+
+- **拿掉 `DEBIAN_FRONTEND=text`**:讓圖形安裝器照常跑(那正是要品牌化的
+  對象),不再降級成文字安裝。
+- **`lib/rebrand-installer-initrd.py`(新)**:純 Python(stdlib + 選用 PIL),
+  把 gtk installer initrd 解壓→拆 newc cpio→把 `usr/share/graphics/
+  logo_installer.png`(和 logo_debian.png)換成 `branding/logo_installer.png`
+  →自我檢查→原壓縮格式打包回去。刻意不依賴 `cpio` 指令(沙盒沒有,且要
+  能離線測),自己實作 newc 讀寫;gzip/xz 用 stdlib;有 PIL 就把 GoNAS logo
+  縮回原圖尺寸(版面不跑掉),沒 PIL 就原樣用(頂多位移、不會壞開機)。
+- **build-iso.sh 第 5c 步**:對 ISO 裡每個 initrd 跑一次 rebrander(沒 logo
+  的文字 initrd 回傳 2、原檔不動;gtk 的才改寫);python3 不在就跳過印
+  warning、不中斷建置。
+- **`build/appliance/branding/logo_installer.png`(新)**:GoNAS 橫式 logo。
+- **test-rebrand-installer-initrd.py(新)**:15 項離線斷言全過——無修改時
+  parse→emit **byte-identical**、換圖後其他檔 byte 不變、trailer 還在、
+  gzip 與 xz 兩種容器、多 gzip 串流串接、找不到 logo 回傳 2 且檔案不動。
+
+**誠實邊界 / 沙盒無法驗證的部分(務必讓使用者知道)**:
+1. 這一步只換得動**圖片**。圖形安裝器每個畫面標題那些「Debian」**文字**是
+   編譯進 cdebconf 模板/翻譯檔的,散在幾十個 udeb/語言檔,不重建整個
+   debian-installer 改不掉——要「每個字都 GoNAS」得走 B 路(Calamares),
+   已跟使用者說明、待其決定。
+2. **initrd 重打包能不能在真機開起圖形安裝器,沙盒無法驗證**(沒有真 initrd、
+   開不了機)。拆-換-打包的邏輯本身有 byte-level 單元測試撐著,但真機開機
+   是唯一能證明「換完還能正常開圖形安裝器」的地方——這是目前風險最高的
+   一步。務必先在 QEMU/VM 開機測過:確認 (a) 圖形安裝器正常起得來、
+   (b) 上面的 logo 是 GoNAS。拍照回報。
+
+QA:`sh -n` build-iso.sh 過、`test-rebrand-installer-initrd.py` 15 項全過、
+第 5c 迴圈用假 ISO 樹(gtk initrd 有 logo + 文字 initrd 無 logo)實跑驗證
+「1 of 2 換到、文字 initrd 不動」、其餘 appliance 測試全過;Go 未動。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

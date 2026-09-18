@@ -166,37 +166,45 @@ gpg 版本差異而壞掉的邏輯還是好的。
    立刻開始、或倒數結束自動開始(無人值守也裝得完)。第二十九輪一度
    把選單設成 `timeout 1`/`hidden` 想「一開機直接裝」,被使用者以產品
    設計角度否決——他要的是「有一個開始鈕可以按」,不是自動衝進安裝。
-   (b) 用開機參數 `DEBIAN_FRONTEND=text` 強制安裝程式走**文字前端**
-   ——文字前端整個過程沒有任何 logo 圖片,那張最顯眼的 Debian 螺旋
-   標誌(gtk 前端才有,烙在安裝程式 initrd 裡的 `logo_installer.png`)
-   就完全不會出現。
-   (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`,跟 web 介面同一個
-   圓角方塊＋橫槓構圖),潑濺圖就是用這個標誌構出來的。
+   (b) **圖形安裝器裡的 Debian logo 換成 GoNAS**(第三十一輪)。使用者
+   要的是「保留圖形安裝界面,但把裡面那張 Debian 螺旋 logo 換成 GoNAS」
+   ——不是改成陽春文字安裝。所以第二十九輪那個 `DEBIAN_FRONTEND=text`
+   (用切文字前端來閃避 logo)被拿掉了;改成 build-iso.sh 第 5c 步用
+   `lib/rebrand-installer-initrd.py` 把 gtk installer initrd 拆開、把
+   `usr/share/graphics/logo_installer.png` 換成 `branding/logo_installer.png`
+   (GoNAS logo)、再原封不動打包回去。這段邏輯有離線單元測試
+   `test-rebrand-installer-initrd.py`(驗無修改時 byte-identical、換圖後
+   其他檔不動、gzip/xz 都能來回、找不到 logo 時安全略過)。
+   (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`＋`branding/`,跟 web
+   介面同一個圓角方塊＋橫槓構圖),潑濺圖與安裝器 logo 都是用它構出來的。
 
    > **品牌化的誠實邊界(使用者常問「為什麼安裝過程還是看到 Debian」)**:
-   > 到第三十輪為止,**開機選擇畫面**已經掛上 GoNAS 品牌(背景潑濺圖
-   > 換成 GoNAS,選單標題/項目文字也是 GoNAS),而**安裝過程**中
-   > 「Debian 的**標誌/logo 圖片**」也不會再出現——關鍵是
-   > `DEBIAN_FRONTEND=text` 讓安裝走純文字前端,文字前端根本沒有任何
-   > logo 圖。兩個還沒做到「跟設計稿一模一樣」的地方,誠實列出來:
-   > (1) 開機選單的「框」本身(反白顏色、字型)是 vesamenu.c32 / grub
-   > gfxmenu 自己畫的,第 5b 步只換了背景圖、沒有逐版去調 `menu color`
-   > 反白配色(格式敏感、只能靠真機開機驗證),所以反白色可能還是安裝
-   > 程式的預設色,不是設計稿上的 teal——但畫面主體已經是 GoNAS 品牌、
-   > 也讀得清楚。**剩下唯一擦不掉的**是文字前端畫面
-   > 最上緣那條狀態列裡,cdebconf 仍可能顯示這一版 Debian 的**版本
-   > 字串**(那是文字、不是 logo,而且同樣烙在安裝程式的 cdebconf/
-   > rootskel 模板裡,不重新編譯整個 debian-installer 改不掉——那件事
-   > 風險高、維護成本大,而且會失去 Debian 官方安裝程式的穩定性,這個
-   > 專案刻意不做,initrd 重打包在這個沙盒也無法驗證能不能開機)。
-   > 換句話說:**看不到 Debian 的 logo 標誌了,但文字狀態列可能還有一行
-   > Debian 的版本文字**;裝完重開機後則全面是 GoNAS 品牌(hostname、
-   > tty1 主控台的 GoNAS logo、`/etc/os-release`、GRUB 開機選單標題等,
-   > 全部由 `late-command.sh` 第 3 節在裝好的系統上換掉)。也刻意不做
-   > 整檔盲目替換 `Debian`→`GoNAS`:部分 grub.cfg 用
+   > 到第三十一輪為止:**開機選擇畫面**掛上 GoNAS 品牌(背景潑濺圖、
+   > 選單標題/項目文字都是 GoNAS),**圖形安裝器**畫面正上方那張最顯眼
+   > 的 Debian logo 圖也換成了 GoNAS。剩下**三個目前不動 initrd 內部
+   > 文字、不重編 debian-installer 就改不掉**的天花板,老實列出來:
+   > (1) 圖形安裝器每個畫面**標題那些「文字」上的 Debian 字樣**
+   > (視窗標題、「Installing the base system」之類),是編譯進安裝程式
+   > cdebconf 模板/翻譯檔裡的,散在幾十個 udeb / 語言檔,`rebrand-installer-initrd.py`
+   > 只換圖片、不動這些文字——要全部改掉等於重建整個 debian-installer,
+   > 風險高、會失去官方安裝程式的穩定性,這個專案刻意不做(要真正
+   > 「每個字都是 GoNAS」得走另一條路:換成 Calamares 之類可完整自訂
+   > 品牌的安裝器,那是一個獨立的大工程,已跟使用者說明待其決定)。
+   > (2) 開機選單的「框」的反白顏色/字型是 vesamenu.c32 / grub gfxmenu
+   > 自己畫的,第 5b 步只換了背景圖、沒逐版去調 `menu color` 反白配色。
+   > (3) 也刻意不做整檔盲目替換 `Debian`→`GoNAS`:部分 grub.cfg 用
    > `search --label 'Debian ...'` 靠磁碟卷標找開機檔,那裡的 Debian 是
    > 功能性字串,換掉會讓機器開不了機——只替換確切、且只可能是顯示
    > 文字的完整片語(見 lib/patch-boot-menu.sh)。
+   > 裝完重開機後則全面是 GoNAS 品牌(hostname、tty1 主控台的 GoNAS
+   > logo、`/etc/os-release`、GRUB 開機選單標題等,全部由
+   > `late-command.sh` 第 3 節在裝好的系統上換掉)。
+   >
+   > **重要:第 5c 步的 initrd 重打包無法在開發沙盒驗證能不能開機**
+   > (沙盒沒有真的 gtk initrd、也開不了機)。拆-換-打包這條邏輯本身有
+   > 單元測試(合成 initrd,byte-level 驗過),但「換好的 initrd 在真機/
+   > VM 上還能不能正常開起圖形安裝器」只能靠實機測——這是目前風險最高
+   > 的一步,務必先在 QEMU/VM 開機測過再燒真機。
 6. 重新計算 `md5sum.txt`,用 `xorriso -indev ... -outdev ... -map ...
    -boot_image any replay` 重新包裝成一份新的、一樣可開機的 ISO
    (沿用原始 ISO 的 El Torito/isohybrid 開機目錄結構,這是 Debian
