@@ -519,20 +519,18 @@ if [ -f "$EXTRACT_DIR/isolinux/isolinux.cfg" ]; then
     # 用 gonas_sed_inplace(見上面的說明跟 lib/portable-sed.sh)而不是
     # 直接 `sed -i 'script' file`——原本這裡就是那個 macOS/BSD sed
     # 不相容問題的其中一個現場。
-    # 第二十九輪(使用者要求「讀秒那裡直接開始安裝,類似群暉」):把等待
-    # 時間從原本的 50(=5 秒,還會顯示一個倒數選單)壓到 1(=0.1 秒,
-    # isolinux 的 timeout 單位是 1/10 秒;不能用 0,isolinux 的 0 代表
-    # 「永遠等待、不自動開機」,語意剛好相反)——實務上等於選單畫面只
-    # 一閃而過、幾乎看不到,就直接用預設項目開始安裝。同時把 `prompt`
-    # 設成 0(如果這份 isolinux.cfg 有這一行的話),關掉最原始的
-    # `boot:` 文字提示,避免它停在那裡等人輸入。預設開機項目維持官方
-    # ISO 原本的那一個(之前 timeout 50 也是開機到同一個預設項目,只是
-    # 慢 5 秒),這裡只改「等多久」跟「要不要顯示提示」,不動預設項目
-    # 本身,把風險降到最低。
-    gonas_sed_inplace 's/^timeout .*/timeout 1/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
-    if grep -q '^[[:space:]]*prompt[[:space:]]' "$EXTRACT_DIR/isolinux/isolinux.cfg" 2>/dev/null; then
-        gonas_sed_inplace 's/^[[:space:]]*prompt[[:space:]].*/prompt 0/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
-    fi
+    # 第二十九輪先前試過把選單「藏起來、瞬間自動開始安裝」,第三十輪
+    # 使用者(以產品設計的角度)明確否決:他要的不是「一開機就自動裝」,
+    # 而是一個「乾淨、掛著 GoNAS 品牌、有一個明確的『安裝 GoNAS』可以按下
+    # 去才開始」的選擇畫面(類似群暉安裝助手)。所以這裡把等待時間設回
+    # 一個「看得到、來得及看清楚品牌、也來得及自己按 Enter 開始」的長度
+    # ——30 秒(isolinux timeout 單位是 1/10 秒,300=30 秒)。預設反白項目
+    # 維持官方 ISO 的安裝項(下面第 5b 步會另外把選單背景換成 GoNAS
+    # 潑濺圖、標題文字換成 GoNAS);使用者可以直接按 Enter 立刻開始
+    # (等同「按下開始鈕」),或等 30 秒倒數結束自動開始(讓完全無人
+    # 值守的情境仍然裝得完)。刻意不再設 prompt 0/藏選單——那正是上一版
+    # 被否決的地方。
+    gonas_sed_inplace 's/^timeout .*/timeout 300/' "$EXTRACT_DIR/isolinux/isolinux.cfg" || true
 fi
 # 第十八輪覆閱(使用者實測用 Parallels 在 arm64 上開機)才抓到的問題:
 # 上面這段從第七輪覆閱寫下來到現在,一直只處理 `isolinux.cfg`——這是
@@ -562,28 +560,80 @@ fi
 # 這個 append 分支誤傷。
 while read -r cfgfile; do
     if grep -Eq '^[[:space:]]*set[[:space:]]+timeout=' "$cfgfile" 2>/dev/null; then
-        # 第二十九輪(使用者要求「讀秒直接開始安裝,類似群暉」):等待
-        # 時間從 5 秒壓到 1 秒。GRUB 的 timeout 單位是「秒」,而且跟
-        # isolinux 相反——GRUB 的 0 代表「立刻開機、完全不等」,所以
-        # 這裡用 0 才是最貼近「一開機就直接裝」的值;保守起見給 1 秒,
-        # 讓極少數需要按 ESC 中斷的情況還有一個極短的空檔,實務上使用者
-        # 幾乎看不到選單。
-        gonas_sed_inplace 's/^[[:space:]]*set[[:space:]]*timeout=.*/set timeout=1/' "$cfgfile" || true
-        # 再加上 `set timeout_style=hidden`:GRUB 在 timeout 倒數期間
-        # 「完全不顯示選單畫面」(連同那張 Debian 品牌的 GRUB 背景),
-        # 只有一個看不見的 1 秒空檔,然後直接用預設項目開機——這才是
-        # 使用者要的「看不到 Debian 選單、直接開始安裝」。如果這份
-        # grub.cfg 還沒有 timeout_style 這一行就補一行;已經有的話就
-        # 就地改成 hidden,不重複插入。
+        # 第三十輪(使用者以產品設計角度否決「藏選單、瞬間自動安裝」,
+        # 改要「掛 GoNAS 品牌、有明確安裝項可以按下才開始」的選擇畫面):
+        # GRUB 的 timeout 單位是「秒」,設 30 秒——看得到、來得及看清楚
+        # 品牌、也來得及自己按 Enter 立刻開始(等同按下開始鈕),或倒數
+        # 結束自動開始(無人值守也裝得完)。
+        gonas_sed_inplace 's/^[[:space:]]*set[[:space:]]*timeout=.*/set timeout=30/' "$cfgfile" || true
+        # 明確把 timeout_style 設回 menu(顯示選單),推翻上一版的 hidden
+        # ——那正是被否決的地方。有這一行就就地改,沒有就補一行。
         if grep -Eq '^[[:space:]]*set[[:space:]]+timeout_style=' "$cfgfile" 2>/dev/null; then
-            gonas_sed_inplace 's/^[[:space:]]*set[[:space:]]*timeout_style=.*/set timeout_style=hidden/' "$cfgfile" || true
+            gonas_sed_inplace 's/^[[:space:]]*set[[:space:]]*timeout_style=.*/set timeout_style=menu/' "$cfgfile" || true
         else
-            printf '\nset timeout_style=hidden\n' >> "$cfgfile"
+            printf '\nset timeout_style=menu\n' >> "$cfgfile"
         fi
     elif grep -q 'menuentry' "$cfgfile" 2>/dev/null; then
-        printf '\nset timeout_style=hidden\nset timeout=1\n' >> "$cfgfile"
+        printf '\nset timeout_style=menu\nset timeout=30\n' >> "$cfgfile"
     fi
 done < "$CFG_LIST"
+
+# --- 5b. 把開機選單的背景圖(潑濺圖)換成 GoNAS 品牌圖 -----------------
+# 第三十輪(使用者以產品設計角度要求「安裝選擇畫面要掛 GoNAS 品牌、
+# 不要再看到 Debian 標誌」)。前面第 5 步只換得動選單「文字」,真正讓
+# 使用者一眼看到「這是 Debian」的,是那張背景潑濺圖(isolinux 的
+# `menu background`、grub 的 `background_image` 指到的 PNG)。這一步把
+# 那些背景圖換成事先設計好、commit 在 branding/splash.png 的 GoNAS 圖
+# (640x480,isolinux vesamenu 的標準解析度;grub gfxmenu 會自行縮放)。
+#
+# 誠實邊界:選單「框」本身(反白顏色、字型)是 vesamenu.c32 / grub
+# gfxmenu 自己畫的,這一步只換背景圖、不保證把反白色也調成 teal
+# ——背景圖換成 GoNAS 之後,畫面主體已經是 GoNAS 品牌,反白色維持
+# 安裝程式預設值也還是可讀的。這一步是「盡量不出錯」的可靠改動;要
+# 追求跟設計稿完全一致的選單配色,得逐版對 stdmenu.cfg 的 `menu color`
+# 動刀,格式敏感又只能靠真機開機驗證,刻意不在這裡做。
+GONAS_SPLASH="$SCRIPT_DIR/branding/splash.png"
+if [ ! -f "$GONAS_SPLASH" ]; then
+    echo "warning: $GONAS_SPLASH not found — skipping boot-menu background rebranding (menu will keep the stock background image)" >&2
+else
+    echo "==> replacing boot menu background image(s) with the GoNAS splash"
+    # 先蒐集所有「要被換掉」的背景圖檔的相對路徑,去重之後再逐一覆蓋。
+    # 來源有二:(1) 固定已知路徑 isolinux/splash.png(Debian amd64 幾乎
+    # 一定有);(2) 從選單設定檔裡實際被 `menu background` / `background_image`
+    # 指到的檔名——這樣不管是哪個版本、指到哪個檔名都換得到,不寫死。
+    BG_LIST="$WORK_DIR/gonas-bg-targets.list"
+    : > "$BG_LIST"
+    [ -f "$EXTRACT_DIR/isolinux/splash.png" ] && echo "isolinux/splash.png" >> "$BG_LIST"
+    while read -r cfgfile; do
+        # 抓 `menu background X` / `MENU BACKGROUND X`(取最後一個欄位)跟
+        # `background_image X`(grub;取最後一個欄位)。awk 對大小寫不敏感
+        # 地比對關鍵字,印出該行最後一欄(就是圖檔路徑)。
+        awk 'tolower($0) ~ /(^|[[:space:]])menu[[:space:]]+background[[:space:]]/ || tolower($0) ~ /(^|[[:space:]])background_image([[:space:]]|=)/ { print $NF }' "$cfgfile" 2>/dev/null
+    done < "$CFG_LIST" | while read -r ref; do
+        # 設定檔裡寫的路徑可能是絕對(/isolinux/splash.png)或相對
+        # (splash.png)。統一去掉開頭的斜線,當成相對 EXTRACT_DIR 的路徑;
+        # 也可能是相對「該設定檔所在目錄」,兩種都試,存在才收進清單。
+        rel="${ref#/}"
+        if [ -f "$EXTRACT_DIR/$rel" ]; then
+            echo "$rel"
+        fi
+    done | sort -u >> "$BG_LIST"
+    # 逐一覆蓋(去重後),記數。用 while 讀清單避免檔名有空白。
+    BG_REPLACED=0
+    sort -u "$BG_LIST" | while read -r rel; do
+        [ -n "$rel" ] || continue
+        if [ -f "$EXTRACT_DIR/$rel" ]; then
+            cp "$GONAS_SPLASH" "$EXTRACT_DIR/$rel" && echo "    - replaced $rel"
+        fi
+    done
+    # 上面的 while 在管線子行程裡,計數拿不回來——這裡用檔案行數直接回報
+    # 「找到幾個目標」,已經夠用(真正有沒有換成功,cp 失敗會自己印錯誤)。
+    BG_REPLACED="$(sort -u "$BG_LIST" | grep -c . || true)"
+    echo "==> boot menu background: $BG_REPLACED target image(s) replaced with the GoNAS splash"
+    if [ "$BG_REPLACED" = "0" ]; then
+        echo "warning: found no boot-menu background image to replace — the menu text was rebranded to GoNAS, but the background graphic (if any) may still be the stock one; verify on a real boot" >&2
+    fi
+fi
 
 # --- 6. 重新計算 checksum 清單、重新包裝 -------------------------------
 echo "==> recomputing md5sum.txt"

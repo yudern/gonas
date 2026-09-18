@@ -153,20 +153,37 @@ gpg 版本差異而壞掉的邏輯還是好的。
    出來,而不是被 debconf 用預設值悄悄帶過);順便把**開機選單**裡
    看得到的 Debian 字樣(「Debian GNU/Linux installer」「Debian
    GNU/Linux」「Install Debian」「Debian installer」)換成 GoNAS。
-   第二十九輪(使用者要求「安裝全過程都看不到 Debian 標誌、要像群暉
-   那樣讀秒直接開始安裝」)再加三件事:(a) 把開機選單的等待時間壓到
-   最短並隱藏選單(isolinux `timeout 1`/`prompt 0`、grub `set timeout=1`
-   ＋`set timeout_style=hidden`),一開機幾乎看不到選單就直接進安裝;
+   第二十九→三十輪(使用者要求「安裝選擇畫面要掛 GoNAS 品牌、有一個
+   明確的『安裝 GoNAS』可以按下才開始,像群暉安裝助手」)做了三件事,
+   其中第一件是把第二十九輪一個「藏選單、瞬間自動安裝」的錯誤方向
+   **改回來**:
+   (a) **一個看得到、掛 GoNAS 品牌、使用者自己按 Enter 才開始的選擇
+   畫面**——把開機選單背景潑濺圖(isolinux `menu background` /
+   grub `background_image` 指到的 PNG)換成事先設計好的 GoNAS 潑濺圖
+   (`build/appliance/branding/splash.png`,見 build-iso.sh 第 5b 步),
+   選單維持顯示(isolinux `timeout 300`=30 秒、grub `set timeout=30`
+   ＋`timeout_style=menu`),預設反白「安裝 GoNAS」,使用者按 Enter
+   立刻開始、或倒數結束自動開始(無人值守也裝得完)。第二十九輪一度
+   把選單設成 `timeout 1`/`hidden` 想「一開機直接裝」,被使用者以產品
+   設計角度否決——他要的是「有一個開始鈕可以按」,不是自動衝進安裝。
    (b) 用開機參數 `DEBIAN_FRONTEND=text` 強制安裝程式走**文字前端**
    ——文字前端整個過程沒有任何 logo 圖片,那張最顯眼的 Debian 螺旋
    標誌(gtk 前端才有,烙在安裝程式 initrd 裡的 `logo_installer.png`)
-   就完全不會出現;(c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`,
-   跟 web 介面同一個圓角方塊＋橫槓構圖)。
+   就完全不會出現。
+   (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`,跟 web 介面同一個
+   圓角方塊＋橫槓構圖),潑濺圖就是用這個標誌構出來的。
 
    > **品牌化的誠實邊界(使用者常問「為什麼安裝過程還是看到 Debian」)**:
-   > 到第二十九輪為止,安裝過程中「Debian 的**標誌/logo 圖片**」已經
-   > 不會再出現了——關鍵是 `DEBIAN_FRONTEND=text` 讓安裝走純文字前端,
-   > 文字前端根本沒有任何 logo 圖。**剩下唯一擦不掉的**是文字前端畫面
+   > 到第三十輪為止,**開機選擇畫面**已經掛上 GoNAS 品牌(背景潑濺圖
+   > 換成 GoNAS,選單標題/項目文字也是 GoNAS),而**安裝過程**中
+   > 「Debian 的**標誌/logo 圖片**」也不會再出現——關鍵是
+   > `DEBIAN_FRONTEND=text` 讓安裝走純文字前端,文字前端根本沒有任何
+   > logo 圖。兩個還沒做到「跟設計稿一模一樣」的地方,誠實列出來:
+   > (1) 開機選單的「框」本身(反白顏色、字型)是 vesamenu.c32 / grub
+   > gfxmenu 自己畫的,第 5b 步只換了背景圖、沒有逐版去調 `menu color`
+   > 反白配色(格式敏感、只能靠真機開機驗證),所以反白色可能還是安裝
+   > 程式的預設色,不是設計稿上的 teal——但畫面主體已經是 GoNAS 品牌、
+   > 也讀得清楚。**剩下唯一擦不掉的**是文字前端畫面
    > 最上緣那條狀態列裡,cdebconf 仍可能顯示這一版 Debian 的**版本
    > 字串**(那是文字、不是 logo,而且同樣烙在安裝程式的 cdebconf/
    > rootskel 模板裡,不重新編譯整個 debian-installer 改不掉——那件事

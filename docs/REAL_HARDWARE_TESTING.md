@@ -2578,47 +2578,62 @@ NUT 設定好、拔市電看它自動關機」這條端到端只能在真有 UPS
 QA:gofmt/vet/`go test ./... -race` 全綠、node --check 過、playwright 實測。
 **四大待辦(錯誤在地化 / 新手嚮導 / 電源 / UPS)全部完成。**
 
-**第四十一輪(安裝全程去 Debian 品牌 + GoNAS 標誌 + 讀秒直接開始安裝)**:
+**第四十一輪(安裝選擇畫面掛 GoNAS 品牌 + 明確的「安裝 GoNAS」開始項 +
+去掉安裝過程的 Debian logo)**:
 
-使用者要求「使用者在安裝 ISO 全過程都看不到 Debian 標誌,只會以為是在裝
-GoNAS」,並要「讀秒那裡直接開始安裝,類似群暉」,同時交代「盡量最小改動、
-把影響降到最低」。這輪刻意**只動開機參數與選單設定、完全不碰安裝程式的
-initrd/udeb**(重打包 initrd 在沙盒無法驗證能不能開機,風險太高):
+分兩步走,第一步走錯、被使用者以產品設計角度糾正:
 
-- **去掉 Debian 標誌圖(關鍵)**:開機參數加 `DEBIAN_FRONTEND=text`,強制
-  debian-installer 走文字前端。gtk 圖形前端那張最顯眼的 Debian 螺旋 logo
-  (`logo_installer.png`,烙在安裝程式 initrd 裡)在文字前端根本不載入 ——
-  用一個核心參數、零 initrd 手術達成「安裝過程看不到 Debian logo」。附帶
-  好處:文字前端在孱弱 ARM/低階硬體上更輕更快,也更接近群暉那種極簡安裝觀感。
-- **讀秒直接開始安裝(像群暉)**:isolinux 等待時間從 5 秒壓到 `timeout 1`
-  (0.1 秒)＋`prompt 0`;grub 從 5 秒壓到 `set timeout=1` 並加
-  `set timeout_style=hidden`(倒數期間完全不顯示選單,連 Debian 品牌的 grub
-  背景都不會閃)。一開機幾乎看不到選單,直接進安裝。預設開機項目維持官方
-  ISO 原本那個,只改「等多久 / 顯不顯示選單」,把風險降到最低。
-- **GoNAS 標誌**:設計了一個簡約標誌(`docs/brand/gonas-mark.svg` /
-  `gonas-logo.svg`),沿用 web 介面同一個「圓角方塊＋兩條橫槓」構圖、teal
-  主色 `#2f8b80`,純向量、不依賴任何系統字型。
-- **選單文字品牌化擴大**:`patch-boot-menu.sh` 再多涵蓋不帶 GNU/Linux 的
-  短寫標題「Debian installer / Debian Installer」→ GoNAS;仍刻意不做整檔盲目
-  `s/Debian/GoNAS/g`(會踩壞 `search --label 'Debian 13.x'` 那條靠卷標找
-  開機檔的功能性字串,讓機器開不了機)。新增 test-boot-menu-patch.sh 案例 7
-  同時驗「短寫該換的換了」與「帶版本號的 search --label 沒被動到」。
+先前一版(誤)把開機選單設成 `timeout 1`/`prompt 0`、grub `hidden`,想做成
+「一開機直接衝進安裝」。使用者明確否決:「我不是說開始就直接安裝,而是要有
+一個開始按鈕、點下才開始安裝」,並反問「你作為產品設計經理,覺得這個安裝
+界面合適嗎」。**這是對的**——藏掉選單、瞬間自動安裝,是把「最小工程改動」
+擺在「好的第一印象」前面的錯誤取捨,做出來像陽春 Linux 安裝、不像成品
+appliance,也拿掉了使用者「我按下開始鈕來裝 GoNAS」的掌控感。
 
-**誠實邊界(務必讓使用者知道)**:安裝過程「Debian 的 logo 圖片」已經不會
-再出現;**唯一擦不掉的**是文字前端畫面最上緣狀態列裡,cdebconf 仍可能顯示
-這一版 Debian 的**版本字串**(是文字、不是 logo,一樣烙在安裝程式模板裡,
-不重編整個 d-i 改不掉)。即:看不到 Debian logo 標誌了,但文字狀態列可能還
-有一行 Debian 版本文字;裝完重開機後全面是 GoNAS 品牌。
+改正後(這一輪真正交付的):
 
-**沙盒無法驗證的部分**:這輪全部是開機參數/選單設定的改動,沙盒能做的驗證
-(shell 語法 `sh -n`、boot-menu patch 全 7 案例、isolinux/grub timeout 三情境
-模擬)都做了、全過。但「文字前端實際長什麼樣、Debian 版本字串到底還剩多少、
-`timeout_style=hidden` 在真韌體上是否如預期不顯示選單」這幾件只能在 QEMU/
-ESXi/真機開機才看得到——請務必在真機/VM 跑一次安裝,拍照確認「全程沒有
-Debian logo、開機直接進安裝」符合預期。
+- **一個看得到、掛 GoNAS 品牌、使用者自己按 Enter 才開始的選擇畫面**:
+  設計了 GoNAS 潑濺圖 `build/appliance/branding/splash.png`(640×480,深色
+  premium 底 + GoNAS 標誌 + tagline + 「Press Enter to install GoNAS」),
+  build-iso.sh 第 5b 步把 isolinux `menu background` / grub `background_image`
+  指到的背景圖換成它(不寫死檔名——從設定檔實際被指到的路徑去找,再加固定
+  的 isolinux/splash.png)。選單維持顯示:isolinux `timeout 300`(30 秒)、
+  grub `set timeout=30`＋`timeout_style=menu`;預設反白安裝項,按 Enter 立刻
+  開始(=按下開始鈕)、或倒數結束自動開始(無人值守也裝得完)。
+- **去掉安裝過程的 Debian logo 圖**:開機參數加 `DEBIAN_FRONTEND=text`,
+  強制 debian-installer 走文字前端——gtk 前端那張最顯眼的 Debian 螺旋 logo
+  (`logo_installer.png`,烙在安裝程式 initrd 裡)在文字前端根本不載入。
+  附帶:文字前端在孱弱 ARM/低階硬體更輕更快。
+- **GoNAS 標誌**:`docs/brand/gonas-mark.svg` / `gonas-logo.svg`,沿用 web
+  介面「圓角方塊＋兩條橫槓」構圖、teal `#2f8b80`,純向量、不依賴系統字型。
+  潑濺圖就是用這個標誌構出來的。
+- **選單文字品牌化擴大**:`patch-boot-menu.sh` 再涵蓋短寫「Debian installer /
+  Debian Installer」→ GoNAS;仍不做整檔盲目 `s/Debian/GoNAS/g`(會壞掉
+  `search --label 'Debian 13.x'` 靠卷標找開機檔的功能性字串)。新增
+  test-boot-menu-patch.sh 案例 7 同時驗「短寫該換的換了」與「版本卷標沒被動」。
 
-QA:`sh -n` 三個腳本全過、`build/appliance/test-*.sh` 全 6 支通過(boot-menu
-patch 7 案例)、isolinux/grub timeout 三情境模擬輸出正確;Go 完全沒動。
+**誠實邊界(務必讓使用者知道)**:兩個還沒到「跟設計稿一模一樣」的地方——
+(1) 選單「框」的反白顏色/字型是 vesamenu.c32 / grub gfxmenu 自己畫的,這輪
+只換了背景圖、沒逐版去調 `menu color` 反白配色(格式敏感、只能真機驗),所以
+反白色可能還是安裝程式預設色、不是設計稿的 teal;(2) 文字前端畫面最上緣
+狀態列,cdebconf 仍可能顯示這一版 Debian 的**版本字串**(是文字、不是 logo,
+烙在 d-i 模板裡不重編改不掉)。即:選擇畫面主體與安裝過程都看不到 Debian
+logo 了,但選單反白色、文字狀態列版本字串是目前不動 initrd/不重編 d-i 的
+天花板。裝完重開機後全面 GoNAS。
+
+**沙盒無法驗證的部分**:這輪是開機參數/選單設定/換背景圖的改動。沙盒能做的
+(shell `sh -n`、boot-menu patch 全 7 案例、背景替換邏輯用假 ISO 樹跑過、
+isolinux/grub timeout 三情境模擬)都做了、全過。但「潑濺圖在真 vesamenu/grub
+背景實際長怎樣、反白色、文字前端觀感、版本字串剩多少」只能在 QEMU/ESXi/真機
+開機拍照確認——設計稿(`gonas-boot-screen-mockup.png`)是目標,真實渲染以
+真機為準。務必在真機/VM 跑一次,拍照回報。
+
+若要「真正的群暉式滑鼠可點安裝精靈」(而非開機選單),那是另一個大工程
+(得自建 live/installer 環境、開機後起一個 web/GUI 安裝器),不是換背景圖
+可達成的量級——已跟使用者說明,待其決定要不要走這條路。
+
+QA:`sh -n` 過、`build/appliance/test-*.sh` 全 6 支通過(boot-menu patch 7
+案例)、背景替換邏輯假 ISO 樹測試通過、SVG xmllint 過;Go 完全沒動。
 
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
