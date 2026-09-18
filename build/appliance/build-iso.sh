@@ -577,16 +577,35 @@ OUT_ISO="$OUT_DIR/gonas-$VERSION-$ARCH.iso"
 rm -f "$OUT_ISO" "$OUT_ISO.sha256"
 
 echo "==> repacking as $OUT_ISO"
-# `-boot_image any replay` 沿用原始 ISO 的開機目錄結構(El Torito/
-# isohybrid 這些底層細節)，只是把整個目錄樹換成我們修改過的版本——
-# 這是 Debian wiki「RepackBootableISO」文件建議的標準做法，比手動
-# 重新計算 isohybrid MBR 偏移量可靠很多。
-xorriso -indev "$WORK_DIR/base.iso" \
-        -outdev "$OUT_ISO" \
-        -map "$EXTRACT_DIR" / \
-        -boot_image any replay \
-        -changes_pending yes \
-        -end
+# 重封裝方法:用 xorriso 官方的「as_mkisofs 報告 + 重建」法。
+#
+# 先前用「-map 整棵樹 / + -boot_image any replay」在 amd64 上會失敗:
+#   libisofs: FAILURE : Cannot refer by isohybrid MBR to data outside of
+#             ISO 9660 filesystem.
+# 原因是 replay 會沿用原 ISO 的 System Area(isohybrid MBR + GPT),裡面
+# 對「append 在 ISO 9660 之後的 EFI 分割區」是用絕對位移參照的;可是整棵
+# 目錄樹被重新 map 之後檔案系統大小/位移都變了,那個絕對參照就落到新映像
+# 的 ISO 9660 範圍之外,於是失敗。
+#
+# 正確做法(xorriso man page「Emulation of mkisofs」與 Debian 官方重封裝
+# 建議):讓 xorriso 從原始 ISO 讀出它自己的完整開機參數(BIOS isolinux、
+# UEFI efi.img、isohybrid、GPT/append 分割區全都在內),再用這組參數把
+# 「修改過的目錄樹」整個重建成一份新 ISO。開機記錄與 EFI 映像是重新算進
+# 新檔案系統裡的,不會殘留指向原檔的絕對位移,從根本上避開上面那個失敗。
+MKARGS_FILE="$WORK_DIR/mkisofs-args.txt"
+xorriso -indev "$WORK_DIR/base.iso" -report_el_torito as_mkisofs 2>/dev/null \
+    | grep -v '^[[:space:]]*$' > "$MKARGS_FILE" || true
+if [ ! -s "$MKARGS_FILE" ]; then
+    echo "error: 無法從原始 ISO 讀出開機參數(-report_el_torito as_mkisofs 沒有輸出)" >&2
+    echo "  這通常代表這份 base ISO 的開機結構跟預期不同,或 xorriso 版本過舊(需 >= 1.4.8)" >&2
+    exit 1
+fi
+echo "==> 從原始 ISO 抽出的開機參數:"
+sed 's/^/    /' "$MKARGS_FILE"
+# 這些行是 xorriso 為了「原封不動餵回 -as mkisofs」而輸出、已經處理好
+# shell 引號的字串(含空白的 volume id 等都被單引號包好),所以用 eval
+# 展開才能正確還原;$EXTRACT_DIR 當成新映像的根目錄。
+eval "xorriso -as mkisofs $(tr '\n' ' ' < "$MKARGS_FILE") -o \"$OUT_ISO\" \"$EXTRACT_DIR\""
 
 gonas_sha256sum "$OUT_ISO" > "$OUT_ISO.sha256"
 echo "==> done: $OUT_ISO"
