@@ -64,7 +64,14 @@ command -v wget >/dev/null 2>&1 || { echo "error: wget is required (apt install 
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-WORK_DIR="$(mktemp -d /tmp/gonas-iso-build.XXXXXX)"
+# WORK_DIR 預設放 /tmp,但可用 GONAS_ISO_WORK_ROOT 覆蓋。理由:DVD-1 建置
+# 需要十幾 GB 暫存空間(下載一份 + 解開一份 + 重新包裝一份),而某些
+# CI runner(例如 GitHub Actions)的系統碟很小,/tmp 會在建置中途被塞爆、
+# 且常常是「毫無錯誤訊息就被砍斷」——這種環境要把工作目錄指到一顆比較大的
+# 暫存碟(例如 GitHub runner 的 /mnt)。設定 GONAS_ISO_WORK_ROOT 即可。
+WORK_ROOT="${GONAS_ISO_WORK_ROOT:-/tmp}"
+mkdir -p "$WORK_ROOT" 2>/dev/null || true
+WORK_DIR="$(mktemp -d "$WORK_ROOT/gonas-iso-build.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 # gonas_sed_inplace(見 lib/portable-sed.sh)要先於
@@ -171,25 +178,33 @@ fi
 # 是否還跟官方最新的 SHA256SUMS 一致——不是看檔名或下載時間,這樣即使
 # Debian 之後把同一個檔名的 DVD-1 ISO 換成新的內容(小版本更新常有這種
 # 情況),也不會誤用一份過期的快取。
+# GONAS_ISO_NO_CACHE=1 時完全跳過本地快取(不讀、不寫)。理由:CI runner
+# 是用完即丟的,快取那份 3.7GB 複製既幫不上下次(下次是全新機器),又白白
+# 多佔一份系統碟空間——在小碟 runner 上,少寫這 3.7GB 常常就是「爆不爆碟」
+# 的差別。本機反覆建置時不要設這個變數,快取照樣有用。
 CACHE_DIR="$REPO_ROOT/dist/.cache/debian-iso"
-mkdir -p "$CACHE_DIR"
 CACHED_ISO="$CACHE_DIR/$BASE_ISO_NAME"
-if [ -f "$CACHED_ISO" ] && [ "$(gonas_sha256sum "$CACHED_ISO" | awk '{print $1}')" = "$EXPECTED_SHA256" ]; then
+USE_CACHE=1
+[ "${GONAS_ISO_NO_CACHE:-0}" = "1" ] && USE_CACHE=0
+
+if [ "$USE_CACHE" = "1" ] && [ -f "$CACHED_ISO" ] && [ "$(gonas_sha256sum "$CACHED_ISO" | awk '{print $1}')" = "$EXPECTED_SHA256" ]; then
     echo "==> reusing cached $CACHED_ISO (checksum matches current SHA256SUMS)"
     cp "$CACHED_ISO" "$WORK_DIR/base.iso"
 else
     echo "==> downloading $BASE_ISO_URL/$BASE_ISO_NAME"
     echo "    (this requires real internet access to a Debian mirror — will fail in a network-restricted sandbox)"
-    # 這支下載曾經在真實測試中失敗過(wget exit 4 = network failure,
-    # 通常是幾百 MB 的大檔案傳輸中途網路斷線/逾時),但因為原本用的是
-    # `wget -q`,wget 自己的錯誤訊息(DNS 失敗?連線被拒?逾時?)整個
-    # 被吞掉,使用者只會在 `make` 那一層看到毫無資訊量的 `Error 4`,
-    # 完全不知道該怎麼辦、也沒辦法判斷是不是同一種問題再發生一次。改成
-    # 不加 `-q`(保留 `--show-progress` 顯示下載進度)讓 wget 真正的
-    # 錯誤訊息印出來,並且明確檢查結束碼、給一個看得懂的提示,而不是讓
-    # `set -e` 直接把腳本悶聲弄死。
-    if ! wget --show-progress -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"; then
-        echo "error: download of $BASE_ISO_NAME failed (see the wget error above for the real reason — DNS, connection refused, timeout, or the connection dropped mid-transfer are the common causes for a ~700MB file over an unstable network)" >&2
+    # 下載加固(第三十五輪後 CI 實測抓到:在 GitHub runner 上這步會在下到
+    # 一半時毫無錯誤訊息就被砍斷,最像磁碟被塞爆):
+    #   --continue        斷了重試時接續已下載的部分,不從頭再來
+    #   --tries=3         最多重試 3 次
+    #   --timeout=30      連線/讀取逾時 30 秒,卡死的連線及早放棄重試
+    #   --progress=dot:giga  進度改成每 ~1GB 一行,而不是每 50K 一行——
+    #                     原本 3.7GB 會刷出七萬多行 log,又慢又吵、還可能
+    #                     觸發 CI 的 log 上限;giga 模式全程只印幾行。
+    # 不加 `-q`,保留 wget 真正的錯誤訊息(DNS/連線被拒/逾時/中途斷線)。
+    if ! wget --continue --tries=3 --timeout=30 --progress=dot:giga \
+            -O "$WORK_DIR/base.iso" "$BASE_ISO_URL/$BASE_ISO_NAME"; then
+        echo "error: download of $BASE_ISO_NAME failed (see the wget error above for the real reason — DNS, connection refused, timeout, connection dropped mid-transfer, or the work disk running out of space are the common causes for a ~3.7GB DVD-1 image)" >&2
         echo "  nothing was cached, so simply re-running this command will retry the full download from scratch" >&2
         rm -f "$WORK_DIR/base.iso" 2>/dev/null || true
         exit 1
@@ -302,9 +317,12 @@ else
 fi
 
 # 通過驗證才寫進快取(或更新快取)——避免一份沒通過驗證的檔案被誤存
-# 起來,下次又被當成「快取命中」重用。
-if [ ! -f "$CACHED_ISO" ] || [ "$(gonas_sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
-    cp "$WORK_DIR/base.iso" "$CACHED_ISO"
+# 起來,下次又被當成「快取命中」重用。GONAS_ISO_NO_CACHE=1(CI)時整段跳過。
+if [ "$USE_CACHE" = "1" ]; then
+    mkdir -p "$CACHE_DIR"
+    if [ ! -f "$CACHED_ISO" ] || [ "$(gonas_sha256sum "$CACHED_ISO" 2>/dev/null | awk '{print $1}')" != "$ACTUAL_SHA256" ]; then
+        cp "$WORK_DIR/base.iso" "$CACHED_ISO"
+    fi
 fi
 
 # --- 2.7 清掉同架構、不同 Debian 版本號的舊快取 -----------------------
@@ -319,12 +337,14 @@ fi
 # ——避免使用者分開兩次 `make iso-amd64`/`make iso-arm64` 時,這一步
 # 反而互相刪掉對方仍然有效的快取,那樣就違背了當初做這個快取機制的
 # 本意。
-for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-DVD-1.iso; do
-    [ -e "$old_cached" ] || continue
-    [ "$(basename "$old_cached")" = "$BASE_ISO_NAME" ] && continue
-    echo "==> removing stale cached ISO for a different Debian release ($DEBIAN_ARCH_DIR): $old_cached"
-    rm -f "$old_cached"
-done
+if [ "$USE_CACHE" = "1" ]; then
+    for old_cached in "$CACHE_DIR"/debian-*-"$DEBIAN_ARCH_DIR"-DVD-1.iso; do
+        [ -e "$old_cached" ] || continue
+        [ "$(basename "$old_cached")" = "$BASE_ISO_NAME" ] && continue
+        echo "==> removing stale cached ISO for a different Debian release ($DEBIAN_ARCH_DIR): $old_cached"
+        rm -f "$old_cached"
+    done
+fi
 
 # --- 3. 解開原始 ISO --------------------------------------------------
 EXTRACT_DIR="$WORK_DIR/iso"
