@@ -1073,6 +1073,68 @@ const errorMap = {
     "zh-Hant": "沒有可以復原的上一個版本備份。", "zh-Hans": "没有可以回滚的上一个版本备份。",
     "en": "No previous version backup is available to roll back to.",
   },
+
+  // --- 儲存池設定驗證(storage/pool.go Validate)---
+  "pool name is required": { "zh-Hant": "必須填寫儲存池名稱。", "zh-Hans": "必须填写存储池名称。", "en": "A pool name is required." },
+  "at least one data disk is required": { "zh-Hant": "至少要有一顆資料碟。", "zh-Hans": "至少要有一颗数据盘。", "en": "At least one data disk is required." },
+  "at least one parity disk is required (unprotected pools are not supported by design)": {
+    "zh-Hant": "至少要有一顆同位校驗碟——GoNAS 刻意不支援沒有保護的儲存池。",
+    "zh-Hans": "至少要有一颗奇偶校验盘——GoNAS 特意不支持没有保护的存储池。",
+    "en": "At least one parity disk is required — GoNAS deliberately does not support unprotected pools.",
+  },
+  "a unified mount point is required": { "zh-Hant": "必須填寫聯合掛載點。", "zh-Hans": "必须填写联合挂载点。", "en": "A unified mount point is required." },
+  "at least 2 SnapRAID content file locations are recommended so the index itself isn't a single point of failure": {
+    "zh-Hant": "建議至少填 2 個 SnapRAID 索引檔位置,避免索引本身變成單點故障。",
+    "zh-Hans": "建议至少填 2 个 SnapRAID 索引文件位置,避免索引本身变成单点故障。",
+    "en": "At least 2 SnapRAID content file locations are recommended so the index itself isn't a single point of failure.",
+  },
+  "pool name cannot contain spaces, slashes, line breaks, or control characters": {
+    "zh-Hant": "儲存池名稱不可含空白、斜線、換行或控制字元。",
+    "zh-Hans": "存储池名称不可含空白、斜杠、换行或控制字符。",
+    "en": "The pool name cannot contain spaces, slashes, line breaks, or control characters.",
+  },
+  "a disk or mount path cannot contain spaces, line breaks, or control characters (it would break the snapraid.conf format)": {
+    "zh-Hant": "硬碟或掛載路徑不可含空白、換行或控制字元(會破壞 snapraid.conf 格式)。",
+    "zh-Hans": "硬盘或挂载路径不可含空白、换行或控制字符(会破坏 snapraid.conf 格式)。",
+    "en": "A disk or mount path cannot contain spaces, line breaks, or control characters (it would break the snapraid.conf format).",
+  },
+  "a data disk path cannot be empty": { "zh-Hant": "資料碟路徑不可空白。", "zh-Hans": "数据盘路径不可空白。", "en": "A data disk path cannot be empty." },
+  "the same disk is listed more than once": { "zh-Hant": "同一顆碟被列了不只一次。", "zh-Hans": "同一颗盘被列了不止一次。", "en": "The same disk is listed more than once." },
+  "a parity disk path cannot be empty": { "zh-Hant": "同位碟路徑不可空白。", "zh-Hans": "奇偶校验盘路径不可空白。", "en": "A parity disk path cannot be empty." },
+  "the same disk is used as both data and parity, or listed twice": {
+    "zh-Hant": "同一顆碟同時被當成資料碟與同位碟,或被列了兩次。",
+    "zh-Hans": "同一颗盘同时被当成数据盘与校验盘,或被列了两次。",
+    "en": "The same disk is used as both data and parity, or listed twice.",
+  },
+
+  // --- 準備硬碟(storage/prepare.go)---
+  "invalid disk device — choose a whole disk such as /dev/sdb": {
+    "zh-Hant": "不接受的裝置路徑——請選一顆整碟,例如 /dev/sdb。",
+    "zh-Hans": "不接受的设备路径——请选一颗整盘,例如 /dev/sdb。",
+    "en": "Invalid disk device — choose a whole disk such as /dev/sdb.",
+  },
+  "that device is not a whole disk (it may be a partition) — pick a whole disk such as /dev/sdb": {
+    "zh-Hant": "這不是一顆整碟(可能是分割區)——請選整顆硬碟,例如 /dev/sdb。",
+    "zh-Hans": "这不是一颗整盘(可能是分区)——请选整颗硬盘,例如 /dev/sdb。",
+    "en": "That device is not a whole disk (it may be a partition) — pick a whole disk such as /dev/sdb.",
+  },
+  "refusing to format: the disk (or a partition on it) is currently mounted — GoNAS never formats an in-use disk, including the system disk": {
+    "zh-Hant": "拒絕格式化:這顆碟(或其上的分割區)目前正被掛載——GoNAS 絕不格式化使用中的碟,系統碟也在此列。",
+    "zh-Hans": "拒绝格式化:这颗盘(或其上的分区)目前正被挂载——GoNAS 绝不格式化使用中的盘,系统盘也在此列。",
+    "en": "Refusing to format: the disk (or a partition on it) is currently mounted — GoNAS never formats an in-use disk, including the system disk.",
+  },
+  "the mount point must be under /mnt/ (for example /mnt/disk1)": {
+    "zh-Hant": "掛載點必須位於 /mnt/ 底下(例如 /mnt/disk1)。",
+    "zh-Hans": "挂载点必须位于 /mnt/ 底下(例如 /mnt/disk1)。",
+    "en": "The mount point must be under /mnt/ (for example /mnt/disk1).",
+  },
+  "the mount point cannot contain spaces or control characters": {
+    "zh-Hant": "掛載點不可含空白或控制字元。", "zh-Hans": "挂载点不可含空白或控制字符。",
+    "en": "The mount point cannot contain spaces or control characters.",
+  },
+  "the mount point cannot contain '..'": {
+    "zh-Hant": "掛載點不可含 '..'。", "zh-Hans": "挂载点不可含 '..'。", "en": "The mount point cannot contain '..'.",
+  },
 };
 
 // noticeMap —— 跟 errorMap 同樣的道理,但這裡收的不是「錯誤」,而是後端

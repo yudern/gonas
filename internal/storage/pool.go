@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/bng147/gonas/internal/textcheck"
@@ -40,21 +40,26 @@ type PoolConfig struct {
 
 // Validate 檢查設定是否足以啟動陣列。刻意寫得嚴格一點:寧可拒絕啟動、
 // 也不要用一個有問題的設定去掛載或跑校驗 —— 這一層一旦出錯，代價是使用者的資料。
+// Validate 的錯誤字刻意都用「固定、可枚舉的英文」,不內嵌 pool 名稱/路徑
+// 等動態值——因為前端是靠 i18n.js 的 errorMap 對「整句英文」做對照翻譯成
+// 目前介面語言(繁/簡/英)的,一旦句子裡帶了會變動的值就對不上表、只能
+// 退回顯示英文。哪個路徑不合法這類細節,使用者對照欄位就知道,不需要塞進
+// 錯誤句子裡而犧牲整句的可翻譯性。
 func (c PoolConfig) Validate() error {
 	if c.Name == "" {
-		return fmt.Errorf("pool name is required")
+		return errors.New("pool name is required")
 	}
 	if len(c.DataDisks) == 0 {
-		return fmt.Errorf("pool %q: at least one data disk is required", c.Name)
+		return errors.New("at least one data disk is required")
 	}
 	if len(c.ParityDisks) == 0 {
-		return fmt.Errorf("pool %q: at least one parity disk is required (unprotected pools are not supported by design)", c.Name)
+		return errors.New("at least one parity disk is required (unprotected pools are not supported by design)")
 	}
 	if c.MountPoint == "" {
-		return fmt.Errorf("pool %q: mountPoint is required", c.Name)
+		return errors.New("a unified mount point is required")
 	}
 	if len(c.ContentFiles) < 2 {
-		return fmt.Errorf("pool %q: at least 2 content file locations are recommended so the SnapRAID index itself isn't a single point of failure", c.Name)
+		return errors.New("at least 2 SnapRAID content file locations are recommended so the index itself isn't a single point of failure")
 	}
 
 	// 第三十四輪(設定產生器注入稽核收尾):snapraid.conf 由 text/template
@@ -62,31 +67,31 @@ func (c PoolConfig) Validate() error {
 	// 名稱/路徑含換行會注入指令,含空白會拆錯欄位,所以這些都不能有控制
 	// 字元或空白。見 internal/textcheck。
 	if textcheck.HasControl(c.Name) || strings.ContainsAny(c.Name, " \t/") {
-		return fmt.Errorf("pool %q: name cannot contain spaces, slashes, line breaks, or control characters", c.Name)
+		return errors.New("pool name cannot contain spaces, slashes, line breaks, or control characters")
 	}
 	pathFields := append(append(append([]string{c.MountPoint}, c.DataDisks...), c.ParityDisks...), c.ContentFiles...)
 	for _, pth := range pathFields {
 		if textcheck.HasControl(pth) || strings.ContainsAny(pth, " \t") {
-			return fmt.Errorf("pool %q: path %q cannot contain spaces, line breaks, or control characters (breaks snapraid.conf format)", c.Name, pth)
+			return errors.New("a disk or mount path cannot contain spaces, line breaks, or control characters (it would break the snapraid.conf format)")
 		}
 	}
 
 	seen := make(map[string]bool, len(c.DataDisks)+len(c.ParityDisks))
 	for _, d := range c.DataDisks {
 		if d == "" {
-			return fmt.Errorf("pool %q: data disk path cannot be empty", c.Name)
+			return errors.New("a data disk path cannot be empty")
 		}
 		if seen[d] {
-			return fmt.Errorf("pool %q: disk %q listed more than once", c.Name, d)
+			return errors.New("the same disk is listed more than once")
 		}
 		seen[d] = true
 	}
 	for _, p := range c.ParityDisks {
 		if p == "" {
-			return fmt.Errorf("pool %q: parity disk path cannot be empty", c.Name)
+			return errors.New("a parity disk path cannot be empty")
 		}
 		if seen[p] {
-			return fmt.Errorf("pool %q: disk %q used as both data and parity, or listed twice", c.Name, p)
+			return errors.New("the same disk is used as both data and parity, or listed twice")
 		}
 		seen[p] = true
 	}

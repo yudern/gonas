@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -43,7 +44,9 @@ type PrepareResult struct {
 func PrepareDisk(ctx context.Context, r Runner, device, mountpoint, fstabPath string) (PrepareResult, error) {
 	var res PrepareResult
 	if !deviceRe.MatchString(device) {
-		return res, fmt.Errorf("不接受的裝置路徑 %q:必須是一顆整碟,例如 /dev/sdb", device)
+		// 固定英文句子(不內嵌 device 值)以便前端 errorMap 對照翻譯,理由
+		// 見 storage/pool.go Validate 的說明。
+		return res, errors.New("invalid disk device — choose a whole disk such as /dev/sdb")
 	}
 	if err := validateMountpoint(mountpoint); err != nil {
 		return res, err
@@ -60,34 +63,34 @@ func PrepareDisk(ctx context.Context, r Runner, device, mountpoint, fstabPath st
 		return res, err
 	}
 	if !isDisk {
-		return res, fmt.Errorf("%s 不是一顆整碟(可能是分割區或其他裝置);請選整顆硬碟,例如 /dev/sdb", device)
+		return res, errors.New("that device is not a whole disk (it may be a partition) — pick a whole disk such as /dev/sdb")
 	}
 	if len(mps) > 0 {
-		return res, fmt.Errorf("拒絕格式化 %s:它(或其上的分割區)目前正掛載於 %s ——GoNAS 絕不格式化使用中的碟(系統碟也在此列)", device, strings.Join(mps, ", "))
+		return res, errors.New("refusing to format: the disk (or a partition on it) is currently mounted — GoNAS never formats an in-use disk, including the system disk")
 	}
 
 	// 格式化成 ext4(SnapRAID 的資料碟/校驗碟直接用整碟檔案系統,不需要
 	// 額外切分割表)。-F 不互動詢問、-q 安靜輸出。
 	if _, err := r.Run(ctx, "mkfs.ext4", "-F", "-q", device); err != nil {
-		return res, fmt.Errorf("將 %s 格式化為 ext4 失敗: %w", device, err)
+		return res, fmt.Errorf("formatting %s as ext4 failed: %w", device, err)
 	}
 
 	if _, err := r.Run(ctx, "mkdir", "-p", mountpoint); err != nil {
-		return res, fmt.Errorf("建立掛載點 %s 失敗: %w", mountpoint, err)
+		return res, fmt.Errorf("creating mount point %s failed: %w", mountpoint, err)
 	}
 	if _, err := r.Run(ctx, "mount", device, mountpoint); err != nil {
-		return res, fmt.Errorf("將 %s 掛載到 %s 失敗: %w", device, mountpoint, err)
+		return res, fmt.Errorf("mounting %s at %s failed: %w", device, mountpoint, err)
 	}
 
 	// 取 UUID 寫進 fstab,比用 /dev/sdX 這種會隨插拔順序變動的名稱穩。
 	uuidOut, err := r.Run(ctx, "blkid", "-s", "UUID", "-o", "value", device)
 	if err != nil {
-		return res, fmt.Errorf("讀取 %s 的 UUID 失敗: %w", device, err)
+		return res, fmt.Errorf("reading UUID of %s failed: %w", device, err)
 	}
 	uuid := strings.TrimSpace(string(uuidOut))
 	if uuid != "" {
 		if err := appendFstabEntry(fstabPath, uuid, mountpoint); err != nil {
-			return res, fmt.Errorf("更新 %s 失敗: %w", fstabPath, err)
+			return res, fmt.Errorf("updating %s failed: %w", fstabPath, err)
 		}
 	}
 
@@ -96,13 +99,13 @@ func PrepareDisk(ctx context.Context, r Runner, device, mountpoint, fstabPath st
 
 func validateMountpoint(mp string) error {
 	if !strings.HasPrefix(mp, "/mnt/") || len(mp) <= len("/mnt/") {
-		return fmt.Errorf("掛載點 %q 必須位於 /mnt/ 底下(例如 /mnt/disk1)", mp)
+		return errors.New("the mount point must be under /mnt/ (for example /mnt/disk1)")
 	}
 	if textcheck.HasControl(mp) || strings.ContainsAny(mp, " \t") {
-		return fmt.Errorf("掛載點 %q 不可含空白或控制字元", mp)
+		return errors.New("the mount point cannot contain spaces or control characters")
 	}
 	if strings.Contains(mp, "..") {
-		return fmt.Errorf("掛載點 %q 不可含 '..'", mp)
+		return errors.New("the mount point cannot contain '..'")
 	}
 	return nil
 }
@@ -112,11 +115,11 @@ func validateMountpoint(mp string) error {
 func inspectDevice(ctx context.Context, r Runner, device string) (isDisk bool, mountpoints []string, err error) {
 	out, err := r.Run(ctx, "lsblk", "-J", "-o", "PATH,TYPE,MOUNTPOINT", device)
 	if err != nil {
-		return false, nil, fmt.Errorf("檢查 %s 失敗: %w", device, err)
+		return false, nil, fmt.Errorf("inspecting %s failed: %w", device, err)
 	}
 	var parsed lsblkOutput
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return false, nil, fmt.Errorf("解析 %s 的 lsblk 輸出失敗: %w", device, err)
+		return false, nil, fmt.Errorf("parsing lsblk output for %s failed: %w", device, err)
 	}
 	var mps []string
 	var walk func(d lsblkDevice)
