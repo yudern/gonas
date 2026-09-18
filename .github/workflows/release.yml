@@ -85,6 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # 一次只建一個架構,建完 amd64 再建 arm64——不要兩個同時搶頻寬/磁碟,
+      # 降低大檔下載被砍斷的機率(使用者要求)。
+      max-parallel: 1
       matrix:
         arch: [amd64, arm64]
     steps:
