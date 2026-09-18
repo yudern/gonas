@@ -109,18 +109,17 @@ jobs:
 
       - name: 清出磁碟空間 + 準備大容量工作碟
         run: |
-          # runner 預裝一堆這裡用不到的大型 SDK,先清掉換系統碟空間。
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-                      "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
-          # GitHub runner 的 / 系統碟偏小,但 /mnt 有數十 GB。把 ISO 建置的
-          # 工作目錄指到 /mnt,避免 DVD-1(3.7GB × 下載/解開/重包多份)在
-          # 中途把 / 塞爆、又常常毫無錯誤訊息就被砍斷(這正是上一次 CI 失敗
-          # 的樣子)。
+          # 只清跟 Go 無關的大型 SDK 換系統碟空間。
+          # 絕對不要動 /opt/hostedtoolcache / $AGENT_TOOLSDIRECTORY——那是
+          # 上一步 Setup Go 裝 Go 的地方,砍掉會讓後面 make 的 go build
+          # 直接 "go: not found"(這正是上一次 CI 失敗的真正原因)。
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc 2>/dev/null || true
+          # 真正的重活(DVD-1 3.7GB × 下載/解開/重包多份)都指到 /mnt 大碟,
+          # 不靠系統碟,所以這裡清多清少其實都夠用。
           sudo mkdir -p /mnt/isowork
           sudo chown "$(id -u):$(id -g)" /mnt/isowork
-          echo "=== 系統碟 / 與大容量碟 /mnt 目前狀況 ==="
-          df -h / /mnt
+          echo "=== go 還在不在(應印出路徑)===" && command -v go && go version
+          echo "=== 系統碟 / 與大容量碟 /mnt 目前狀況 ===" && df -h / /mnt
 
       - name: 建置 ${{ matrix.arch }} 開機即用 ISO
         env:
