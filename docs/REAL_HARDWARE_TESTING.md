@@ -2533,6 +2533,25 @@ QA:gofmt/vet 乾淨、`go test ./... -race` 全綠、node --check 三支前端 J
 QA:gofmt/vet 乾淨、`go test`(內嵌 UI)過、node --check 前端 JS 過、playwright
 實測。待辦剩:電源(關機/休眠)、UPS。
 
+**第三十九輪(電源功能:關機/重開——四大待辦的第 3 項)**:
+
+使用者要求網頁上要有關機/休眠等常用電源功能。與使用者確認後:先做關機 +
+重新開機(最實用又安全),休眠先不做(伺服器/ESXi VM 休眠喚醒常不穩)。
+
+- 後端 `internal/api/power_handlers.go`:handleSystemPowerShutdown/Reboot,
+  requireAdmin,分別跑 `systemctl poweroff` / `reboot`(走 s.runner,可測)。
+  路由 POST /api/v1/system/power/{shutdown,reboot}。附 handler 測試
+  (驗證正確指令 + 失敗回 500)。
+- 前端:安全頁新增「系統電源」卡片(僅 isAdmin),重新開機/關機兩個按鈕。
+  破壞性/中斷性操作採「打字確認」——跳輸入框、要打出指定的字(關機/关机/
+  SHUTDOWN 依語言)才送出,避免誤按。指令送出後系統即中斷,前端只顯示已送出。
+- 三語 i18n(power.*)+ SECTION_ICONS 加 power 圖示。playwright 實測卡片
+  渲染、取消確認不誤觸 API、無 JS error。
+
+實機提醒:`systemctl poweroff/reboot` 需要 daemon 有權限(appliance 以 root
+跑,沒問題;若日後改非 root 執行需另配 polkit)。關機後要在實體機/ESXi/IPMI
+手動再開機。QA:gofmt/vet/test -race 全綠、node --check 過。待辦剩:UPS。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

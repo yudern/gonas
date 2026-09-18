@@ -133,6 +133,15 @@ const dict = {
       ctaTitle: "還沒設定好?", ctaBody: "用新手設定精靈一步步把儲存池與共享設定好,幾分鐘就能用。",
       ctaButton: "開始新手設定",
     },
+    power: {
+      title: "系統電源",
+      hint: "關機或重新開機這台 NAS。這會中斷所有正在進行的檔案傳輸與服務;關機後需要在實體機/ESXi/IPMI 上手動再開機。為避免誤按,按下後需要打字確認。",
+      reboot: "重新開機", shutdown: "關機",
+      wordReboot: "重開", wordShutdown: "關機",
+      confirmPrompt: "這是會中斷服務的操作。請輸入「{word}」以確認。",
+      rebootSent: "重開機指令已送出,系統即將重新啟動;約一兩分鐘後可再連線。",
+      shutdownSent: "關機指令已送出,系統即將關閉。之後需要在實體機/ESXi/IPMI 上手動重新開機。",
+    },
     files: {
       title: "檔案",
       subtitle: "直接在瀏覽器裡瀏覽、上傳、下載、整理陣列裡的檔案，不需要另外掛載 SMB/NFS 或安裝用戶端軟體。",
@@ -469,6 +478,15 @@ const dict = {
       ctaTitle: "还没设置好?", ctaBody: "用新手设置向导一步步把存储池与共享设置好,几分钟就能用。",
       ctaButton: "开始新手设置",
     },
+    power: {
+      title: "系统电源",
+      hint: "关机或重新启动这台 NAS。这会中断所有正在进行的文件传输与服务;关机后需要在物理机/ESXi/IPMI 上手动再开机。为避免误按,按下后需要打字确认。",
+      reboot: "重新启动", shutdown: "关机",
+      wordReboot: "重启", wordShutdown: "关机",
+      confirmPrompt: "这是会中断服务的操作。请输入「{word}」以确认。",
+      rebootSent: "重启指令已送出,系统即将重新启动;约一两分钟后可再连接。",
+      shutdownSent: "关机指令已送出,系统即将关闭。之后需要在物理机/ESXi/IPMI 上手动重新开机。",
+    },
     files: {
       title: "文件",
       subtitle: "直接在浏览器里浏览、上传、下载、整理阵列里的文件,不需要另外挂载 SMB/NFS 或安装客户端软件。",
@@ -804,6 +822,15 @@ const dict = {
       doneBody: "The basics are done. From here you can set up users, backups, monitoring alerts, and remote access (WireGuard) on their respective pages.",
       ctaTitle: "Not set up yet?", ctaBody: "Use the setup wizard to configure your storage pool and a share step by step — ready in a few minutes.",
       ctaButton: "Start setup wizard",
+    },
+    power: {
+      title: "System power",
+      hint: "Power off or restart this NAS. This interrupts all in-progress file transfers and services; after shutdown you'll need to power it back on from the physical machine / ESXi / IPMI. To prevent accidental clicks, you'll be asked to type to confirm.",
+      reboot: "Restart", shutdown: "Shut down",
+      wordReboot: "REBOOT", wordShutdown: "SHUTDOWN",
+      confirmPrompt: "This will interrupt services. Type \"{word}\" to confirm.",
+      rebootSent: "Restart command sent — the system is rebooting; you should be able to reconnect in a minute or two.",
+      shutdownSent: "Shutdown command sent — the system is powering off. You'll need to power it back on from the physical machine / ESXi / IPMI.",
     },
     files: {
       title: "Files",

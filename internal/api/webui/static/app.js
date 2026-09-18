@@ -550,6 +550,7 @@ const SECTION_ICONS = {
   log: '<rect x="3.5" y="3" width="13" height="14" rx="1.6"/><path d="M6.5 7h7M6.5 10h7M6.5 13h4"/>',
   otp: '<rect x="5.5" y="2.5" width="9" height="15" rx="2"/><path d="M8.5 15h3"/>',
   backup: '<path d="M3 4.5h14v3H3z"/><path d="M4.5 7.5v8.5h11V7.5"/><path d="M8 11h4"/>',
+  power: '<path d="M10 2.5v7"/><path d="M6 5.2a6 6 0 1 0 8 0"/>',
 };
 
 // h2i:帶圖示的區塊標題。label 必須是「已跳脫」的字串(呼叫端照舊傳
@@ -2299,6 +2300,17 @@ async function renderSecurity(el) {
 
     ${isAdmin ? `
     <div class="card">
+      ${h2i("power", esc(t("power.title")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("power.hint"))}</p>
+      <div id="power-msg"></div>
+      <div class="btn-row">
+        <button class="secondary" id="power-reboot" type="button">${esc(t("power.reboot"))}</button>
+        <button class="danger" id="power-shutdown" type="button">${esc(t("power.shutdown"))}</button>
+      </div>
+    </div>` : ""}
+
+    ${isAdmin ? `
+    <div class="card">
       ${h2i("users", esc(t("security.accounts", { n: accounts.length })))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.accountsHint"))}</p>
       <div class="table-wrap">
@@ -2363,8 +2375,32 @@ async function renderSecurity(el) {
   attachPasswordFormHandlers(el);
   attachTOTPHandlers(el);
   if (isAdmin) attachAccountsHandlers(el);
+  if (isAdmin) wirePowerButtons(el);
   attachHTTPSFormHandlers(el);
   attachVPNHandlers(el);
+}
+
+// wirePowerButtons 綁關機/重開按鈕。破壞性/中斷性操作,要「打字確認」:
+// 跳出輸入框、必須打出指定的字(依語言:關機/关机/SHUTDOWN…)才會送出,
+// 避免誤按。指令送出後系統就會關機/重開,連線會中斷,所以只顯示「已送出」。
+function wirePowerButtons(el) {
+  const box = el.querySelector("#power-msg");
+  const confirmByTyping = (word) => {
+    const ans = window.prompt(t("power.confirmPrompt", { word }));
+    return ans !== null && ans.trim() === word;
+  };
+  const reboot = el.querySelector("#power-reboot");
+  if (reboot) reboot.addEventListener("click", async () => {
+    if (!confirmByTyping(t("power.wordReboot"))) return;
+    try { await api.powerReboot(); box.innerHTML = msg("ok", t("power.rebootSent")); }
+    catch (err) { box.innerHTML = msg("error", err.message); }
+  });
+  const shutdown = el.querySelector("#power-shutdown");
+  if (shutdown) shutdown.addEventListener("click", async () => {
+    if (!confirmByTyping(t("power.wordShutdown"))) return;
+    try { await api.powerShutdown(); box.innerHTML = msg("ok", t("power.shutdownSent")); }
+    catch (err) { box.innerHTML = msg("error", err.message); }
+  });
 }
 
 // renderAuditLogCard 是 Phase 18b 新增的稽核紀錄表格,只有 isAdmin 會

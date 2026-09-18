@@ -52,6 +52,9 @@ export const api = {
   disks: () => request("GET", "/api/v1/storage/disks"),
   disksSmart: () => request("GET", "/api/v1/storage/disks/smart"),
   prepareDisk: (device, mountPoint) => request("POST", "/api/v1/storage/disks/prepare", { device, mountPoint }),
+
+  powerShutdown: () => request("POST", "/api/v1/system/power/shutdown"),
+  powerReboot: () => request("POST", "/api/v1/system/power/reboot"),
   arrayStatus: () => request("GET", "/api/v1/storage/array"),
   setPool: (pool) => request("PUT", "/api/v1/storage/pool", pool),
   startArray: () => request("POST", "/api/v1/storage/array/start"),

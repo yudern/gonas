@@ -344,6 +344,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/system/update", s.requireAuth(s.handleSystemUpdateGet))
 	mux.HandleFunc("PUT /api/v1/system/update/settings", s.requireAdmin(s.handleSystemUpdateSettingsSet))
 	mux.HandleFunc("POST /api/v1/system/update/check", s.requireAdmin(s.handleSystemUpdateCheck))
+	mux.HandleFunc("POST /api/v1/system/power/shutdown", s.requireAdmin(s.handleSystemPowerShutdown))
+	mux.HandleFunc("POST /api/v1/system/power/reboot", s.requireAdmin(s.handleSystemPowerReboot))
 	mux.HandleFunc("POST /api/v1/system/update/apply", s.requireAdmin(s.handleSystemUpdateApply))
 	mux.HandleFunc("POST /api/v1/system/update/rollback", s.requireAdmin(s.handleSystemUpdateRollback))
 
