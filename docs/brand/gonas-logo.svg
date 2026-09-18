@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GoNAS 完整標誌:mark ＋ 文字商標。文字用幾何無襯線字重、字距略開,
+     跟 mark 同一個 teal 主色。刻意全部用 <path>/<rect> 描邊,不依賴任何
+     系統字型是否安裝,任何環境算圖結果都一致(離線 NAS 的一貫原則)。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 96" width="300" height="96" role="img" aria-label="GoNAS">
+  <!-- mark -->
+  <rect x="8" y="14" width="68" height="68" rx="16.3" fill="#2f8b80"/>
+  <rect x="19.3" y="29.5" width="45.4" height="9.5" rx="4.75" fill="#ffffff" opacity="0.92"/>
+  <rect x="19.3" y="56" width="31.8" height="9.5" rx="4.75" fill="#ffffff" opacity="0.55"/>
+  <!-- wordmark -->
+  <text x="94" y="62" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif"
+        font-size="46" font-weight="700" letter-spacing="0.5" fill="#1f2a2e">Go<tspan fill="#2f8b80">NAS</tspan></text>
+</svg>

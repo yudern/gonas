@@ -76,5 +76,14 @@ gonas_patch_boot_menu_file() {
     # 一樣:安裝過程中會短暫看到 Debian,裝完重開機後才全面變成 GoNAS
     # 品牌——見 late-command.sh 第 3 節的開機後品牌化)。這個邊界在
     # README/文件裡有說清楚。
-    gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian GNU\/Linux/Install GoNAS/g; s/Debian GNU\/Linux/GoNAS/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
+    #
+    # 第二十九輪(使用者要求「安裝全過程都看不到 Debian」)再補兩句同樣
+    # 「確切、且只可能出現在顯示文字」的片語:"Debian Installer" /
+    # "Debian installer"(不帶 GNU/Linux 的寫法,某些版本的選單標題會用
+    # 這種短寫,例如 `menu title Debian installer main menu`)。這兩句
+    # 一樣不可能出現在卷標裡——卷標長得像 "Debian 13.6.0 amd64 1",裡面
+    # 沒有 "installer" 這個字,也沒有斜線,所以替換它們不會踩到那條會
+    # 讓機器開不了機的 `search --label 'Debian 13.x ...'` 地雷。仍然刻意
+    # 「不」做整檔盲目 s/Debian/GoNAS/g,理由見上面那段長註解。
+    gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian GNU\/Linux/Install GoNAS/g; s/Debian GNU\/Linux/GoNAS/g; s/Debian Installer/GoNAS Installer/g; s/Debian installer/GoNAS installer/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
 }

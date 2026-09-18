@@ -154,6 +154,31 @@ else
     FAIL=1
 fi
 
+# --- 案例 7: 第二十九輪擴大的品牌化——不帶 "GNU/Linux" 的短寫標題
+# "Debian installer" / "Debian Installer" 也要換成 GoNAS,同時再次確認
+# 帶版本號的 search --label 'Debian 13...' 這種功能性字串沒有被動到
+# (短寫規則不含斜線、也不含版本數字,不可能誤傷卷標)。---
+CASE7="$TEST_WORK_DIR/case7-branding-shortform.cfg"
+cat > "$CASE7" <<'EOF'
+menu title Debian installer main menu
+menuentry "Debian Installer" {
+	search --set=root --label 'Debian 13.6.0 amd64 1'
+	linux	/install.amd/vmlinuz vga=788 ---
+	initrd	/install.amd/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE7" "$APPEND_EXTRA"
+if grep -q 'GoNAS installer main menu' "$CASE7" \
+   && grep -q 'menuentry "GoNAS Installer"' "$CASE7" \
+   && grep -q "label 'Debian 13.6.0 amd64 1'" "$CASE7" \
+   && ! grep -q 'label .GoNAS 13' "$CASE7"; then
+    echo "PASS: short-form 'Debian installer/Installer' rebranded, version-labeled search left intact"
+else
+    echo "FAIL: short-form branding missed, or (dangerously) rewrote the search --label volume label. Actual content:" >&2
+    sed 's/^/    | /' "$CASE7" >&2
+    FAIL=1
+fi
+
 echo
 if [ "$FAIL" = "0" ]; then
     echo "==> all boot-menu-patch test cases passed"

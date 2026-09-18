@@ -152,21 +152,34 @@ gpg 版本差異而壞掉的邏輯還是好的。
    高優先權問題——尤其是磁碟分割的最終確認——仍然有機會真的顯示
    出來,而不是被 debconf 用預設值悄悄帶過);順便把**開機選單**裡
    看得到的 Debian 字樣(「Debian GNU/Linux installer」「Debian
-   GNU/Linux」「Install Debian」)換成 GoNAS。
+   GNU/Linux」「Install Debian」「Debian installer」)換成 GoNAS。
+   第二十九輪(使用者要求「安裝全過程都看不到 Debian 標誌、要像群暉
+   那樣讀秒直接開始安裝」)再加三件事:(a) 把開機選單的等待時間壓到
+   最短並隱藏選單(isolinux `timeout 1`/`prompt 0`、grub `set timeout=1`
+   ＋`set timeout_style=hidden`),一開機幾乎看不到選單就直接進安裝;
+   (b) 用開機參數 `DEBIAN_FRONTEND=text` 強制安裝程式走**文字前端**
+   ——文字前端整個過程沒有任何 logo 圖片,那張最顯眼的 Debian 螺旋
+   標誌(gtk 前端才有,烙在安裝程式 initrd 裡的 `logo_installer.png`)
+   就完全不會出現;(c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`,
+   跟 web 介面同一個圓角方塊＋橫槓構圖)。
 
    > **品牌化的誠實邊界(使用者常問「為什麼安裝過程還是看到 Debian」)**:
-   > 上面這一步只換得動**開機選單**(bootloader menu)這一層的文字。
-   > 真正進到 debian-installer 之後那些藍底畫面(選語言、分割磁碟、
-   > 安裝進度條)裡的「Debian」字樣,是烙在安裝程式自己的 udeb 模板
-   > 裡的,要改必須重新編譯整個 Debian installer——風險高、維護成本大,
-   > 這個專案刻意不做,跟絕大多數以 Debian 為底的商用/開源 appliance
-   > 一樣:**安裝過程中會短暫看到 Debian,裝完重開機後才全面變成 GoNAS
-   > 品牌**(hostname、tty1 主控台的 GoNAS logo、`/etc/os-release`、
-   > GRUB 開機選單標題等,全部由 `late-command.sh` 第 3 節在裝好的
-   > 系統上換掉)。也刻意不做整檔盲目替換 `Debian`→`GoNAS`:部分
-   > grub.cfg 用 `search --label 'Debian ...'` 靠磁碟卷標找開機檔,
-   > 那裡的 Debian 是功能性字串,換掉會讓機器開不了機——只替換確切、
-   > 且只可能是顯示文字的完整片語(見 lib/patch-boot-menu.sh)。
+   > 到第二十九輪為止,安裝過程中「Debian 的**標誌/logo 圖片**」已經
+   > 不會再出現了——關鍵是 `DEBIAN_FRONTEND=text` 讓安裝走純文字前端,
+   > 文字前端根本沒有任何 logo 圖。**剩下唯一擦不掉的**是文字前端畫面
+   > 最上緣那條狀態列裡,cdebconf 仍可能顯示這一版 Debian 的**版本
+   > 字串**(那是文字、不是 logo,而且同樣烙在安裝程式的 cdebconf/
+   > rootskel 模板裡,不重新編譯整個 debian-installer 改不掉——那件事
+   > 風險高、維護成本大,而且會失去 Debian 官方安裝程式的穩定性,這個
+   > 專案刻意不做,initrd 重打包在這個沙盒也無法驗證能不能開機)。
+   > 換句話說:**看不到 Debian 的 logo 標誌了,但文字狀態列可能還有一行
+   > Debian 的版本文字**;裝完重開機後則全面是 GoNAS 品牌(hostname、
+   > tty1 主控台的 GoNAS logo、`/etc/os-release`、GRUB 開機選單標題等,
+   > 全部由 `late-command.sh` 第 3 節在裝好的系統上換掉)。也刻意不做
+   > 整檔盲目替換 `Debian`→`GoNAS`:部分 grub.cfg 用
+   > `search --label 'Debian ...'` 靠磁碟卷標找開機檔,那裡的 Debian 是
+   > 功能性字串,換掉會讓機器開不了機——只替換確切、且只可能是顯示
+   > 文字的完整片語(見 lib/patch-boot-menu.sh)。
 6. 重新計算 `md5sum.txt`,用 `xorriso -indev ... -outdev ... -map ...
    -boot_image any replay` 重新包裝成一份新的、一樣可開機的 ISO
    (沿用原始 ISO 的 El Torito/isohybrid 開機目錄結構,這是 Debian

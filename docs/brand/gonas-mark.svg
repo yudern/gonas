@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GoNAS 品牌標誌(mark)。單色、無漸層、無外部相依,刻意跟 web 介面
+     internal/api/webui/static/index.html 裡的 .brand-mark 用同一個構圖:
+     一個圓角方塊(機箱)＋兩條白色橫槓(儲存插槽/清單列),放大成可獨立
+     使用的標準尺寸。teal 主色 #2f8b80 取自 style.css 的 accent 令牌。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="GoNAS">
+  <rect x="15" y="18" width="90" height="84" rx="21.6" fill="#2f8b80"/>
+  <rect x="30" y="37.2" width="60" height="12" rx="6" fill="#ffffff" opacity="0.92"/>
+  <rect x="30" y="70.8" width="42" height="12" rx="6" fill="#ffffff" opacity="0.55"/>
+</svg>

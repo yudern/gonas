@@ -2578,6 +2578,48 @@ NUT 設定好、拔市電看它自動關機」這條端到端只能在真有 UPS
 QA:gofmt/vet/`go test ./... -race` 全綠、node --check 過、playwright 實測。
 **四大待辦(錯誤在地化 / 新手嚮導 / 電源 / UPS)全部完成。**
 
+**第四十一輪(安裝全程去 Debian 品牌 + GoNAS 標誌 + 讀秒直接開始安裝)**:
+
+使用者要求「使用者在安裝 ISO 全過程都看不到 Debian 標誌,只會以為是在裝
+GoNAS」,並要「讀秒那裡直接開始安裝,類似群暉」,同時交代「盡量最小改動、
+把影響降到最低」。這輪刻意**只動開機參數與選單設定、完全不碰安裝程式的
+initrd/udeb**(重打包 initrd 在沙盒無法驗證能不能開機,風險太高):
+
+- **去掉 Debian 標誌圖(關鍵)**:開機參數加 `DEBIAN_FRONTEND=text`,強制
+  debian-installer 走文字前端。gtk 圖形前端那張最顯眼的 Debian 螺旋 logo
+  (`logo_installer.png`,烙在安裝程式 initrd 裡)在文字前端根本不載入 ——
+  用一個核心參數、零 initrd 手術達成「安裝過程看不到 Debian logo」。附帶
+  好處:文字前端在孱弱 ARM/低階硬體上更輕更快,也更接近群暉那種極簡安裝觀感。
+- **讀秒直接開始安裝(像群暉)**:isolinux 等待時間從 5 秒壓到 `timeout 1`
+  (0.1 秒)＋`prompt 0`;grub 從 5 秒壓到 `set timeout=1` 並加
+  `set timeout_style=hidden`(倒數期間完全不顯示選單,連 Debian 品牌的 grub
+  背景都不會閃)。一開機幾乎看不到選單,直接進安裝。預設開機項目維持官方
+  ISO 原本那個,只改「等多久 / 顯不顯示選單」,把風險降到最低。
+- **GoNAS 標誌**:設計了一個簡約標誌(`docs/brand/gonas-mark.svg` /
+  `gonas-logo.svg`),沿用 web 介面同一個「圓角方塊＋兩條橫槓」構圖、teal
+  主色 `#2f8b80`,純向量、不依賴任何系統字型。
+- **選單文字品牌化擴大**:`patch-boot-menu.sh` 再多涵蓋不帶 GNU/Linux 的
+  短寫標題「Debian installer / Debian Installer」→ GoNAS;仍刻意不做整檔盲目
+  `s/Debian/GoNAS/g`(會踩壞 `search --label 'Debian 13.x'` 那條靠卷標找
+  開機檔的功能性字串,讓機器開不了機)。新增 test-boot-menu-patch.sh 案例 7
+  同時驗「短寫該換的換了」與「帶版本號的 search --label 沒被動到」。
+
+**誠實邊界(務必讓使用者知道)**:安裝過程「Debian 的 logo 圖片」已經不會
+再出現;**唯一擦不掉的**是文字前端畫面最上緣狀態列裡,cdebconf 仍可能顯示
+這一版 Debian 的**版本字串**(是文字、不是 logo,一樣烙在安裝程式模板裡,
+不重編整個 d-i 改不掉)。即:看不到 Debian logo 標誌了,但文字狀態列可能還
+有一行 Debian 版本文字;裝完重開機後全面是 GoNAS 品牌。
+
+**沙盒無法驗證的部分**:這輪全部是開機參數/選單設定的改動,沙盒能做的驗證
+(shell 語法 `sh -n`、boot-menu patch 全 7 案例、isolinux/grub timeout 三情境
+模擬)都做了、全過。但「文字前端實際長什麼樣、Debian 版本字串到底還剩多少、
+`timeout_style=hidden` 在真韌體上是否如預期不顯示選單」這幾件只能在 QEMU/
+ESXi/真機開機才看得到——請務必在真機/VM 跑一次安裝,拍照確認「全程沒有
+Debian logo、開機直接進安裝」符合預期。
+
+QA:`sh -n` 三個腳本全過、`build/appliance/test-*.sh` 全 6 支通過(boot-menu
+patch 7 案例)、isolinux/grub timeout 三情境模擬輸出正確;Go 完全沒動。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |
