@@ -296,6 +296,15 @@ p.hint { color: var(--text-faint); font-size: 12.5px; }
 
 .empty-state { color: var(--text-faint); font-size: 13px; padding: 8px 0; }
 
+/* 新手設定精靈:步驟指示列 + 底部導覽。 */
+.wizard-steps { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 18px; font-size: 13px; color: var(--text-faint); }
+.wizard-step { white-space: nowrap; }
+.wizard-step.active { color: var(--accent); font-weight: 650; }
+.wizard-step.done { color: var(--text-dim); }
+.wizard-step.done::after { content: " ✓"; color: var(--ok); }
+.wizard-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
+.wizard-nav .btn-row { margin: 0; }
+
 /* 準備硬碟:一列一顆候選碟,左邊裝置資訊、右邊掛載點輸入 + 動作鈕。 */
 .prepare-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .prepare-row:last-child { border-bottom: none; }

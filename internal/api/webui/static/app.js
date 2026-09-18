@@ -9,6 +9,7 @@ const authGateContent = document.getElementById("auth-gate-content");
 
 const routes = {
   dashboard: renderDashboard,
+  setup: renderSetupWizard,
   storage: renderStorage,
   files: renderFiles,
   apps: renderApps,
@@ -264,6 +265,10 @@ function showSetupGate() {
     }
     try {
       await api.authSetup(f.get("username").trim(), f.get("password"));
+      // 剛建好管理帳號 = 全新系統的第一刻,直接帶進新手設定精靈
+      // (歡迎→準備硬碟→建池→建共享→完成)。使用者可在任一步略過。
+      wizardStep = 0;
+      location.hash = "#/setup";
       showApp();
     } catch (err) {
       box.innerHTML = msg("error", err.message);
@@ -292,6 +297,12 @@ async function renderDashboard(el) {
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
     ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: dockerStatus.error || t("dashboard.unknownReason") })) : ""}
+    ${arrayStatus.state === "unconfigured" ? `
+    <div class="card" style="border-color:var(--accent);background:var(--accent-soft)">
+      ${h2i("sliders", esc(t("setup.ctaTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("setup.ctaBody"))}</p>
+      <div class="btn-row"><a href="#/setup"><button type="button">${esc(t("setup.ctaButton"))}</button></a></div>
+    </div>` : ""}
     <div class="card">
       ${h2i("link", esc(t("dashboard.quickLinks")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
@@ -571,6 +582,161 @@ function arrayPillClass(state) {
 
 // ---------- 儲存 ----------
 
+// ---------- 新手設定精靈 ----------
+// 一步步帶新使用者從「剛裝好」走到「可用」:歡迎 → 準備硬碟 → 建立儲存池
+// → 建立第一個共享 → 完成。刻意全用既有的 API,不另造後端狀態:首次建好
+// 管理帳號後自動帶進來(見 showSetupGate 成功後導向 #/setup),之後只要
+// 還沒設定儲存池,儀表板上有卡片可隨時再進來;設定好了卡片就消失。每步
+// 都能略過。步驟索引放模組層級變數,切步驟只是重畫。
+const WIZARD_STEPS = ["welcome", "disks", "pool", "share", "done"];
+let wizardStep = 0;
+
+function wizardGo(el, i) {
+  wizardStep = Math.max(0, Math.min(WIZARD_STEPS.length - 1, i));
+  renderSetupWizard(el);
+}
+
+function wizardProgress() {
+  const labels = [t("setup.stepWelcome"), t("setup.stepDisks"), t("setup.stepPool"), t("setup.stepShare"), t("setup.stepDone")];
+  return `<div class="wizard-steps">` + labels.map((lbl, i) =>
+    `<span class="wizard-step ${i === wizardStep ? "active" : (i < wizardStep ? "done" : "")}">${i + 1}. ${esc(lbl)}</span>`
+  ).join("") + `</div>`;
+}
+
+// wizardShell 包一致的外框:標題、步驟指示、內容卡片、底部按鈕列。
+// btns 是要顯示哪些按鈕(back/skip/next),各步驟自己綁事件。
+function wizardShell(inner, btns) {
+  const b = btns || {};
+  const parts = [];
+  if (b.back) parts.push(`<button class="secondary" data-wz-back>${esc(t("setup.back"))}</button>`);
+  const right = [];
+  if (b.skip) right.push(`<button class="secondary" data-wz-skip>${esc(b.skipLabel || t("setup.skip"))}</button>`);
+  if (b.next) right.push(`<button data-wz-next>${esc(b.nextLabel || t("setup.next"))}</button>`);
+  return `
+    <h1>${esc(t("setup.title"))}</h1>
+    ${wizardProgress()}
+    <div class="card">${inner}</div>
+    <div class="wizard-nav"><div>${parts.join("")}</div><div class="btn-row">${right.join("")}</div></div>
+  `;
+}
+
+async function renderSetupWizard(el) {
+  const step = WIZARD_STEPS[wizardStep];
+  if (step === "welcome") return wizardWelcome(el);
+  if (step === "disks") return wizardDisks(el);
+  if (step === "pool") return wizardPool(el);
+  if (step === "share") return wizardShare(el);
+  return wizardDone(el);
+}
+
+function wizardWelcome(el) {
+  el.innerHTML = wizardShell(
+    `<h2>${esc(t("setup.welcomeTitle"))}</h2><p style="color:var(--text-dim)">${t("setup.welcomeBody")}</p>`,
+    { next: true, nextLabel: t("setup.start"), skip: true, skipLabel: t("setup.skipAll") }
+  );
+  el.querySelector("[data-wz-next]").addEventListener("click", () => wizardGo(el, 1));
+  el.querySelector("[data-wz-skip]").addEventListener("click", () => { location.hash = "#/dashboard"; });
+}
+
+async function wizardDisks(el) {
+  const disks = await api.disks().catch(() => []);
+  el.innerHTML = wizardShell(`
+    <h2>${esc(t("setup.disksTitle"))}</h2>
+    <p style="color:var(--text-dim)">${t("setup.disksBody")}</p>
+    <div id="prepare-msg"></div>
+    <div id="prepare-list">${renderPrepareList(disks)}</div>
+  `, { back: true, next: true, skip: true });
+  wirePrepareDisk(el, wizardDisks); // 成功後重畫本步驟(讓剛備好的碟從候選消失)
+  el.querySelector("[data-wz-back]").addEventListener("click", () => wizardGo(el, 0));
+  el.querySelector("[data-wz-next]").addEventListener("click", () => wizardGo(el, 2));
+  el.querySelector("[data-wz-skip]").addEventListener("click", () => wizardGo(el, 2));
+}
+
+async function wizardPool(el) {
+  const arr = await api.arrayStatus().catch(() => ({ state: "unconfigured" }));
+  if (arr.state !== "unconfigured") {
+    el.innerHTML = wizardShell(
+      `<h2>${esc(t("setup.poolTitle"))}</h2>${msg("ok", t("setup.poolAlready"))}`,
+      { back: true, next: true }
+    );
+    el.querySelector("[data-wz-back]").addEventListener("click", () => wizardGo(el, 1));
+    el.querySelector("[data-wz-next]").addEventListener("click", () => wizardGo(el, 3));
+    return;
+  }
+  el.innerHTML = wizardShell(`
+    <h2>${esc(t("setup.poolTitle"))}</h2>
+    <p style="color:var(--text-dim)">${t("setup.poolBody")}</p>
+    <div id="wz-pool-msg"></div>
+    <form class="stacked" id="wz-pool-form">
+      <div class="field"><label>${esc(t("storage.poolName"))}</label><input type="text" name="name" value="tank" required></div>
+      <div class="field"><label>${esc(t("storage.poolMountPoint"))}</label><input type="text" name="mountPoint" value="/mnt/tank" required></div>
+      <div class="field"><label>${esc(t("storage.dataDisks"))}</label><textarea name="dataDisks" rows="2" placeholder="/mnt/disk1"></textarea></div>
+      <div class="field"><label>${esc(t("storage.parityDisks"))}</label><textarea name="parityDisks" rows="2" placeholder="/mnt/parity1"></textarea></div>
+      <div class="field"><label>${esc(t("storage.contentFiles"))}</label><textarea name="contentFiles" rows="2" placeholder="/mnt/disk1&#10;/boot/config/snapraid"></textarea></div>
+      <div class="btn-row"><button type="submit">${esc(t("storage.savePool"))}</button></div>
+    </form>
+  `, { back: true, skip: true });
+  el.querySelector("[data-wz-back]").addEventListener("click", () => wizardGo(el, 1));
+  el.querySelector("[data-wz-skip]").addEventListener("click", () => wizardGo(el, 3));
+  el.querySelector("#wz-pool-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const pool = {
+      name: f.get("name").trim(), mountPoint: f.get("mountPoint").trim(),
+      dataDisks: linesOf(f.get("dataDisks")), parityDisks: linesOf(f.get("parityDisks")),
+      contentFiles: linesOf(f.get("contentFiles")),
+    };
+    const box = el.querySelector("#wz-pool-msg");
+    try {
+      await api.setPool(pool);
+      wizardGo(el, 3);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+async function wizardShare(el) {
+  const arr = await api.arrayStatus().catch(() => ({ mountPoint: "" }));
+  const base = arr.mountPoint || "/mnt/tank";
+  el.innerHTML = wizardShell(`
+    <h2>${esc(t("setup.shareTitle"))}</h2>
+    <p style="color:var(--text-dim)">${t("setup.shareBody")}</p>
+    <div id="wz-share-msg"></div>
+    <form class="stacked" id="wz-share-form">
+      <div class="field"><label>${esc(t("shares.name"))}</label><input type="text" name="name" placeholder="media" required></div>
+      <div class="field"><label>${esc(t("shares.path"))}</label><input type="text" name="path" value="${esc(base)}/media" required></div>
+      <div class="checkbox-row"><label><input type="checkbox" name="guestOk"> ${esc(t("shares.guestOk"))}</label></div>
+      <div class="btn-row"><button type="submit">${esc(t("setup.createShare"))}</button></div>
+    </form>
+  `, { back: true, skip: true, skipLabel: t("setup.skip") });
+  el.querySelector("[data-wz-back]").addEventListener("click", () => wizardGo(el, 2));
+  el.querySelector("[data-wz-skip]").addEventListener("click", () => wizardGo(el, 4));
+  el.querySelector("#wz-share-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const share = {
+      name: f.get("name").trim(), path: f.get("path").trim(),
+      guestOk: f.get("guestOk") === "on", readOnly: false, validUsers: [],
+    };
+    const box = el.querySelector("#wz-share-msg");
+    try {
+      await api.createShare(share);
+      wizardGo(el, 4);
+    } catch (err) {
+      box.innerHTML = msg("error", err.message);
+    }
+  });
+}
+
+function wizardDone(el) {
+  el.innerHTML = wizardShell(
+    `<h2>${esc(t("setup.doneTitle"))}</h2><p style="color:var(--text-dim)">${t("setup.doneBody")}</p>`,
+    { next: true, nextLabel: t("setup.finish") }
+  );
+  el.querySelector("[data-wz-next]").addEventListener("click", () => { wizardStep = 0; location.hash = "#/dashboard"; });
+}
+
 async function renderStorage(el) {
   const [disks, arrayStatus] = await Promise.all([
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unconfigured" })),
@@ -689,7 +855,8 @@ function renderPrepareList(disks) {
 // wirePrepareDisk 綁定每一列「格式化並掛載」按鈕:先跳確認(破壞性操作),
 // 使用者確認後呼叫 API,成功就重畫整頁(讓新掛載的碟出現在硬碟表格、也從
 // 候選清單消失)。
-function wirePrepareDisk(el) {
+function wirePrepareDisk(el, rerender) {
+  const rerenderFn = rerender || renderStorage; // 儲存頁用預設;精靈傳自己的
   const box = el.querySelector("#prepare-msg");
   el.querySelectorAll(".prepare-row").forEach((row) => {
     const btn = row.querySelector(".prepare-btn");
@@ -702,7 +869,7 @@ function wirePrepareDisk(el) {
       try {
         const res = await api.prepareDisk(device, mount);
         box.innerHTML = msg("ok", t("storage.prepareDone", { device: res.device, mount: res.mountpoint }));
-        await renderStorage(el);
+        await rerenderFn(el);
       } catch (err) {
         box.innerHTML = msg("error", err.message);
         btn.disabled = false;
