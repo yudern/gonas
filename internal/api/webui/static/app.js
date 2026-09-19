@@ -933,8 +933,10 @@ async function renderStorage(el) {
 // renderPrepareList 畫出「可以拿來準備」的候選硬碟:只列未掛載的整碟
 // (d.inUse === false)。系統碟與使用中的碟因為 inUse 被過濾掉,不會出現,
 // 避免使用者誤選(後端 PrepareDisk 也會再擋一次,不倚賴前端過濾)。
+// 另外把 0 位元組的虛擬區塊裝置(zram、空的 loop 等)也濾掉 —— 它們不是
+// 真的可以拿來做儲存的硬碟,列出來只會讓使用者困惑。
 function renderPrepareList(disks) {
-  const candidates = (disks || []).filter((d) => !d.inUse);
+  const candidates = (disks || []).filter((d) => !d.inUse && d.sizeBytes > 0);
   if (!candidates.length) {
     return `<p class="empty-state">${esc(t("storage.prepareNoCandidates"))}</p>`;
   }
@@ -1937,7 +1939,7 @@ function renderUPSCard(status, cfg, names, isAdmin) {
   cfg = cfg || {};
   let statusHTML;
   if (!status.present) {
-    statusHTML = `<p class="empty-state" style="text-align:left">${esc(t("ups.notDetected"))}</p>`;
+    statusHTML = `<p style="color:var(--text-dim);font-size:12.5px;margin:0">${esc(t("ups.notDetected"))}</p>`;
   } else {
     const pillCls = status.lowBattery ? "danger" : (status.onBattery ? "warn" : "ok");
     const pillTxt = status.lowBattery ? t("ups.stateLow") : (status.onBattery ? t("ups.stateBattery") : t("ups.stateOnline"));
@@ -2266,13 +2268,12 @@ function renderDigestCard(digest, notifiers, emailNotifiers, isAdmin) {
   ` : "";
 
   return `
-    <div class="card">
-      ${h2i("calendar", esc(t("monitor.digestTitle")))}
+    <details class="card">
+      <summary>${h2i("calendar", esc(t("monitor.digestTitle")))} ${statusPill}</summary>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.digestHint"))}</p>
-      <p style="margin:0">${statusPill}</p>
       ${lastSentLine}
       ${adminSection}
-    </div>
+    </details>
   `;
 }
 
