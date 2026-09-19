@@ -357,7 +357,13 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 				}
 				return nil
 			}); err != nil {
+				// fail-closed(第五十二輪覆核 S-2):計數器沒能持久化就不能放行。
+				// 原本這裡只記 log 就繼續登入,但那樣 LastTOTPCounter 沒前進,
+				// 剛用的這個碼在 30 秒窗內還能被重放——防重放形同虛設。寧可這次
+				// 登入回 500、使用者重試,也不要留下重放窗。
 				s.logger.Error("recording totp counter failed", "err", err)
+				writeError(w, http.StatusInternalServerError, errInternalServerError)
+				return
 			}
 		case valid:
 			// 碼本身算得出來,但 counter 不比上次新 —— 這個碼(或更舊的)已經
@@ -381,7 +387,14 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 				}
 				return nil
 			}); err != nil {
+				// fail-closed(第五十二輪覆核 S-2):比對到救援碼、但寫檔失敗時,
+				// consumed 已經是 true 卻沒真的持久化「移除這枚碼」——若這裡只記
+				// log 就放行,這枚一次性救援碼在磁碟上仍然有效,等於能被重複使用。
+				// 一律回 500、不放行,使用者重試時要嘛寫檔恢復正常真的消耗掉、
+				// 要嘛還是失敗但碼也還沒被當成用掉,兩邊都一致。
 				s.logger.Error("consuming recovery code failed", "err", err)
+				writeError(w, http.StatusInternalServerError, errInternalServerError)
+				return
 			}
 			if !consumed {
 				s.loginLimiter.RecordFailure(ip)
@@ -642,6 +655,15 @@ func (s *Server) handleAuthTOTPDisable(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthTOTPRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 	sess, _ := r.Context().Value(sessionContextKey).(security.Session)
 
+	// 重新產生救援碼會讓舊的一次性碼全部作廢、換發一組新的——這跟停用 2FA
+	// 是同一級的敏感動作(第五十二輪覆核 S-4):若 session 被劫持,攻擊者
+	// 能一鍵作廢使用者手上的救援碼、拿到自己的一組。所以跟
+	// handleAuthTOTPDisable 一致,要求重新輸入密碼,不只靠「已登入」。
+	var req totpDisableRequest // 只需要 {password}
+	if !readJSON(w, r, &req) {
+		return
+	}
+
 	admin, found := findAdmin(s.store.Snapshot().Admins, sess.Username)
 	if !found {
 		writeError(w, http.StatusConflict, errAdminNotConfigured)
@@ -649,6 +671,15 @@ func (s *Server) handleAuthTOTPRecoveryCodes(w http.ResponseWriter, r *http.Requ
 	}
 	if !admin.TOTPEnabled {
 		writeError(w, http.StatusConflict, errTOTPNotSetUp)
+		return
+	}
+	ok, err := security.VerifyPassword(req.Password, admin.PasswordHash)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
 	plain, hashed, err := security.GenerateRecoveryCodes(0)

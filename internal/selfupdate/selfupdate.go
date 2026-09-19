@@ -205,6 +205,31 @@ func requireHTTPS(rawurl, what string) error {
 	return fmt.Errorf("selfupdate: %s must use https:// (refusing plaintext/insecure URL)", what)
 }
 
+// secureRedirect 是給自我更新的 http.Client 用的 CheckRedirect 政策。
+// 第三十輪覆核只擋了「初始 URL 必須是 https」,但 requireHTTPS 只看得到
+// 呼叫端傳進來的第一個網址——如果那個 https 伺服器回 301/302 把我們導去
+// http://evil/...,Go 的 http.Client 預設會乖乖跟著跳,傳輸就悄悄降級成
+// 明文,requireHTTPS 完全被繞過。傳輸層的信任是「逐跳」的,所以這裡在
+// 每一次重導向都重新套一次 requireHTTPS:任何一跳想降級到非 https(且
+// 非 loopback)就直接中止,fail-closed。沿用 Go 預設「最多 10 跳」的上限。
+func secureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("selfupdate: stopped after 10 redirects")
+	}
+	return requireHTTPS(req.URL.String(), "redirect target")
+}
+
+// NewHTTPClient 建立一個已經套用自我更新安全重導向政策(secureRedirect)
+// 的 http.Client。呼叫端(internal/api)應該一律用這個建構子,而不是自己
+// new 一個 &http.Client{}——否則 requireHTTPS 的保護會在第一次重導向之後
+// 失效(見 secureRedirect 的說明)。
+func NewHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: secureRedirect,
+	}
+}
+
 func FetchManifest(ctx context.Context, client *http.Client, manifestURL string) (Manifest, error) {
 	if err := requireHTTPS(manifestURL, "manifest URL"); err != nil {
 		return Manifest{}, err

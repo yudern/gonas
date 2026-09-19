@@ -364,7 +364,24 @@ func (s *Store) Update(fn func(*State) error) error {
 	defer s.mu.Unlock()
 
 	// 先在副本上操作，fn 失敗就直接丟棄，s.data 完全不受影響。
-	next := s.data
+	// 第五十二輪覆核(QA-5):這裡原本是 `next := s.data` 淺拷貝——State 裡的
+	// 切片(Admins、Shares…)與切片元素內部的切片(AdminAccount.RecoveryCodes)
+	// 都跟 s.data 共用同一塊底層陣列。fn 若「就地」改某個元素(登入時
+	// st.Admins[i].LastTOTPCounter = x、或消耗一枚救援碼),等於當場改到
+	// s.data——萬一接著 writeLocked 寫檔失敗,記憶體裡的狀態已被改掉、回不去,
+	// 違反「fn/寫檔失敗則 s.data 不受影響」的約定(登入路徑尤其危險:計數器
+	// 可能在沒真的持久化的情況下就前進,或救援碼在沒存檔時就被當成已用掉)。
+	// 改用 JSON round-trip 做一次徹底的深拷貝:fn 只會動到完全獨立的副本,
+	// 唯有寫檔成功才 s.data = next 換上去。State 本來就是全欄位可序列化(要
+	// 存進 state.json),所以 round-trip 不會遺失任何欄位。
+	var next State
+	snapshot, err := json.Marshal(s.data)
+	if err != nil {
+		return fmt.Errorf("state: snapshotting current state: %w", err)
+	}
+	if err := json.Unmarshal(snapshot, &next); err != nil {
+		return fmt.Errorf("state: deep-copying current state: %w", err)
+	}
 	if err := fn(&next); err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bng147/gonas/internal/backup"
@@ -231,6 +232,12 @@ type Server struct {
 	// 跟 s.runner/s.docker 這些欄位可以在測試裡被替換成假實作是同樣的
 	// 考量。
 	updateExecPathFunc func() (string, error)
+
+	// doctorInstalling 是「系統診斷一鍵補裝」的 single-flight 旗標(第五十二
+	// 輪覆核 S-3)。apt/dpkg 有系統層的獨佔鎖(/var/lib/dpkg/lock),兩個
+	// 安裝請求同時打進來會撞鎖、第二個以難懂的錯誤失敗。用一個 atomic 旗標
+	// 讓同一時間只跑一個安裝,後到的請求直接回 409,而不是讓它去撞 dpkg 鎖。
+	doctorInstalling atomic.Bool
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -298,7 +305,10 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	// ManifestURL 之前,啟動這個 goroutine 本身不會產生任何網路流量,
 	// 使用者之後透過 Web UI 設定/清空更新來源網址也不需要重啟 gonasd
 	// 才會生效。
-	s.updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
+	// 用 selfupdate.NewHTTPClient(而不是自己 new 一個 &http.Client{}),
+	// 才會帶上 secureRedirect —— 擋掉「https 起手、302 降級到 http」的
+	// 重導向 MITM,requireHTTPS 只驗初始 URL 不夠(見 secureRedirect)。
+	s.updateHTTPClient = selfupdate.NewHTTPClient(updateHTTPTimeout)
 	s.restartRequested = make(chan string, 1)
 	s.updateChecker = selfupdate.NewChecker(logger)
 	s.updateChecker.Start(context.Background(), updateCheckInterval, version.Version, func() string {

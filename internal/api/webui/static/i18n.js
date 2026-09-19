@@ -1272,6 +1272,7 @@ const errorMap = {
   "password is required": { "zh-Hant": "必須填寫密碼。", "zh-Hans": "必须填写密码。", "en": "Password is required." },
   "password must not contain control characters or line breaks": { "zh-Hant": "密碼不能包含換行或控制字元。", "zh-Hans": "密码不能包含换行或控制字符。", "en": "Password must not contain control characters or line breaks." },
   "that package is not in the installable optional-dependency list": { "zh-Hant": "這個套件不在可一鍵安裝的清單裡。", "zh-Hans": "这个软件包不在可一键安装的清单里。", "en": "That package is not in the installable list." },
+  "a package install is already in progress, please wait for it to finish": { "zh-Hant": "已經有一個套件正在安裝,請等它裝完再試。", "zh-Hans": "已经有一个软件包正在安装,请等它装完再试。", "en": "A package install is already in progress — please wait for it to finish." },
   "to turn off your own two-factor authentication, use the disable option (which asks for your password)": { "zh-Hant": "要關掉自己的兩步驟驗證,請用「停用」(需要輸入密碼),不是這個管理動作。", "zh-Hans": "要关闭自己的两步验证,请用「停用」(需要输入密码),不是这个管理操作。", "en": "To turn off your own two-factor authentication, use the disable option (which asks for your password)." },
   // 第三十輪覆核(資深 UI 設計師)抓到:後端這些「尚未設定」的提示原本帶著
   // 給工程師看的 REST 路徑尾巴(": PUT /api/... first"),直接漏到使用者畫面上。

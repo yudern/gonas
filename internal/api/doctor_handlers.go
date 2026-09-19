@@ -24,6 +24,10 @@ type doctorInstallRequest struct {
 // 任意 apt install 注入的關鍵。
 var errPackageNotInstallable = errors.New("that package is not in the installable optional-dependency list")
 
+// errInstallInProgress 是固定英文錯誤(前端 errorMap 翻譯):已經有一個
+// 一鍵安裝在跑,同一時間只允許一個(見 Server.doctorInstalling)。
+var errInstallInProgress = errors.New("a package install is already in progress, please wait for it to finish")
+
 // handleDoctorInstall 用 apt 一鍵補裝一個選用套件(修掉「原廠映像沒裝
 // mergerfs/snapraid/samba/docker,新手在嚮導建立儲存池那一步卡死、而文件叫
 // 他去的 Doctor 頁面又不存在」這個第三十輪覆核抓到的最大產品阻斷)。
@@ -37,6 +41,16 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errPackageNotInstallable)
 		return
 	}
+
+	// single-flight(第五十二輪覆核 S-3):同一時間只允許一個安裝在跑。
+	// CompareAndSwap 搶不到就代表已經有一個在裝,直接回 409,不要放兩個
+	// apt-get 去撞 dpkg 的獨佔鎖(那會讓第二個以難懂的鎖錯誤失敗)。搶到的
+	// 那個在函式結束時把旗標放回 false。
+	if !s.doctorInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errInstallInProgress)
+		return
+	}
+	defer s.doctorInstalling.Store(false)
 
 	// 刻意用「跟 HTTP 請求脫鉤」的 context:apt 安裝可能要跑好幾分鐘,若綁在
 	// r.Context() 上,使用者一關瀏覽器/連線一斷就會把 apt 半路砍掉,可能讓

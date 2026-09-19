@@ -2731,7 +2731,10 @@ function renderTOTPSection(enabled) {
       <p style="margin:0 0 12px"><span class="pill ok">${esc(t("security.totpEnabledPill"))}</span></p>
       <div id="totp-msg"></div>
       <div id="totp-recovery-area"></div>
-      <div class="btn-row" style="margin:0 0 16px"><button type="button" class="secondary" id="totp-regen">${esc(t("security.recoveryRegenerate"))}</button></div>
+      <form class="stacked" id="totp-regen-form" style="margin:0 0 16px">
+        <div class="field"><label>${esc(t("security.totpCurrentPassword"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
+        <div class="btn-row"><button type="submit" class="secondary" id="totp-regen">${esc(t("security.recoveryRegenerate"))}</button></div>
+      </form>
       <form class="stacked" id="totp-disable-form">
         <div class="field"><label>${esc(t("security.totpCurrentPassword"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
         <div class="btn-row"><button type="submit" class="danger">${esc(t("security.totpDisable"))}</button></div>
@@ -2785,13 +2788,17 @@ function attachTOTPHandlers(el) {
     });
   }
 
-  const regenBtn = el.querySelector("#totp-regen");
-  if (regenBtn) {
-    regenBtn.addEventListener("click", async () => {
+  const regenForm = el.querySelector("#totp-regen-form");
+  if (regenForm) {
+    regenForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
       const box = el.querySelector("#totp-msg");
+      const f = new FormData(ev.target);
       if (!confirm(t("security.recoveryRegenConfirm"))) return;
       try {
-        const res = await api.totpRegenerateRecoveryCodes();
+        // 第五十二輪覆核 S-4:重新產生救援碼跟停用 2FA 同級敏感,後端會要求
+        // 重新驗證密碼,所以這裡把密碼一起送出。
+        const res = await api.totpRegenerateRecoveryCodes(f.get("password"));
         const codes = (res && res.recoveryCodes) || [];
         const area = el.querySelector("#totp-recovery-area");
         if (area) {
@@ -2799,6 +2806,7 @@ function attachTOTPHandlers(el) {
           const done = area.querySelector("#recovery-done");
           if (done) done.addEventListener("click", () => { area.innerHTML = ""; });
         }
+        regenForm.reset();
       } catch (err) {
         if (box) box.innerHTML = msg("error", err.message);
       }
