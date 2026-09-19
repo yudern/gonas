@@ -638,9 +638,20 @@ async function renderSetupWizard(el) {
   return wizardDone(el);
 }
 
-function wizardWelcome(el) {
+async function wizardWelcome(el) {
+  // 第五十二輪(二次覆核 P-2):嚮導要「知道」缺不缺套件。原廠映像可能還沒裝
+  // mergerfs/snapraid(建池要)、samba(共享要),不先提醒就往下走,會在後面
+  // 「看起來成功、其實沒生效」。這裡開場就檢查,缺的話指路到系統診斷一鍵補裝。
+  const deps = await api.doctorStatus().catch(() => []);
+  const wanted = ["mergerfs", "snapraid", "samba"];
+  const missing = (deps || []).filter((d) => wanted.includes(d.key) && !d.installed);
+  const depNote = missing.length ? `
+    <div class="card" style="border-color:var(--warn);background:var(--warn-soft);margin-top:12px">
+      <p style="margin:0 0 10px;font-size:12.5px">${esc(t("setup.depsMissing", { names: missing.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
+      <div class="btn-row"><a href="#/doctor"><button type="button">${esc(t("doctor.dashButton"))}</button></a></div>
+    </div>` : "";
   el.innerHTML = wizardShell(
-    `<h2>${esc(t("setup.welcomeTitle"))}</h2><p style="color:var(--text-dim)">${t("setup.welcomeBody")}</p>`,
+    `<h2>${esc(t("setup.welcomeTitle"))}</h2><p style="color:var(--text-dim)">${t("setup.welcomeBody")}</p>${depNote}`,
     { next: true, nextLabel: t("setup.start"), skip: true, skipLabel: t("setup.skipAll") }
   );
   el.querySelector("[data-wz-next]").addEventListener("click", () => wizardGo(el, 1));
@@ -799,8 +810,15 @@ async function wizardShare(el) {
     };
     const box = el.querySelector("#wz-share-msg");
     try {
-      await api.createShare(share);
-      wizardGo(el, 4);
+      const res = await api.createShare(share);
+      // 第五十二輪(二次覆核 P-2):不要在「其實沒套用成功」時假裝成功。後端
+      // 在 samba 沒裝時會回 {applied:false, warning},共享設定有存、但 Windows
+      // 還連不上。這時顯示警告 + 指路到系統診斷裝 samba,不自動衝到「完成」。
+      if (res && res.applied === false) {
+        box.innerHTML = msg("warn", t("setup.shareSavedNotApplied") + " " + t("setup.installViaDoctor"));
+      } else {
+        wizardGo(el, 4);
+      }
     } catch (err) {
       box.innerHTML = msg("error", err.message);
     }
