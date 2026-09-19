@@ -55,6 +55,75 @@ var Checks = []Check{
 	{Command: "rsync", Feature: "備份(硬連結輪替快照)"},
 }
 
+// --- 套件層級(給 Web「系統診斷 / Doctor」頁面 + 一鍵安裝用)-----------
+//
+// Checks 是「指令」層級(給 CLI -check-deps 的文字報告),但一鍵安裝要的是
+// 「apt 套件」層級:一個套件(samba)通常提供多個指令(smbd/testparm/…)。
+// OptionalPackages 把 GoNAS 的選用外部相依整理成「可安裝的套件」單位,每個
+// 套件全部指令都找得到才算裝好。刻意只收「選用、且真的能用 apt 一鍵補裝」
+// 的套件 —— useradd/lsblk 這種屬於系統基礎套件(passwd/util-linux)、幾乎
+// 一定已存在,不放進一鍵安裝清單。
+//
+// Key 是穩定識別碼,給前端 i18n 對照顯示名稱/說明用(後端不回中文字串,
+// 維持三語介面各自在地化)。Apt 是 `apt-get install` 的套件名,同時也是
+// 一鍵安裝的「白名單」—— 只有出現在這份清單裡的套件名才准安裝,避免
+// 「一鍵安裝」變成任意 apt install 注入。
+type OptionalPackage struct {
+	Key      string   `json:"key"`
+	Apt      string   `json:"apt"`
+	Commands []string `json:"commands"`
+}
+
+// OptionalPackages 的每個指令都必須跟 Checks 裡列的一致(同一份事實)。
+var OptionalPackages = []OptionalPackage{
+	{Key: "smartmontools", Apt: "smartmontools", Commands: []string{"smartctl"}},
+	{Key: "mergerfs", Apt: "mergerfs", Commands: []string{"mergerfs"}},
+	{Key: "snapraid", Apt: "snapraid", Commands: []string{"snapraid"}},
+	{Key: "samba", Apt: "samba", Commands: []string{"smbd", "testparm", "smbcontrol", "smbpasswd"}},
+	{Key: "nfs", Apt: "nfs-kernel-server", Commands: []string{"exportfs"}},
+	{Key: "wireguard", Apt: "wireguard-tools", Commands: []string{"wg", "wg-quick"}},
+	{Key: "rsync", Apt: "rsync", Commands: []string{"rsync"}},
+	{Key: "docker", Apt: "docker.io", Commands: []string{"docker"}},
+}
+
+// PackageStatus 是一個 OptionalPackage 檢查後的狀態。
+type PackageStatus struct {
+	OptionalPackage
+	Installed bool     `json:"installed"`
+	Missing   []string `json:"missing"` // 缺哪些指令(Installed 為 false 時才有意義)
+}
+
+// RunPackages 逐一檢查 OptionalPackages 裡每個套件的指令是否都存在。
+func RunPackages() []PackageStatus {
+	out := make([]PackageStatus, 0, len(OptionalPackages))
+	for _, p := range OptionalPackages {
+		var missing []string
+		for _, cmd := range p.Commands {
+			if _, err := exec.LookPath(cmd); err != nil {
+				missing = append(missing, cmd)
+			}
+		}
+		out = append(out, PackageStatus{
+			OptionalPackage: p,
+			Installed:       len(missing) == 0,
+			Missing:         missing,
+		})
+	}
+	return out
+}
+
+// IsInstallable 回報 apt 是不是 OptionalPackages 白名單裡的套件名 —— 一鍵
+// 安裝只准安裝這份清單裡的套件,擋掉把任意套件名(甚至帶參數的字串)送進
+// apt-get 的可能。
+func IsInstallable(apt string) bool {
+	for _, p := range OptionalPackages {
+		if p.Apt == apt {
+			return true
+		}
+	}
+	return false
+}
+
 // Result 是一個 Check 實際檢查後的結果。
 type Result struct {
 	Check

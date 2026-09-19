@@ -1,5 +1,5 @@
 import { api, setUnauthorizedHandler } from "/api.js";
-import { t, getLocale, setLocale, translateNotice } from "/i18n.js";
+import { t, getLocale, setLocale, translateNotice, translateError } from "/i18n.js";
 
 const content = document.getElementById("content");
 const navLinks = document.querySelectorAll(".nav-list a");
@@ -18,6 +18,7 @@ const routes = {
   monitor: renderMonitor,
   security: renderSecurity,
   backup: renderBackup,
+  doctor: renderDoctor,
 };
 
 // 跟後端 internal/api.monitorPollInterval 一致，純粹用來在頁面文字上
@@ -279,13 +280,15 @@ function showSetupGate() {
 // ---------- 儀表板 ----------
 
 async function renderDashboard(el) {
-  const [health, version, dockerStatus, disks, arrayStatus, me, update] = await Promise.all([
+  const [health, version, dockerStatus, disks, arrayStatus, me, update, deps] = await Promise.all([
     api.health(), api.version(), api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unknown" })),
     api.me().catch(() => ({ role: "" })),
     api.systemUpdate().catch(() => null),
+    api.doctorStatus().catch(() => []),
   ]);
   const isAdmin = me.role === "admin";
+  const missingDeps = (deps || []).filter((d) => !d.installed);
 
   el.innerHTML = `
     <h1>${esc(t("dashboard.title"))}</h1>
@@ -296,7 +299,13 @@ async function renderDashboard(el) {
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
-    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: dockerStatus.error || t("dashboard.unknownReason") })) : ""}
+    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) : ""}
+    ${missingDeps.length ? `
+    <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
+      ${h2i("stethoscope", esc(t("doctor.dashTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("doctor.dashBody", { n: missingDeps.length, names: missingDeps.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
+      <div class="btn-row"><a href="#/doctor"><button type="button">${esc(t("doctor.dashButton"))}</button></a></div>
+    </div>` : ""}
     ${arrayStatus.state === "unconfigured" ? `
     <div class="card" style="border-color:var(--accent);background:var(--accent-soft)">
       ${h2i("sliders", esc(t("setup.ctaTitle")))}
@@ -552,6 +561,7 @@ const SECTION_ICONS = {
   backup: '<path d="M3 4.5h14v3H3z"/><path d="M4.5 7.5v8.5h11V7.5"/><path d="M8 11h4"/>',
   power: '<path d="M10 2.5v7"/><path d="M6 5.2a6 6 0 1 0 8 0"/>',
   battery: '<rect x="2.5" y="6.5" width="13" height="7" rx="1.5"/><path d="M17 9v2"/><rect x="4" y="8" width="7" height="4" rx="0.6" fill="currentColor" stroke="none"/>',
+  stethoscope: '<path d="M5 3v4a3 3 0 0 0 6 0V3"/><path d="M8 13v-2"/><path d="M8 13a4.5 4.5 0 0 0 4.5 4.5c2.2 0 3.5-1.6 3.5-3.7"/><circle cx="16" cy="11.5" r="2"/>',
 };
 
 // h2i:帶圖示的區塊標題。label 必須是「已跳脫」的字串(呼叫端照舊傳
@@ -1385,7 +1395,7 @@ async function renderApps(el) {
   el.innerHTML = `
     <h1>${esc(t("apps.title"))}</h1>
     <p class="page-subtitle">${esc(t("apps.subtitle"))}</p>
-    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: dockerStatus.error || "" })) : ""}
+    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) : ""}
 
     <div class="card">
       ${h2i("box", esc(t("apps.installed", { n: installed.length })))}
@@ -2989,6 +2999,74 @@ function attachBackupJobRowHandlers(el) {
           : `<p class="empty-state">${esc(t("backup.noSnapshots"))}</p>`;
       } catch (err) {
         panel.innerHTML = msg("error", err.message);
+      }
+    });
+  });
+}
+
+// renderDoctor 是「系統診斷」頁:列出每個選用外部套件裝了沒,缺的可以由
+// 管理者一鍵補裝。這修掉第三十輪覆核抓到的最大產品阻斷 —— 原廠映像沒預裝
+// mergerfs/snapraid/samba/docker,新手在嚮導「建立儲存池」那步會卡死,而
+// 先前文件叫使用者去的「Doctor 頁面」其實根本不存在。RoleViewer 看得到
+// 狀態,但只有管理者拿得到「安裝」按鈕(對應後端 requireAdmin)。
+async function renderDoctor(el) {
+  const [deps, me] = await Promise.all([
+    api.doctorStatus().catch(() => []),
+    api.me().catch(() => ({ role: "" })),
+  ]);
+  const isAdmin = me.role === "admin";
+  const missing = (deps || []).filter((d) => !d.installed);
+
+  const rows = (deps || []).map((d) => {
+    const name = t("doctor.pkg." + d.key + ".name");
+    const desc = t("doctor.pkg." + d.key + ".desc");
+    const pill = d.installed
+      ? `<span class="pill ok">${esc(t("doctor.installed"))}</span>`
+      : `<span class="pill danger">${esc(t("doctor.notInstalled"))}</span>`;
+    const action = (!d.installed && isAdmin)
+      ? `<button type="button" class="doctor-install" data-apt="${esc(d.apt)}" data-key="${esc(d.key)}">${esc(t("doctor.install"))}</button>`
+      : "";
+    return `
+      <div class="prepare-row">
+        <div>
+          <div><strong>${esc(name)}</strong> ${pill}</div>
+          <div style="color:var(--text-faint);font-size:12px;margin-top:2px">${esc(desc)} · <code>apt: ${esc(d.apt)}</code></div>
+        </div>
+        <div>${action}</div>
+      </div>`;
+  }).join("");
+
+  el.innerHTML = `
+    <h1>${esc(t("doctor.title"))}</h1>
+    <p class="page-subtitle">${esc(t("doctor.subtitle"))}</p>
+    <div class="card">
+      ${h2i("stethoscope", esc(t("doctor.sectionTitle")))}
+      ${missing.length === 0
+        ? `<p class="empty-state">${esc(t("doctor.allInstalled"))}</p>`
+        : `<p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("doctor.someMissing", { n: missing.length }))}${isAdmin ? "" : " " + esc(t("doctor.adminOnlyNote"))}</p>`}
+      ${rows}
+      <div id="doctor-msg"></div>
+    </div>
+  `;
+
+  el.querySelectorAll(".doctor-install").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const apt = btn.dataset.apt;
+      const name = t("doctor.pkg." + btn.dataset.key + ".name");
+      const box = el.querySelector("#doctor-msg");
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = t("doctor.installing");
+      if (box) box.innerHTML = msg("warn", t("doctor.installingLong", { name }));
+      try {
+        await api.doctorInstall(apt);
+        if (box) box.innerHTML = msg("ok", t("doctor.installOk", { name }));
+        // 重新整理整頁狀態(裝好的會變成「已安裝」、按鈕消失)。
+        renderDoctor(el);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = original;
+        if (box) box.innerHTML = msg("error", t("doctor.installFailed", { name, reason: err.message }));
       }
     });
   });

@@ -118,3 +118,32 @@ func TestReport_AllFound_PrintsAllInstalledMessage(t *testing.T) {
 		t.Errorf("did not expect a missing-dependencies summary when everything is installed, got: %s", buf.String())
 	}
 }
+
+func TestRunPackages_ReturnsAllOptionalPackages(t *testing.T) {
+	pkgs := RunPackages()
+	if len(pkgs) != len(OptionalPackages) {
+		t.Fatalf("expected %d packages, got %d", len(OptionalPackages), len(pkgs))
+	}
+	for _, p := range pkgs {
+		if p.Key == "" || p.Apt == "" || len(p.Commands) == 0 {
+			t.Errorf("package has empty key/apt/commands: %+v", p)
+		}
+		// Installed 必須跟 Missing 一致
+		if p.Installed && len(p.Missing) != 0 {
+			t.Errorf("%s marked installed but has missing commands %v", p.Key, p.Missing)
+		}
+	}
+}
+
+func TestIsInstallable(t *testing.T) {
+	for _, ok := range []string{"samba", "mergerfs", "docker.io", "wireguard-tools"} {
+		if !IsInstallable(ok) {
+			t.Errorf("IsInstallable(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "evil", "samba; rm -rf /", "sambaa", "SAMBA", "docker"} {
+		if IsInstallable(bad) {
+			t.Errorf("IsInstallable(%q) = true, want false", bad)
+		}
+	}
+}

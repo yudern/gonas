@@ -378,6 +378,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/system/update/check", s.requireAdmin(s.handleSystemUpdateCheck))
 	mux.HandleFunc("POST /api/v1/system/power/shutdown", s.requireAdmin(s.handleSystemPowerShutdown))
 	mux.HandleFunc("POST /api/v1/system/power/reboot", s.requireAdmin(s.handleSystemPowerReboot))
+	mux.HandleFunc("GET /api/v1/system/doctor", s.requireAuth(s.handleDoctorStatus))
+	mux.HandleFunc("POST /api/v1/system/doctor/install", s.requireAdmin(s.handleDoctorInstall))
 
 	mux.HandleFunc("GET /api/v1/ups/status", s.requireAuth(s.handleUPSStatus))
 	mux.HandleFunc("GET /api/v1/ups/list", s.requireAuth(s.handleUPSList))

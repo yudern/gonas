@@ -56,6 +56,9 @@ export const api = {
   powerShutdown: () => request("POST", "/api/v1/system/power/shutdown"),
   powerReboot: () => request("POST", "/api/v1/system/power/reboot"),
 
+  doctorStatus: () => request("GET", "/api/v1/system/doctor"),
+  doctorInstall: (apt) => request("POST", "/api/v1/system/doctor/install", { apt }),
+
   upsStatus: () => request("GET", "/api/v1/ups/status"),
   upsList: () => request("GET", "/api/v1/ups/list"),
   upsConfig: () => request("GET", "/api/v1/ups/config"),

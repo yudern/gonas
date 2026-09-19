@@ -30,7 +30,7 @@ const dict = {
   "zh-Hant": {
     nav: {
       dashboard: "儀表板", storage: "儲存", files: "檔案", apps: "應用程式",
-      shares: "共享", users: "使用者", monitor: "監控", backup: "備份", security: "安全",
+      shares: "共享", users: "使用者", monitor: "監控", backup: "備份", security: "安全", doctor: "系統診斷",
       logout: "登出",
     },
     common: {
@@ -154,6 +154,34 @@ const dict = {
       runtimeThreshold: "續航門檻(秒)",
       runtimeThresholdHint: "預估續航低於這個秒數就關機。0 = 只在 NUT 回報「電量過低(LB)」時才關。",
       saved: "UPS 設定已儲存。",
+    },
+    doctor: {
+      title: "系統診斷",
+      subtitle: "GoNAS 本體開機就能用,但陣列、分享、VPN、備份、SMART、Docker 這些功能各自需要對應的系統套件。這裡看得到每個選用套件裝了沒,缺的可以直接一鍵補裝。",
+      sectionTitle: "選用套件",
+      installed: "已安裝",
+      notInstalled: "未安裝",
+      install: "安裝",
+      installing: "安裝中…",
+      installingLong: "正在安裝「{name}」,可能需要幾分鐘,請不要關閉這個頁面…",
+      installOk: "「{name}」已安裝完成。",
+      installFailed: "安裝「{name}」失敗:{reason}",
+      allInstalled: "所有選用套件都已安裝。",
+      someMissing: "有 {n} 個選用套件尚未安裝 —— 對應功能要裝了才能用。",
+      adminOnlyNote: "(只有管理者能安裝)",
+      dashTitle: "有選用套件尚未安裝",
+      dashBody: "還缺 {n} 個套件({names}),對應功能要裝了才能用。到「系統診斷」一鍵補裝。",
+      dashButton: "前往系統診斷",
+      pkg: {
+        smartmontools: { name: "SMART 健康檢查", desc: "讀取硬碟 SMART 資訊、預警硬碟故障" },
+        mergerfs: { name: "儲存池(mergerFS)", desc: "把多顆資料碟合併成一個大空間" },
+        snapraid: { name: "同位校驗(SnapRAID)", desc: "用同位碟保護資料、可還原壞掉的檔案" },
+        samba: { name: "SMB 檔案分享(Samba)", desc: "讓 Windows/Mac 透過網路存取共享資料夾" },
+        nfs: { name: "NFS 檔案分享", desc: "讓 Linux/Unix 透過 NFS 掛載共享" },
+        wireguard: { name: "WireGuard VPN", desc: "在外面也能安全連回這台 NAS" },
+        rsync: { name: "備份(rsync)", desc: "硬連結輪替快照備份" },
+        docker: { name: "Docker 應用", desc: "應用商店與容器功能" },
+      },
     },
     files: {
       title: "檔案",
@@ -388,7 +416,7 @@ const dict = {
   "zh-Hans": {
     nav: {
       dashboard: "仪表盘", storage: "存储", files: "文件", apps: "应用",
-      shares: "共享", users: "用户", monitor: "监控", backup: "备份", security: "安全",
+      shares: "共享", users: "用户", monitor: "监控", backup: "备份", security: "安全", doctor: "系统诊断",
       logout: "退出登录",
     },
     common: {
@@ -512,6 +540,34 @@ const dict = {
       runtimeThreshold: "续航阈值(秒)",
       runtimeThresholdHint: "预估续航低于这个秒数就关机。0 = 只在 NUT 报告「电量过低(LB)」时才关。",
       saved: "UPS 设置已保存。",
+    },
+    doctor: {
+      title: "系统诊断",
+      subtitle: "GoNAS 本体开机即可用,但阵列、分享、VPN、备份、SMART、Docker 这些功能各自需要对应的系统软件包。这里可以看到每个可选软件包装了没,缺的可以一键补装。",
+      sectionTitle: "可选软件包",
+      installed: "已安装",
+      notInstalled: "未安装",
+      install: "安装",
+      installing: "安装中…",
+      installingLong: "正在安装「{name}」,可能需要几分钟,请不要关闭此页面…",
+      installOk: "「{name}」已安装完成。",
+      installFailed: "安装「{name}」失败:{reason}",
+      allInstalled: "所有可选软件包都已安装。",
+      someMissing: "有 {n} 个可选软件包尚未安装 —— 对应功能装了才能用。",
+      adminOnlyNote: "(只有管理员能安装)",
+      dashTitle: "有可选软件包尚未安装",
+      dashBody: "还缺 {n} 个软件包({names}),对应功能装了才能用。到「系统诊断」一键补装。",
+      dashButton: "前往系统诊断",
+      pkg: {
+        smartmontools: { name: "SMART 健康检查", desc: "读取硬盘 SMART 信息、预警硬盘故障" },
+        mergerfs: { name: "存储池(mergerFS)", desc: "把多块数据盘合并成一个大空间" },
+        snapraid: { name: "校验(SnapRAID)", desc: "用校验盘保护数据、可还原损坏的文件" },
+        samba: { name: "SMB 文件分享(Samba)", desc: "让 Windows/Mac 通过网络访问共享文件夹" },
+        nfs: { name: "NFS 文件分享", desc: "让 Linux/Unix 通过 NFS 挂载共享" },
+        wireguard: { name: "WireGuard VPN", desc: "在外面也能安全连回这台 NAS" },
+        rsync: { name: "备份(rsync)", desc: "硬链接轮替快照备份" },
+        docker: { name: "Docker 应用", desc: "应用商店与容器功能" },
+      },
     },
     files: {
       title: "文件",
@@ -746,7 +802,7 @@ const dict = {
   "en": {
     nav: {
       dashboard: "Dashboard", storage: "Storage", files: "Files", apps: "Apps",
-      shares: "Shares", users: "Users", monitor: "Monitor", backup: "Backup", security: "Security",
+      shares: "Shares", users: "Users", monitor: "Monitor", backup: "Backup", security: "Security", doctor: "System Doctor",
       logout: "Log out",
     },
     common: {
@@ -870,6 +926,34 @@ const dict = {
       runtimeThreshold: "Runtime threshold (seconds)",
       runtimeThresholdHint: "Shut down when estimated runtime drops below this many seconds. 0 = only when NUT reports low battery (LB).",
       saved: "UPS settings saved.",
+    },
+    doctor: {
+      title: "System Doctor",
+      subtitle: "GoNAS itself runs out of the box, but the array, sharing, VPN, backup, SMART, and Docker features each need their own system package. This page shows what's installed and lets you add the missing ones with one click.",
+      sectionTitle: "Optional packages",
+      installed: "Installed",
+      notInstalled: "Not installed",
+      install: "Install",
+      installing: "Installing…",
+      installingLong: "Installing “{name}” — this can take a few minutes, please keep this page open…",
+      installOk: "“{name}” installed successfully.",
+      installFailed: "Installing “{name}” failed: {reason}",
+      allInstalled: "All optional packages are installed.",
+      someMissing: "{n} optional package(s) are not installed yet — the matching features need them.",
+      adminOnlyNote: "(only an admin can install)",
+      dashTitle: "Some optional packages aren't installed",
+      dashBody: "{n} package(s) missing ({names}). The matching features need them — install them from System Doctor.",
+      dashButton: "Open System Doctor",
+      pkg: {
+        smartmontools: { name: "SMART health checks", desc: "Read drive SMART data and warn about failing disks" },
+        mergerfs: { name: "Storage pool (mergerFS)", desc: "Combine several data disks into one big space" },
+        snapraid: { name: "Parity (SnapRAID)", desc: "Protect data with parity and restore damaged files" },
+        samba: { name: "SMB sharing (Samba)", desc: "Let Windows/Mac reach shared folders over the network" },
+        nfs: { name: "NFS sharing", desc: "Let Linux/Unix mount shares over NFS" },
+        wireguard: { name: "WireGuard VPN", desc: "Securely reach this NAS from outside" },
+        rsync: { name: "Backups (rsync)", desc: "Hard-link rotating snapshot backups" },
+        docker: { name: "Docker apps", desc: "App store and container features" },
+      },
     },
     files: {
       title: "Files",
@@ -1124,6 +1208,7 @@ const errorMap = {
   "no user with that username": { "zh-Hant": "找不到這個使用者名稱。", "zh-Hans": "找不到这个用户名。", "en": "No user with that username." },
   "password is required": { "zh-Hant": "必須填寫密碼。", "zh-Hans": "必须填写密码。", "en": "Password is required." },
   "password must not contain control characters or line breaks": { "zh-Hant": "密碼不能包含換行或控制字元。", "zh-Hans": "密码不能包含换行或控制字符。", "en": "Password must not contain control characters or line breaks." },
+  "that package is not in the installable optional-dependency list": { "zh-Hant": "這個套件不在可一鍵安裝的清單裡。", "zh-Hans": "这个软件包不在可一键安装的清单里。", "en": "That package is not in the installable list." },
   // 第三十輪覆核(資深 UI 設計師)抓到:後端這些「尚未設定」的提示原本帶著
   // 給工程師看的 REST 路徑尾巴(": PUT /api/... first"),直接漏到使用者畫面上。
   // 這裡收成乾淨的在地化句子;translateError 也另有 fallback 會把未收錄錯誤的
@@ -1430,10 +1515,12 @@ export function t(key, vars) {
 const errorPatterns = [
   {
     re: /docker daemon|dockerd|docker\.sock/i,
+    // 刻意不帶結尾標點:這句常被嵌進 dashboard/apps 的 dockerWarn 模板句子裡
+    // (模板自己會補標點),不留句號才不會出現「未啟動。。」這種雙標點。
     msg: {
-      "zh-Hant": "Docker 尚未安裝或未啟動。",
-      "zh-Hans": "Docker 尚未安装或未启动。",
-      "en": "Docker is not installed or not running.",
+      "zh-Hant": "Docker 尚未安裝或未啟動",
+      "zh-Hans": "Docker 尚未安装或未启动",
+      "en": "Docker is not installed or not running",
     },
   },
 ];
