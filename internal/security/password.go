@@ -20,6 +20,7 @@ import (
 	"hash"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // pbkdf2Iterations 是 PBKDF2-HMAC-SHA256 的疊代次數。OWASP 密碼儲存指引
@@ -45,6 +46,30 @@ func HashPassword(password string) (string, error) {
 	}
 	key := pbkdf2HMACSHA256(password, salt, pbkdf2Iterations, keyLen)
 	return fmt.Sprintf("pbkdf2-sha256$%d$%s$%s", pbkdf2Iterations, hex.EncodeToString(salt), hex.EncodeToString(key)), nil
+}
+
+// dummyVerify 相關:第三十輪覆核(資深安全工程師)指出登入有「使用者名稱
+// 枚舉的時序側信道」——帳號不存在時 handler 立刻回,帳號存在時要跑 210k 次
+// PBKDF2(數十毫秒),回應時間差可被拿來枚舉哪些帳號存在,即使錯誤訊息一致
+// 也沒用。DummyVerify 讓「帳號不存在」的路徑也付出一次等量的 PBKDF2 成本。
+var (
+	dummyOnce sync.Once
+	dummyHash string
+)
+
+// DummyVerify 對 password 做一次跟 VerifyPassword 等量的 PBKDF2 運算後丟棄
+// 結果,唯一目的是拉平「帳號存在 vs 不存在」的登入回應時間。第一次呼叫會
+// 順便算出一組固定的假雜湊(sync.Once,不佔開機/匯入成本),之後每次都只做
+// 一次跟真實驗證同樣成本的 VerifyPassword。
+func DummyVerify(password string) {
+	dummyOnce.Do(func() {
+		if h, err := HashPassword("gonas-login-timing-equalizer"); err == nil {
+			dummyHash = h
+		}
+	})
+	if dummyHash != "" {
+		_, _ = VerifyPassword(password, dummyHash)
+	}
 }
 
 // VerifyPassword 檢查明文密碼是不是跟 HashPassword 產生的編碼字串相符。

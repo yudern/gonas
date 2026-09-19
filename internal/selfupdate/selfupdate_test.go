@@ -530,3 +530,17 @@ func TestChecker_RunsRepeatedlyAndStopsCleanly(t *testing.T) {
 		t.Errorf("expected no further checks after Stop(), count went from %d to %d", after, got)
 	}
 }
+
+// 第三十輪覆核回歸:跨網路的明文 http 更新來源必須被拒絕(loopback 除外,
+// 由既有的 httptest 測試涵蓋)。
+func TestFetchManifest_RejectsPlaintextNonLoopback(t *testing.T) {
+	if _, err := FetchManifest(context.Background(), http.DefaultClient, "http://example.com/manifest.json"); err == nil {
+		t.Fatal("expected FetchManifest to reject a plaintext non-loopback http URL")
+	}
+}
+
+func TestDownloadAndVerify_RejectsPlaintextNonLoopback(t *testing.T) {
+	if _, err := DownloadAndVerify(context.Background(), http.DefaultClient, Asset{URL: "http://example.com/bin", SHA256: "x"}, t.TempDir()); err == nil {
+		t.Fatal("expected DownloadAndVerify to reject a plaintext non-loopback http URL")
+	}
+}

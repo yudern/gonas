@@ -83,3 +83,21 @@ func TestLoginLimiter_AllowDoesNotMutateState(t *testing.T) {
 		}
 	}
 }
+
+// 第三十輪覆核回歸:未達鎖定門檻、閒置超過一個鎖定週期的項目要被清掉,
+// 不能讓「每個來源送一次失敗」把 map 無上限撐大。
+func TestLoginLimiter_SweepsStaleSubThresholdEntries(t *testing.T) {
+	l := NewLoginLimiter(5, 10*time.Millisecond)
+	l.RecordFailure("stale") // 只失敗一次,不會鎖定
+	if len(l.attempts) != 1 {
+		t.Fatalf("expected 1 tracked entry, got %d", len(l.attempts))
+	}
+	time.Sleep(20 * time.Millisecond)
+	l.RecordFailure("fresh") // 觸發清理,stale 應被掃掉
+	if _, ok := l.attempts["stale"]; ok {
+		t.Error("stale sub-threshold entry should have been swept")
+	}
+	if _, ok := l.attempts["fresh"]; !ok {
+		t.Error("fresh entry should still be tracked")
+	}
+}

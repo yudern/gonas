@@ -32,6 +32,7 @@ type LoginLimiter struct {
 type loginAttemptState struct {
 	failures    int
 	lockedUntil time.Time
+	lastSeen    time.Time // 最後一次活動時間,給下面的過期清理用
 }
 
 // NewLoginLimiter 建立一個節流器:同一個 key(通常是客戶端 IP)連續失敗
@@ -75,14 +76,37 @@ func (l *LoginLimiter) RecordFailure(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	now := time.Now()
 	st, ok := l.attempts[key]
 	if !ok {
 		st = &loginAttemptState{}
 		l.attempts[key] = st
 	}
 	st.failures++
+	st.lastSeen = now
 	if st.failures >= l.maxFailures {
-		st.lockedUntil = time.Now().Add(l.lockFor)
+		st.lockedUntil = now.Add(l.lockFor)
+	}
+	// 第三十輪覆核(資深安全工程師)抓到的記憶體耗盡風險:只失敗一兩次、
+	// 沒到鎖定門檻的 key(lockedUntil 為零)原本永遠不會被清掉,攻擊者從
+	// 大量來源各送一次失敗就能無上限撐大這個 map。這裡在每次記錄失敗時
+	// 順手做一次輕量清理(端點流量極低,map 很小,O(n) 掃描可忽略):
+	// 鎖定已過期的、以及閒置超過一個鎖定週期的未鎖定項,一律清掉。
+	l.sweepLocked(now)
+}
+
+// sweepLocked 清掉過期項;呼叫端必須已持有 l.mu。
+func (l *LoginLimiter) sweepLocked(now time.Time) {
+	for k, st := range l.attempts {
+		if !st.lockedUntil.IsZero() {
+			if now.After(st.lockedUntil) {
+				delete(l.attempts, k)
+			}
+			continue
+		}
+		if now.Sub(st.lastSeen) > l.lockFor {
+			delete(l.attempts, k)
+		}
 	}
 }
 

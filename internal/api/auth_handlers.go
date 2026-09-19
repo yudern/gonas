@@ -320,6 +320,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// 訊息變成「列舉出這台 NAS 上有哪些帳號」的管道。
 	admin, found := findAdmin(admins, req.Username)
 	if !found {
+		// 帳號不存在時也做一次等量的 PBKDF2(丟棄結果),拉平回應時間,
+		// 避免用「帳號存在要算雜湊、不存在秒回」的時間差枚舉帳號(第三十輪
+		// 覆核抓到的時序側信道)。
+		security.DummyVerify(req.Password)
 		s.loginLimiter.RecordFailure(ip)
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return

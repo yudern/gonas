@@ -47,6 +47,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -178,7 +179,36 @@ func ManifestSignatureEnforced() bool {
 // FetchManifest 用 client 對 manifestURL 發一個 GET 請求並解析回應的
 // JSON。client 是呼叫端注入的(而不是用 http.DefaultClient),方便測試
 // 控制逾時/傳輸行為,也讓正式呼叫端能套用專案一致的逾時設定。
+// requireHTTPS 強制更新來源用 https。第三十輪覆核(資深安全工程師)指出:
+// 沒有內嵌公鑰時 manifest 未驗簽,誰能竄改回應就能同時改 URL 與 sha256,
+// 套用時以 root 覆蓋自身並重啟 —— 所以至少要擋掉明文 http(避免區網 MITM
+// /降級),把「傳輸未受保護」這個最容易被踩的破口關掉。內嵌公鑰驗簽仍是
+// 更強的一層(見 verifyManifestSignature),兩者並存。
+//
+// 例外:明文 http 指向 loopback(localhost / 127.0.0.1 / ::1)一律放行 ——
+// 同一台機器上的流量沒有 MITM 風險,而且本機測試/自架鏡像常這樣用。真正要
+// 擋的是「跨網路的明文來源」。
+func requireHTTPS(rawurl, what string) error {
+	u, err := url.Parse(strings.TrimSpace(rawurl))
+	if err != nil {
+		return fmt.Errorf("selfupdate: %s is not a valid URL: %w", what, err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		switch u.Hostname() {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+	}
+	return fmt.Errorf("selfupdate: %s must use https:// (refusing plaintext/insecure URL)", what)
+}
+
 func FetchManifest(ctx context.Context, client *http.Client, manifestURL string) (Manifest, error) {
+	if err := requireHTTPS(manifestURL, "manifest URL"); err != nil {
+		return Manifest{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("selfupdate: building manifest request: %w", err)
@@ -278,6 +308,9 @@ const maxDownloadBytes = 200 << 20 // 200 MiB
 // 驗證失敗或任何步驟出錯時,暫存檔案會被清乾淨,不會留下未驗證、
 // 半下載的檔案佔用磁碟空間或被誤用。
 func DownloadAndVerify(ctx context.Context, client *http.Client, asset Asset, destDir string) (tempPath string, err error) {
+	if err := requireHTTPS(asset.URL, "asset URL"); err != nil {
+		return "", err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
 	if err != nil {
 		return "", fmt.Errorf("selfupdate: building download request: %w", err)

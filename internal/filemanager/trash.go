@@ -143,7 +143,23 @@ func readTrashMeta(td, id string) (trashMeta, error) {
 // 有同名的東西，拒絕執行並回傳 ErrAlreadyExists——不猜測使用者想要覆蓋
 // 還是想要保留兩者，交給使用者自己先處理掉衝突再重試。原本所在的目錄如果
 // 已經被刪掉，會重新建回來(MkdirAll)，不然使用者連復原都做不到。
+// validTrashID 擋掉會逃出回收桶目錄的 id。回收桶 id 是內部產生的
+// "<unixnano>-<檔名>",不含路徑分隔符;但 restore/delete 的 id 來自 HTTP
+// 路徑參數,是使用者可控的,若含 "/"、"\\" 或 ".." 就可能被 filepath.Join
+// 帶出 trashDir(第三十輪覆核抓到:回收桶的 id 是唯一沒走 resolve() 的
+// 檔案操作)。這裡要求 id 必須等於它自己的 basename、且不含 "..",一個
+// 乾淨的內部 id 一定通過,帶路徑的一定被擋。
+func validTrashID(id string) bool {
+	if id == "" || strings.Contains(id, "..") {
+		return false
+	}
+	return id == filepath.Base(id) && !strings.ContainsAny(id, `/\`)
+}
+
 func RestoreFromTrash(root, id string) error {
+	if !validTrashID(id) {
+		return ErrNotFound
+	}
 	td := trashDir(root)
 	meta, err := readTrashMeta(td, id)
 	if err != nil {
@@ -182,6 +198,9 @@ func RestoreFromTrash(root, id string) error {
 
 // DeleteTrashItem 永久刪除回收桶裡的單一項目(它自己的內容跟 meta 檔案)。
 func DeleteTrashItem(root, id string) error {
+	if !validTrashID(id) {
+		return ErrNotFound
+	}
 	td := trashDir(root)
 	if _, err := readTrashMeta(td, id); err != nil {
 		if os.IsNotExist(err) {

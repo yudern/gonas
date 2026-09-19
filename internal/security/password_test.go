@@ -157,3 +157,10 @@ func TestVerifyPassword_RespectsEncodedIterationCount(t *testing.T) {
 		t.Error("expected a hash encoded with a non-default iteration count to still verify correctly")
 	}
 }
+
+// DummyVerify 只要能跑完、不 panic 即可(它的用途是拉平登入時序,回傳
+// 值本身沒有意義)。
+func TestDummyVerify_RunsWithoutPanic(t *testing.T) {
+	DummyVerify("anything")
+	DummyVerify("")
+}
