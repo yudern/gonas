@@ -172,6 +172,65 @@ with tempfile.TemporaryDirectory() as d:
     check("no-logo: return code 2", rc == 2)
     check("no-logo: file left byte-identical", after == before)
 
+# --- 第三十輪覆核 Q1:microcode 前置(未壓縮 early-cpio ++ gzip 主封存) ---
+def newc_entry_crc(name, data, mode=0o100644, ino=1):
+    # 070702(CRC 格式)版的 entry,c_check = sum(data) mod 2^32
+    nb = name.encode() + b"\x00"
+    chk = sum(data) & 0xFFFFFFFF
+    hdr = b"070702"
+    hdr += b"%08x" % ino; hdr += b"%08x" % mode; hdr += b"%08x" % 0; hdr += b"%08x" % 0
+    hdr += b"%08x" % 1; hdr += b"%08x" % 0; hdr += b"%08x" % len(data); hdr += b"%08x" % 0 * 0
+    hdr += b"%08x" % 3; hdr += b"%08x" % 1; hdr += b"%08x" % 0; hdr += b"%08x" % 0
+    hdr += b"%08x" % len(nb); hdr += b"%08x" % chk
+    assert len(hdr) == 110, len(hdr)
+    o = bytearray(hdr); o += nb; o += b"\x00" * ((-(110 + len(nb))) % 4)
+    o += data; o += b"\x00" * ((-len(data)) % 4)
+    return bytes(o)
+
+def build_cpio_crc(files):
+    o = bytearray(); i = 1
+    for n, d in files:
+        o += newc_entry_crc(n, d, ino=i); i += 1
+    o += newc_entry_crc("TRAILER!!!", b"", 0, 0)
+    o += b"\x00" * ((-len(o)) % 512)
+    return bytes(o)
+
+# microcode initrd:未壓縮 early-cpio(無 logo)+ gzip(主封存含 logo)
+early = build_cpio([("kernel/x86/microcode/GenuineIntel.bin", b"MICROCODE-BLOB-DATA")])
+main = build_cpio([("./init", b"x"), ("usr/share/graphics/logo_installer.png", orig_logo)])
+with tempfile.TemporaryDirectory() as d:
+    initrd = os.path.join(d, "initrd"); logo = os.path.join(d, "g.png")
+    open(logo, "wb").write(gonas_logo)
+    open(initrd, "wb").write(early + gzip.compress(main, 9))
+    rc, replaced = rb.rebrand(initrd, logo)
+    check("microcode: return code 0 (found logo in gzip main archive)", rc == 0)
+    check("microcode: exactly one logo replaced", len(replaced) == 1)
+    raw = open(initrd, "rb").read()
+    # early microcode 段(檔頭那段未壓縮 cpio)必須原封不動、還在
+    e_ents, e_tail = rb._parse_newc(raw)
+    ebn = {x[1].decode(): x[3] for x in e_ents}
+    check("microcode: early microcode blob preserved",
+          ebn.get("kernel/x86/microcode/GenuineIntel.bin") == b"MICROCODE-BLOB-DATA")
+    # logo 應該在後面那段 gzip 主封存裡、已被換成 300x100
+    sizes = {}; rb._walk_logos(raw, sizes)
+    check("microcode: logo in main archive replaced (300x100)",
+          "usr/share/graphics/logo_installer.png" in sizes)
+
+# --- 第三十輪覆核 Q4:070702(CRC 格式)換 logo 後要重算 c_check ---
+crc_cpio = build_cpio_crc([("./init", b"x"), ("usr/share/graphics/logo_installer.png", orig_logo)])
+with tempfile.TemporaryDirectory() as d:
+    initrd = os.path.join(d, "initrd.gz"); logo = os.path.join(d, "g.png")
+    open(logo, "wb").write(gonas_logo)
+    open(initrd, "wb").write(gzip.compress(crc_cpio, 9))
+    rc, replaced = rb.rebrand(initrd, logo)
+    check("crc: return code 0", rc == 0)
+    ents, _ = rb._parse_newc(rb._gunzip_all(open(initrd, "rb").read()))
+    for hdr, name, fs, data in ents:
+        if name.decode().endswith("logo_installer.png"):
+            want = rb._newc_checksum(data)
+            got = int(hdr[102:110], 16)
+            check("crc: c_check recomputed to match new logo data", got == want)
+
 print()
 if FAIL:
     print("==> one or more rebrand-initrd test cases FAILED")

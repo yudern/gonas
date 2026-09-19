@@ -653,7 +653,8 @@ else
     # 找出所有 initrd 檔(不同版本/架構路徑不同:install.amd/gtk/initrd.gz、
     # install.a64/gtk/initrd.gz 等)。對每個都跑一次 rebrander——沒有 logo
     # 的 initrd(例如純文字安裝的那個)會回傳 2、原檔不動,無害;有 logo
-    # 的(gtk 那個)才會真的被改寫。用 -print0/read -d 處理路徑含空白。
+    # 的(gtk 那個)才會真的被改寫。initrd 路徑不含空白/換行,用 `-print`
+    # 逐行讀即可;`while IFS= read -r` 也已能正確處理含空白的路徑。
     GTK_LOGO_REPLACED=0
     INITRD_FOUND=0
     # shellcheck disable=SC2044

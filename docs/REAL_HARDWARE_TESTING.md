@@ -2675,6 +2675,35 @@ QA:`sh -n` build-iso.sh 過、`test-rebrand-installer-initrd.py` 15 項全過、
 第 5c 迴圈用假 ISO 樹(gtk initrd 有 logo + 文字 initrd 無 logo)實跑驗證
 「1 of 2 換到、文字 initrd 不動」、其餘 appliance 測試全過;Go 未動。
 
+**第五十輪(全鏈路覆核修復,依價值一步步做完)**:依第三十輪四角色覆核,
+一步一步修掉:S1 chpasswd 換行注入(可改 root 密碼)、S5 自更新強制 https、
+Q6 登入時序側信道、S7 登入限流 map 無上限、S8 回收桶 id 路徑防護、U1 後端
+英文錯誤不再漏到畫面、S2 Web「系統診斷」頁 + 一鍵安裝(修最大產品阻斷)、
+S4 2FA 救援碼 + 管理員重設 + TOTP 防重放、P3 儲存池嚮導改視覺化硬碟選擇器、
+U2/U3/U6/U10 UI 精修(表單寬度、監控頁收合 7300→2055px、對比度、安裝鈕)。
+
+其中「安裝器 logo 改圖」邏輯(`lib/rebrand-installer-initrd.py`)這一輪再補強
+(第三十輪覆核 Q1–Q4):
+- Q1:改成遞迴處理「串接的多段 initrd」——真實 x86 initrd 常是「未壓縮
+  microcode early-cpio ++ gzip 主封存」,舊版只解析第一段就把其餘丟進 tail
+  不看,會靜默漏掉主封存裡的 logo、出貨未改圖的安裝器。現在每一段都會走到。
+- Q2/Q3:自我檢查改成「把產生的檔案整個再走一遍,確認每個換過的 logo 的
+  位元組長度就是新 PNG 的長度」(舊的條件寫死永遠不觸發、又比錯對象)。
+- Q4:070702(CRC 格式)換 logo 後重算 c_check(位元組 102:110,先前一版
+  甚至寫錯成 100:110 會踩壞 namesize——這輪一併修對)。
+- Q9:修正第 5c 步一處與實作不符的註解。
+- test-rebrand-installer-initrd.py 擴充到 21 項:新增 microcode 前置(logo 在
+  gzip 主封存裡)整段驗證、以及 CRC 格式 c_check 重算驗證;測試總結移到檔尾,
+  確保後段測試失敗也會讓整個測試 exit 1(先前總結印在中間,後段失敗不會擋)。
+
+**沙盒無法驗證的仍是同一件**:改完的 initrd 能不能在真機開起圖形安裝器,只有
+QEMU/真機開機才知道(拆-換-打包的邏輯本身現在有 21 項 byte-level 測試撐著,
+但真機開機是唯一能證明的地方)。
+
+QA:`sh -n` build-iso.sh 過、6 支 appliance shell 測試全過、
+`test-rebrand-installer-initrd.py` 21 項全過(含 microcode/CRC);Go 全鏈路
+`go test ./... -race` 前幾輪已全綠、這輪未動 Go。
+
 ## 各個環節目前的 log 覆蓋現況(使用者要求列出來)
 
 | 環節 | 執行環境 | log 去哪裡 | 現況 |

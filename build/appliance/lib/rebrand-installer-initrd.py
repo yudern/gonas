@@ -103,24 +103,41 @@ def _parse_newc(data):
     return entries, tail
 
 
-def _emit_newc(entries, tail):
+def _newc_checksum(data):
+    """newc「CRC」格式(magic 070702)的 c_check 欄位定義:所有檔案資料位元組
+    相加後對 2^32 取模(不是真的 CRC)。換掉 logo 資料後要重算,否則會產出
+    checksum 對不上的壞封存(第三十輪覆核 Q4)。"""
+    return sum(data) & 0xFFFFFFFF
+
+
+def _emit_entries(entries):
+    """把一串 entry 重新序列化成一段 newc cpio(不含尾端 tail)。只改寫會變動
+    的欄位(filesize;CRC 格式再加 c_check),其餘 header 位元組原封不動,確保
+    沒被改到的項目 byte-for-byte 一模一樣。"""
     out = bytearray()
     for header, clean_name, filesize, filedata in entries:
         name = clean_name + b"\x00"
         namesize = len(name)
-        # 只改寫 filesize 欄位(位元組 54:62),其餘 header 位元組原封不動,
-        # 確保非 logo 的項目 byte-for-byte 一模一樣。大小寫沿用原欄位。
         new_fs = len(filedata)
         fs_field = header[54:62]
         fmt = ("%08x" if fs_field == fs_field.lower() else "%08X")
-        patched = header[:54] + (fmt % new_fs).encode("ascii") + header[62:]
-        out += patched
+        patched = bytearray(header)
+        patched[54:62] = (fmt % new_fs).encode("ascii")
+        if bytes(header[:6]) == NEWC_CRC_MAGIC:
+            # c_check 是 header 最後 8 個字元(位元組 102:110),不是 100:110
+            # ——寫錯位置會踩壞前一個 namesize 欄位、還會改變 header 長度。
+            patched[102:110] = (fmt % _newc_checksum(filedata)).encode("ascii")
+        out += bytes(patched)
         out += name
         out += b"\x00" * ((-(110 + namesize)) % 4)
         out += filedata
         out += b"\x00" * ((-new_fs) % 4)
-    out += tail
     return bytes(out)
+
+
+def _emit_newc(entries, tail):
+    # 薄包裝:entries + 原樣 tail。保留給既有測試(byte-identical round-trip)。
+    return _emit_entries(entries) + tail
 
 
 def _maybe_resize(png_bytes, target_w, target_h):
@@ -153,38 +170,99 @@ def _png_dims(b):
     return (0, 0)
 
 
+def _is_logo(clean_name):
+    return any(clean_name.endswith(suf) for suf in LOGO_SUFFIXES)
+
+
+def _replace_in_entries(entries, gonas_png):
+    """就地把 entries 裡的 logo 換成 GoNAS logo(必要時縮回原尺寸),回傳被換掉
+    的清單(含原/新尺寸與新位元組長度,供自我檢查與回報用)。"""
+    replaced = []
+    for e in entries:
+        clean_name = e[1].decode("latin-1")
+        if _is_logo(clean_name):
+            ow, oh = _png_dims(e[3])
+            new_png = _maybe_resize(gonas_png, ow, oh)
+            nw, nh = _png_dims(new_png)
+            e[3] = new_png
+            replaced.append((clean_name, ow, oh, nw, nh, len(new_png)))
+    return replaced
+
+
+def _split_padding(tail):
+    """把一段 tail 拆成「開頭的 NUL 對齊填塞」與「其餘」。cpio archive 之間、
+    以及 archive 到下一段壓縮串流之間,慣例用 NUL 對齊,要原樣保留。"""
+    i = 0
+    while i < len(tail) and tail[i] == 0:
+        i += 1
+    return tail[:i], tail[i:]
+
+
+def _process_segment(blob, gonas_png):
+    """處理「一段」initrd:可能是 gzip/xz 容器,或一段(可能後面還接著其他段的)
+    newc cpio。回傳 (新的位元組, 被換掉的 logo 清單)。
+
+    第三十輪覆核 Q1:真實 x86 initrd 常是「未壓縮的 early-cpio(microcode)
+    ++ 壓縮的主封存」串接;舊版只解析第一段就把其餘丟進 tail 不看,會靜默
+    漏掉主封存裡的 logo。這裡改成遞迴處理每一段,microcode 那種串接也涵蓋。"""
+    if blob[:2] == b"\x1f\x8b":                       # gzip 容器
+        inner, rep = _process_segment(_gunzip_all(blob), gonas_png)
+        return gzip.compress(inner, 9), rep
+    if blob[:6] == b"\xfd7zXZ\x00":                   # xz 容器
+        inner, rep = _process_segment(lzma.decompress(blob), gonas_png)
+        return lzma.compress(inner, preset=6), rep
+    if blob[:6] in (NEWC_MAGIC, NEWC_CRC_MAGIC):      # 一段 newc cpio
+        entries, tail = _parse_newc(blob)
+        replaced = _replace_in_entries(entries, gonas_png)
+        head = _emit_entries(entries)
+        lead, rest = _split_padding(tail)
+        if rest:
+            new_rest, rep2 = _process_segment(rest, gonas_png)
+            return head + lead + new_rest, replaced + rep2
+        return head + tail, replaced
+    # 認不得的區段:原樣保留,不動也不算失敗。
+    return blob, []
+
+
+def _walk_logos(blob, out):
+    """唯讀走訪每一段,把所有 logo 檔目前的位元組長度收進 out(給自我檢查用)。"""
+    if blob[:2] == b"\x1f\x8b":
+        _walk_logos(_gunzip_all(blob), out); return
+    if blob[:6] == b"\xfd7zXZ\x00":
+        _walk_logos(lzma.decompress(blob), out); return
+    if blob[:6] in (NEWC_MAGIC, NEWC_CRC_MAGIC):
+        entries, tail = _parse_newc(blob)
+        for e in entries:
+            nm = e[1].decode("latin-1")
+            if _is_logo(nm):
+                out[nm] = len(e[3])
+        _, rest = _split_padding(tail)
+        if rest:
+            _walk_logos(rest, out)
+
+
 def rebrand(initrd_path, logo_path):
     with open(logo_path, "rb") as f:
         gonas_png = f.read()
     with open(initrd_path, "rb") as f:
         raw = f.read()
 
-    cpio, recompress = _detect_and_decompress(raw)
-    entries, tail = _parse_newc(cpio)
-
-    replaced = []
-    for e in entries:
-        clean_name = e[1].decode("latin-1")
-        if any(clean_name.endswith(suf) for suf in LOGO_SUFFIXES):
-            ow, oh = _png_dims(e[3])
-            new_png = _maybe_resize(gonas_png, ow, oh)
-            nw, nh = _png_dims(new_png)
-            e[3] = new_png
-            replaced.append((clean_name, ow, oh, nw, nh))
-
+    new_raw, replaced = _process_segment(raw, gonas_png)
     if not replaced:
         return 2, []
 
-    new_cpio = _emit_newc(entries, tail)
-    # 自我檢查:重新解析產生出來的 cpio,確認每張換過的 logo 現在的大小
-    # 就是新 PNG 的大小、而且整包還能被完整解析(padding/表頭沒寫壞)。
-    check_entries, _ = _parse_newc(new_cpio)
-    by_name = {e[1].decode("latin-1"): len(e[3]) for e in check_entries}
-    for clean_name, ow, oh, nw, nh in replaced:
-        if by_name.get(clean_name) != len(gonas_png) and clean_name not in by_name:
-            raise ValueError("self-check failed: %s missing after repack" % clean_name)
+    # 自我檢查(第三十輪覆核 Q2/Q3:舊的檢查邏輯寫死永遠不觸發、又比錯對象)。
+    # 把產生出來的檔案整個再走一遍,確認每個換過的 logo 現在的位元組長度,
+    # 就等於我們實際寫進去的新 PNG 長度——表頭 filesize/padding 寫壞會被抓到。
+    sizes = {}
+    _walk_logos(new_raw, sizes)
+    for clean_name, ow, oh, nw, nh, newlen in replaced:
+        if sizes.get(clean_name) != newlen:
+            raise ValueError(
+                "self-check failed for %s: expected %d bytes after repack, got %r"
+                % (clean_name, newlen, sizes.get(clean_name))
+            )
 
-    new_raw = recompress(new_cpio)
     # 原子寫回:先寫暫存檔再 rename,避免中途失敗留下半個壞 initrd。
     tmp = initrd_path + ".gonas.tmp"
     with open(tmp, "wb") as f:
@@ -209,9 +287,10 @@ def main(argv):
             % os.path.basename(initrd_path)
         )
         return 2
-    for clean_name, ow, oh, nw, nh in replaced:
+    for clean_name, ow, oh, nw, nh, newlen in replaced:
         sys.stderr.write(
-            "    - replaced %s (was %dx%d, now %dx%d)\n" % (clean_name, ow, oh, nw, nh)
+            "    - replaced %s (was %dx%d, now %dx%d, %d bytes)\n"
+            % (clean_name, ow, oh, nw, nh, newlen)
         )
     return 0
 
