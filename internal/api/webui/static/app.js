@@ -867,15 +867,18 @@ async function renderStorage(el) {
     <div class="card">
       ${h2i("sliders", esc(t("storage.poolSetup")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${t("storage.poolSetupHint")}</p>
+      ${poolCandidates(disks).length === 0
+        ? msg("warn", t("storage.poolNoPrepared"))
+        : `${poolParityNote()}
       <div id="pool-msg"></div>
       <form class="stacked" id="pool-form">
-        <div class="field"><label>${esc(t("storage.poolName"))}</label><input type="text" name="name" value="tank" required></div>
-        <div class="field"><label>${esc(t("storage.poolMountPoint"))}</label><input type="text" name="mountPoint" value="/mnt/tank" required></div>
-        <div class="field"><label>${esc(t("storage.dataDisks"))}</label><textarea name="dataDisks" rows="3" placeholder="/mnt/disk1&#10;/mnt/disk2"></textarea></div>
-        <div class="field"><label>${esc(t("storage.parityDisks"))}</label><textarea name="parityDisks" rows="2" placeholder="/mnt/parity1"></textarea></div>
-        <div class="field"><label>${esc(t("storage.contentFiles"))}</label><textarea name="contentFiles" rows="2" placeholder="/mnt/disk1&#10;/boot/config/snapraid"></textarea></div>
+        <div class="field"><label>${esc(t("storage.poolName"))}</label><input type="text" name="name" value="${esc(arrayStatus.name || "tank")}" required></div>
+        <div class="field"><label>${esc(t("storage.poolMountPoint"))}</label><input type="text" name="mountPoint" value="${esc(arrayStatus.mountPoint || "/mnt/tank")}" required></div>
+        <div class="field"><label>${esc(t("storage.choosePoolDisks"))}</label>
+          <div class="pool-disk-list">${poolDiskPicker(poolCandidates(disks))}</div>
+        </div>
         <div class="btn-row"><button type="submit">${esc(t("storage.savePool"))}</button></div>
-      </form>
+      </form>`}
     </div>
   `;
 
@@ -886,25 +889,27 @@ async function renderStorage(el) {
 
   wirePrepareDisk(el);
 
-  el.querySelector("#pool-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const f = new FormData(ev.target);
-    const pool = {
-      name: f.get("name").trim(),
-      mountPoint: f.get("mountPoint").trim(),
-      dataDisks: linesOf(f.get("dataDisks")),
-      parityDisks: linesOf(f.get("parityDisks")),
-      contentFiles: linesOf(f.get("contentFiles")),
-    };
-    const box = el.querySelector("#pool-msg");
-    try {
-      await api.setPool(pool);
-      box.innerHTML = msg("ok", t("storage.poolSaved"));
-      await renderStorage(el);
-    } catch (err) {
-      box.innerHTML = msg("error", err.message);
-    }
-  });
+  // 第五十二輪(二次覆核 P-1/UI-1):儲存頁的建立儲存池從「手打 SnapRAID
+  // 路徑」的 textarea 改成跟新手嚮導同一套視覺化硬碟選擇器(勾選 + 資料/同位
+  // 切換 + 自動 content 檔),不再讓使用者回到這頁又撞上一套完全不同、嚇人的
+  // 舊介面。共用 poolDiskPicker/collectPool(見上面嚮導那段)。
+  const poolForm = el.querySelector("#pool-form");
+  if (poolForm) {
+    poolForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const box = el.querySelector("#pool-msg");
+      const res = collectPool(el, f.get("name"), f.get("mountPoint"));
+      if (res.error) { box.innerHTML = msg("error", res.error); return; }
+      try {
+        await api.setPool(res.pool);
+        box.innerHTML = msg("ok", t("storage.poolSaved"));
+        await renderStorage(el);
+      } catch (err) {
+        box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
 }
 
 // renderPrepareList 畫出「可以拿來準備」的候選硬碟:只列未掛載的整碟
