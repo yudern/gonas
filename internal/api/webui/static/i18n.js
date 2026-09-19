@@ -289,6 +289,7 @@ const dict = {
     users: {
       title: "共享使用者",
       subtitle: "帳號同時是系統帳號與 Samba 帳號,沒有互動式登入殼層 —— 純粹是檔案共享的身份。",
+      loginAccountsHint: "要管理『登入這個後台的管理員/檢視者帳號』(不是這裡的檔案共享帳號),請到「<a href=\"#/security\">安全</a>」頁。",
       accounts: "帳號({n})",
       colUsername: "使用者名稱", colComment: "備註",
       noUsers: "還沒有建立使用者",
@@ -696,6 +697,7 @@ const dict = {
     users: {
       title: "共享用户",
       subtitle: "账号同时是系统账号与 Samba 账号,没有交互式登录终端 —— 纯粹是文件共享的身份。",
+      loginAccountsHint: "要管理『登录这个后台的管理员/查看者账号』(不是这里的文件共享账号),请到「<a href=\"#/security\">安全</a>」页。",
       accounts: "账号({n})",
       colUsername: "用户名", colComment: "备注",
       noUsers: "还没有创建用户",
@@ -1103,7 +1105,8 @@ const dict = {
     users: {
       title: "Share Users",
       subtitle: "Accounts are both system and Samba accounts with no interactive login shell — they exist purely as a file-sharing identity.",
-      accounts: "Admin accounts ({n})",
+      loginAccountsHint: "To manage the admin/viewer accounts that sign in to this UI (not these file-sharing users), go to the “<a href=\"#/security\">Security</a>” page.",
+      accounts: "Accounts ({n})",
       colUsername: "Username", colComment: "Comment",
       noUsers: "No users created yet",
       username: "Username", comment: "Comment", password: "Password",

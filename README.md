@@ -103,6 +103,8 @@
 - 內嵌前端(`internal/api/webui/static`):儀表板、儲存(硬碟列表 + 設定
   pool + 啟停陣列)、應用程式(已安裝列表 + 商店目錄 + 安裝表單)、共享
   (SMB/NFS)、使用者,五個頁面,純 hash routing,無框架
+  (這是 Phase 4 當時的頁面數;後續 Phase 5/6/8 陸續加入監控、備份、安全,
+  第五十一輪資訊架構整理後再拆出「系統」「系統診斷」,目前共十一頁)
 - 修正一個真的會讓前端讀錯資料的 bug:`appstore.InstallResult` 原本沒有
   json tag,序列化出來是 `ContainerIDs`/`NetworkID`(PascalCase),前端寫的
   是 `containerIds`/`networkId` —— 是在做端對端驗證、真的用瀏覽器會呼叫的

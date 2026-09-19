@@ -2543,6 +2543,8 @@ QA:gofmt/vet 乾淨、`go test`(內嵌 UI)過、node --check 前端 JS 過、pla
   路由 POST /api/v1/system/power/{shutdown,reboot}。附 handler 測試
   (驗證正確指令 + 失敗回 500)。
 - 前端:安全頁新增「系統電源」卡片(僅 isAdmin),重新開機/關機兩個按鈕。
+  (第五十一輪資訊架構整理後,這張卡片與 HTTPS 卡片一起搬到新的「系統」頁;
+  這裡保留當時的紀錄,目前的所在位置是「系統」頁。)
   破壞性/中斷性操作採「打字確認」——跳輸入框、要打出指定的字(關機/关机/
   SHUTDOWN 依語言)才送出,避免誤按。指令送出後系統即中斷,前端只顯示已送出。
 - 三語 i18n(power.*)+ SECTION_ICONS 加 power 圖示。playwright 實測卡片

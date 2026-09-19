@@ -1871,6 +1871,7 @@ async function renderUsers(el) {
   el.innerHTML = `
     <h1>${esc(t("users.title"))}</h1>
     <p class="page-subtitle">${esc(t("users.subtitle"))}</p>
+    <p class="page-subtitle" style="margin-top:-6px">${t("users.loginAccountsHint")}</p>
 
     <div class="card">
       ${h2i("users", esc(t("users.accounts", { n: users.length })))}
