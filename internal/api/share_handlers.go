@@ -183,6 +183,13 @@ func (s *Server) handleUsersCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errPasswordRequired)
 		return
 	}
+	// 密碼安全檢查要在「建立帳號之前」就擋掉,回 400 —— 而不是等到
+	// SetSystemPassword 才失敗回 500(那樣還得回滾剛建好的帳號)。這條擋的是
+	// 第三十輪覆核抓到的 chpasswd 換行注入(密碼含 \n 可改掉別的帳號密碼)。
+	if err := share.ValidatePassword(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	if err := share.CreateUser(r.Context(), s.runner, u); err != nil {
 		writeError(w, http.StatusInternalServerError, err)

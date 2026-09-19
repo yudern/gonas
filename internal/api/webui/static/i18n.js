@@ -1123,6 +1123,7 @@ const errorMap = {
   "a share with that name already exists": { "zh-Hant": "已經有同名的共享存在。", "zh-Hans": "已经有同名的共享存在。", "en": "A share with that name already exists." },
   "no user with that username": { "zh-Hant": "找不到這個使用者名稱。", "zh-Hans": "找不到这个用户名。", "en": "No user with that username." },
   "password is required": { "zh-Hant": "必須填寫密碼。", "zh-Hans": "必须填写密码。", "en": "Password is required." },
+  "password must not contain control characters or line breaks": { "zh-Hant": "密碼不能包含換行或控制字元。", "zh-Hans": "密码不能包含换行或控制字符。", "en": "Password must not contain control characters or line breaks." },
   "no alert rule with that id": { "zh-Hant": "找不到這個 ID 的告警規則。", "zh-Hans": "找不到这个 ID 的告警规则。", "en": "No alert rule with that ID." },
   "no notifier with that id": { "zh-Hant": "找不到這個 ID 的通知管道。", "zh-Hans": "找不到这个 ID 的通知渠道。", "en": "No notifier with that ID." },
   "not authenticated: please log in": { "zh-Hant": "尚未登入,請先登入。", "zh-Hans": "尚未登录,请先登录。", "en": "Not logged in — please log in first." },

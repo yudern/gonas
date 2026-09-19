@@ -173,6 +173,13 @@ func ReloadSamba(ctx context.Context, r cmdrunner.Runner) error {
 // 是前者，所以建立使用者、改密碼都要同時處理這兩邊，不能只改系統密碼)。
 // -s 讓 smbpasswd 從 stdin 讀密碼兩次，而不是留在 shell 指令列的參數裡。
 func SyncSambaPassword(ctx context.Context, r cmdrunner.Runner, username, password string) error {
+	// 縱深防禦(第三十輪覆核):跟 SetSystemPassword 一樣,把資料餵進
+	// smbpasswd stdin 前先擋控制字元。smbpasswd -s 剛好讀兩行,含 \n 的密碼
+	// 比較可能是「把設定弄壞」而非注入,但一致地擋掉才不會留下不同路徑不同
+	// 防護的破口。
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
 	stdin := []byte(password + "\n" + password + "\n")
 	if _, err := r.RunWithStdin(ctx, stdin, "smbpasswd", "-s", "-a", username); err != nil {
 		return fmt.Errorf("syncing samba password for %q: %w", username, err)
