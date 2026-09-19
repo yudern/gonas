@@ -62,6 +62,30 @@ func TestHandleDoctorInstall_InstallsAllowlistedPackage(t *testing.T) {
 	}
 }
 
+// TestHandleDoctorInstall_SingleFlight(第五十二輪 S-3):已經有一個安裝在跑
+// (doctorInstalling 為 true)時,再進來的安裝請求必須直接回 409,而不是放
+// 第二個 apt-get 去撞 dpkg 的獨佔鎖。
+func TestHandleDoctorInstall_SingleFlight(t *testing.T) {
+	s := newTestServer(t)
+	dr := &doctorRunner{}
+	s.runner = dr
+	// 模擬「已經有一個安裝在進行中」。
+	if !s.doctorInstalling.CompareAndSwap(false, true) {
+		t.Fatal("expected the install flag to start unset")
+	}
+	defer s.doctorInstalling.Store(false)
+
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"apt":"samba"}`)
+	s.handleDoctorInstall(rec, httptest.NewRequest(http.MethodPost, "/", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 while an install is in progress, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(dr.calls) != 0 {
+		t.Fatalf("apt must NOT run for a rejected concurrent install, got calls: %v", dr.calls)
+	}
+}
+
 func TestHandleDoctorStatus_OK(t *testing.T) {
 	s := newTestServer(t)
 	rec := httptest.NewRecorder()

@@ -63,6 +63,43 @@ func TestGenerateAndValidateCode_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestValidateCodeWithCounter_ReturnsMatchingWindow 固化防重放的核心不變量:
+// 當一個碼在時間點 at 當窗合法時,回傳的 counter 必須正好等於 at 的時間窗
+// counter(totpCounter(at))——登入路徑就是靠「只接受比上次記下的 counter
+// 更新的窗」來擋重放,這個回傳值算錯,防重放就整個失效。
+func TestValidateCodeWithCounter_ReturnsMatchingWindow(t *testing.T) {
+	secret, err := GenerateSecret()
+	if err != nil {
+		t.Fatalf("GenerateSecret returned error: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	code, err := GenerateCode(secret, now)
+	if err != nil {
+		t.Fatalf("GenerateCode returned error: %v", err)
+	}
+	counter, ok, err := ValidateCodeWithCounter(secret, code, now)
+	if err != nil {
+		t.Fatalf("ValidateCodeWithCounter returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected the freshly generated code to validate")
+	}
+	if counter != totpCounter(now) {
+		t.Fatalf("expected matched counter %d, got %d", totpCounter(now), counter)
+	}
+	// 一個窗之後(30 秒)算出來的碼,counter 必須正好大 1 —— 這正是「更新的
+	// 登入 counter 必須嚴格遞增」所倚賴的性質。
+	next := now.Add(totpStep)
+	nextCode, _ := GenerateCode(secret, next)
+	nextCounter, ok, err := ValidateCodeWithCounter(secret, nextCode, next)
+	if err != nil || !ok {
+		t.Fatalf("expected next-window code to validate, ok=%v err=%v", ok, err)
+	}
+	if nextCounter != counter+1 {
+		t.Fatalf("expected the next window's counter to be exactly one greater, got %d then %d", counter, nextCounter)
+	}
+}
+
 func TestValidateCode_WrongCodeFails(t *testing.T) {
 	secret, err := GenerateSecret()
 	if err != nil {

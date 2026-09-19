@@ -544,3 +544,48 @@ func TestDownloadAndVerify_RejectsPlaintextNonLoopback(t *testing.T) {
 		t.Fatal("expected DownloadAndVerify to reject a plaintext non-loopback http URL")
 	}
 }
+
+// TestSecureRedirect_RejectsDowngrade(第五十二輪 S-1):CheckRedirect 政策
+// 必須在每一跳都重跑 requireHTTPS —— 只驗初始 URL 不夠,因為 https 伺服器
+// 可以 302 把我們導去 http://。這裡直接測 secureRedirect(NewHTTPClient
+// 掛的就是它)。
+func TestSecureRedirect_RejectsDowngrade(t *testing.T) {
+	mk := func(rawurl string) *http.Request {
+		req, err := http.NewRequest(http.MethodGet, rawurl, nil)
+		if err != nil {
+			t.Fatalf("building request for %q: %v", rawurl, err)
+		}
+		return req
+	}
+
+	// 降級到跨網路的明文 http:必須擋。
+	if err := secureRedirect(mk("http://evil.example/bin"), nil); err == nil {
+		t.Fatal("expected a redirect to plaintext http:// to be rejected")
+	}
+	// 續留在 https:放行。
+	if err := secureRedirect(mk("https://ok.example/bin"), nil); err != nil {
+		t.Fatalf("expected an https:// redirect to be allowed, got %v", err)
+	}
+	// http 指向 loopback(本機鏡像/測試)放行,跟 requireHTTPS 的例外一致。
+	if err := secureRedirect(mk("http://127.0.0.1:9000/bin"), nil); err != nil {
+		t.Fatalf("expected a loopback http:// redirect to be allowed, got %v", err)
+	}
+	// 太多跳:即使目標是 https 也要中止,避免重導向迴圈。
+	via := make([]*http.Request, 10)
+	if err := secureRedirect(mk("https://ok.example/bin"), via); err == nil {
+		t.Fatal("expected redirect chain longer than 10 hops to be stopped")
+	}
+}
+
+// TestNewHTTPClient_WiresSecureRedirect 確認正式路徑用的建構子真的把
+// CheckRedirect 掛上去了(不是只有 secureRedirect 本身正確、但沒人用它)。
+func TestNewHTTPClient_WiresSecureRedirect(t *testing.T) {
+	c := NewHTTPClient(0)
+	if c.CheckRedirect == nil {
+		t.Fatal("expected NewHTTPClient to set a CheckRedirect policy")
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://evil.example/bin", nil)
+	if err := c.CheckRedirect(req, nil); err == nil {
+		t.Fatal("expected the wired CheckRedirect to reject a plaintext downgrade")
+	}
+}
