@@ -1731,7 +1731,7 @@ function renderCatalogEntry(tmpl) {
         <p>${esc(translateNotice(tmpl.description || ""))}</p>
         <div class="services">${tmpl.services.map((s) => esc(s.image)).join(" · ")}</div>
       </div>
-      <button class="secondary" data-toggle-install="${esc(tmpl.id)}">${esc(t("apps.install"))}</button>
+      <button data-toggle-install="${esc(tmpl.id)}">${esc(t("apps.install"))}</button>
     </div>
     <form class="install-form" id="install-form-${esc(tmpl.id)}" data-install="${esc(tmpl.id)}">
       <div class="install-msg"></div>
@@ -2016,8 +2016,8 @@ async function renderMonitor(el) {
 
     ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
-    <div class="card">
-      ${h2i("bell", esc(t("monitor.alertRules", { n: rules.length })))}
+    <details class="card">
+      <summary>${h2i("bell", esc(t("monitor.alertRules", { n: rules.length })))}</summary>
       ${rules.length ? rules.map((r) => renderRuleRow(r)).join("") : `<p class="empty-state">${esc(t("monitor.noRules"))}</p>`}
       <div id="rule-msg"></div>
       <form class="stacked" id="rule-form" style="margin-top:16px">
@@ -2045,10 +2045,10 @@ async function renderMonitor(el) {
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
         <div class="btn-row"><button type="submit">${esc(t("monitor.addRule"))}</button></div>
       </form>
-    </div>
+    </details>
 
-    <div class="card">
-      ${h2i("bell", esc(t("monitor.notifiers", { n: notifiers.length })))}
+    <details class="card">
+      <summary>${h2i("bell", esc(t("monitor.notifiers", { n: notifiers.length })))}</summary>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.notifiersHint"))}</p>
       ${notifiers.length ? notifiers.map((n) => renderNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noNotifiers"))}</p>`}
       <div id="notifier-msg"></div>
@@ -2058,10 +2058,10 @@ async function renderMonitor(el) {
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
         <div class="btn-row"><button type="submit">${esc(t("monitor.addNotifier"))}</button></div>
       </form>
-    </div>
+    </details>
 
-    <div class="card">
-      ${h2i("mail", esc(t("monitor.emailNotifiers", { n: emailNotifiers.length })))}
+    <details class="card">
+      <summary>${h2i("mail", esc(t("monitor.emailNotifiers", { n: emailNotifiers.length })))}</summary>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("monitor.emailNotifiersHint"))}</p>
       ${emailNotifiers.length ? emailNotifiers.map((n) => renderEmailNotifierRow(n)).join("") : `<p class="empty-state">${esc(t("monitor.noEmailNotifiers"))}</p>`}
       <div id="email-notifier-msg"></div>
@@ -2081,7 +2081,7 @@ async function renderMonitor(el) {
         <div class="checkbox-row"><label><input type="checkbox" name="enabled" checked> ${esc(t("monitor.enabled"))}</label></div>
         <div class="btn-row"><button type="submit">${esc(t("monitor.addEmailNotifier"))}</button></div>
       </form>
-    </div>
+    </details>
 
     ${renderDigestCard(digest, notifiers, emailNotifiers, isAdmin)}
   `;

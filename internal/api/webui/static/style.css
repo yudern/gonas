@@ -9,14 +9,20 @@
   --border: #d7e1de;
   --text: #16211f;
   --text-dim: #55655f;
-  --text-faint: #7c8b85;
+  /* 第三十輪覆核(資深 UI 設計師)量到 #7c8b85 在白底只有 3.57:1,未達 AA;
+     加深到 #67766f(約 4.6:1)。這個 token 用在大量提示文字/表頭/統計標籤上,
+     是投報率最高的可讀性修正。 */
+  --text-faint: #67766f;
   --accent: #2f8b80;
   --accent-soft: #d9efeb;
+  /* --accent 當品牌填色/按鈕底色維持不變;但當「白底上的文字連結」用時
+     #2f8b80 只有 4.1:1,所以文字連結另用加深版的 --accent-text。 */
+  --accent-text: #26746a;
   --danger: #b3432f;
   --danger-soft: #f5ded9;
-  --warn: #b5721f;
+  --warn: #9c6317;
   --warn-soft: #f5e8d5;
-  --ok: #2f8b52;
+  --ok: #27794a;
   --ok-soft: #dcefe0;
   --sidebar-bg: #16211f;
   --sidebar-text: #cfd9d5;
@@ -35,9 +41,10 @@
     --border: #2a343d;
     --text: #e6ece9;
     --text-dim: #9aaba4;
-    --text-faint: #6c7d78;
+    --text-faint: #879189;
     --accent: #59c2b6;
     --accent-soft: rgba(89, 194, 182, 0.14);
+    --accent-text: #59c2b6;
     --danger: #e0705a;
     --danger-soft: rgba(224, 112, 90, 0.14);
     --warn: #e0a458;
@@ -207,6 +214,10 @@ tbody tr:last-child td { border-bottom: none; }
 .pill.neutral { background: var(--surface-2); color: var(--text-dim); }
 
 form.stacked { display: grid; gap: 12px; max-width: 480px; }
+/* 第三十輪覆核(資深 UI 設計師)U2:表單最寬 480,卻放在 1000 寬的卡片裡,
+   右邊留一大片空白,看起來像沒做完。把「直接包著一個 stacked 表單」的卡片
+   收窄到 620,空白就消失,版面收斂。純 CSS,不動任何 markup。 */
+.card:has(> form.stacked) { max-width: 620px; }
 .field { display: grid; gap: 5px; }
 .field label { font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
 .field .hint { font-size: 11.5px; color: var(--text-faint); }
@@ -277,7 +288,7 @@ p.hint { color: var(--text-faint); font-size: 12.5px; }
 .files-toolbar { margin-bottom: 10px; }
 .files-toolbar input[type="text"] { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 13px; }
 .breadcrumb { font-size: 13px; margin-bottom: 10px; color: var(--text-dim); }
-.breadcrumb a { color: var(--accent); text-decoration: none; }
+.breadcrumb a { color: var(--accent-text); text-decoration: none; }
 .breadcrumb a:hover { text-decoration: underline; }
 .breadcrumb .sep { margin: 0 6px; color: var(--text-faint); }
 .files-drop-zone { border: 2px dashed transparent; border-radius: 8px; transition: border-color .15s, background .15s; }
@@ -321,7 +332,7 @@ p.hint { color: var(--text-faint); font-size: 12.5px; }
    表格儲存格裡的空狀態(td.empty-state)維持靠左、不受影響。 */
 p.empty-state { text-align: center; padding: 26px 12px; }
 
-a { color: var(--accent); }
+a { color: var(--accent-text); }
 
 /* ---------- 監控頁 ---------- */
 
@@ -509,3 +520,28 @@ a { color: var(--accent); }
   .pool-disk-row { align-items: flex-start; }
   .pool-parity-diagram { display: none; }
 }
+
+/* 第三十輪覆核(資深 UI 設計師)U3:監控頁原本六張重表單擠成一條長捲軸。
+   把次要設定卡改成可收合的 <details class="card">,預設收合,只留即時指標與
+   趨勢圖展開,頁面一開始就清爽。零 JS、離線安全(原生 details)。 */
+details.card > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary .card-h2 { margin: 0; }
+/* 收合指示的 chevron,展開時旋轉 */
+details.card > summary::after {
+  content: "";
+  width: 8px; height: 8px; flex: none; margin-left: auto;
+  border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+details.card[open] > summary::after { transform: rotate(-135deg); }
+details.card > summary:hover::after { border-color: var(--accent); }
