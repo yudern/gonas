@@ -409,7 +409,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       const f = new FormData(ev.target);
       try {
         await api.setSystemUpdateSettings(f.get("manifestUrl").trim());
-        await renderDashboard(el);
+        await renderSystem(el);
       } catch (err) {
         const box = el.querySelector("#update-msg");
         if (box) box.innerHTML = msg("error", err.message);
@@ -423,7 +423,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       checkBtn.disabled = true;
       try {
         await api.checkSystemUpdate();
-        await renderDashboard(el);
+        await renderSystem(el);
       } catch (err) {
         checkBtn.disabled = false;
         const box = el.querySelector("#update-msg");
@@ -1968,7 +1968,8 @@ function wireUPS(el) {
     try {
       await api.setUpsConfig(cfg);
       box.innerHTML = msg("ok", t("ups.saved"));
-      await renderMonitor(el);
+      // UPS 卡第五十一輪搬到「系統」頁,存檔後要重畫「系統」頁(不是監控頁)。
+      await renderSystem(el);
     } catch (err) {
       box.innerHTML = msg("error", err.message);
     }
@@ -2445,6 +2446,7 @@ async function renderSystem(el) {
 
     ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
+    ${isAdmin ? `
     <div class="card">
       ${h2i("lock", esc(t("security.https")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
@@ -2463,7 +2465,7 @@ async function renderSystem(el) {
         </div>
         <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
       </form>
-    </div>
+    </div>` : ""}
   `;
 
   attachSystemUpdateHandlers(el, isAdmin);
@@ -2797,18 +2799,21 @@ function attachTOTPHandlers(el) {
 }
 
 function attachHTTPSFormHandlers(el) {
-  el.querySelector("#https-form").addEventListener("submit", async (ev) => {
+  const httpsForm = el.querySelector("#https-form");
+  if (!httpsForm) return; // 非管理者看不到 HTTPS 卡,沒有表單可綁
+  httpsForm.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
     try {
       await api.setHTTPSSettings({ enabled: f.get("enabled") === "on", hosts: linesOf(f.get("hosts")) });
-      // 整個安全性頁面重新渲染,而不是只在原地顯示一句「已儲存」——
-      // 這樣剛簽出來的憑證到期日(certExpiresAt)、使用者剛填的 hosts
-      // 才會立刻反映在畫面上,不用使用者自己手動重新整理或切換頁面
-      // 才看得到,尤其是「第一次開啟 HTTPS」這個時間點,使用者最需要
-      // 馬上確認「憑證真的簽出來了、到期日長這樣」。
-      await renderSecurity(el);
-      el.querySelector("#https-msg").innerHTML = msg("ok", t("security.httpsSaved"));
+      // 重畫「系統」頁(HTTPS 卡第五十一輪從安全頁搬到這裡),讓剛簽出來的
+      // 憑證到期日(certExpiresAt)、剛填的 hosts 立刻反映在畫面上——尤其是
+      // 「第一次開啟 HTTPS」這個時間點,使用者最需要馬上確認憑證真的簽出來了。
+      // 第五十二輪修:原本 renderSecurity 會跳到已經沒有這張卡的安全頁、
+      // 而且 #https-msg 也不存在導致 null deref。
+      await renderSystem(el);
+      const hbox = el.querySelector("#https-msg");
+      if (hbox) hbox.innerHTML = msg("ok", t("security.httpsSaved"));
     } catch (err) {
       el.querySelector("#https-msg").innerHTML = msg("error", err.message);
     }

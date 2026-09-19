@@ -346,7 +346,7 @@ const dict = {
     },
     security: {
       title: "安全",
-      subtitle: "管理登入密碼、兩步驟驗證、Web 介面的 HTTPS,以及 WireGuard VPN 遠端連線。",
+      subtitle: "管理登入密碼、兩步驟驗證、Web 登入帳號,以及 WireGuard VPN 遠端連線。",
       changePassword: "修改密碼",
       changePasswordHint: "目前登入身分:<strong>{username}</strong>。修改成功後,其他裝置上已登入的 session 會全部失效。",
       oldPassword: "目前密碼", newPassword: "新密碼(至少 8 個字元)", confirmNewPassword: "確認新密碼",
@@ -750,7 +750,7 @@ const dict = {
     },
     security: {
       title: "安全",
-      subtitle: "管理登录密码、两步验证、Web 界面的 HTTPS,以及 WireGuard VPN 远程连接。",
+      subtitle: "管理登录密码、两步验证、Web 登录账号,以及 WireGuard VPN 远程连接。",
       changePassword: "修改密码",
       changePasswordHint: "当前登录身份:<strong>{username}</strong>。修改成功后,其他设备上已登录的会话会全部失效。",
       oldPassword: "当前密码", newPassword: "新密码(至少 8 个字符)", confirmNewPassword: "确认新密码",
@@ -1154,7 +1154,7 @@ const dict = {
     },
     security: {
       title: "Security",
-      subtitle: "Manage your login password, two-factor authentication, HTTPS for the web interface, and WireGuard VPN remote access.",
+      subtitle: "Manage your login password, two-factor authentication, admin accounts, and WireGuard VPN remote access.",
       changePassword: "Change Password",
       changePasswordHint: "Currently logged in as <strong>{username}</strong>. After a successful change, sessions logged in on other devices will all be invalidated.",
       oldPassword: "Current password", newPassword: "New password (at least 8 characters)", confirmNewPassword: "Confirm new password",
