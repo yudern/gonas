@@ -18,6 +18,7 @@ const routes = {
   monitor: renderMonitor,
   security: renderSecurity,
   backup: renderBackup,
+  system: renderSystem,
   doctor: renderDoctor,
 };
 
@@ -280,11 +281,10 @@ function showSetupGate() {
 // ---------- 儀表板 ----------
 
 async function renderDashboard(el) {
-  const [health, version, dockerStatus, disks, arrayStatus, me, update, deps] = await Promise.all([
+  const [health, version, dockerStatus, disks, arrayStatus, me, deps] = await Promise.all([
     api.health(), api.version(), api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unknown" })),
     api.me().catch(() => ({ role: "" })),
-    api.systemUpdate().catch(() => null),
     api.doctorStatus().catch(() => []),
   ]);
   const isAdmin = me.role === "admin";
@@ -316,10 +316,7 @@ async function renderDashboard(el) {
       ${h2i("link", esc(t("dashboard.quickLinks")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
     </div>
-    ${renderSystemUpdateCard(update, version.version, isAdmin)}
   `;
-
-  attachSystemUpdateHandlers(el, isAdmin);
 }
 
 // renderSystemUpdateCard 顯示 Phase 17 自我更新功能的狀態:目前版本、
@@ -1979,7 +1976,7 @@ function wireUPS(el) {
 }
 
 async function renderMonitor(el) {
-  const [system, history, rules, notifiers, emailNotifiers, digest, me, upsStat, upsCfg, upsNames] = await Promise.all([
+  const [system, history, rules, notifiers, emailNotifiers, digest, me] = await Promise.all([
     api.monitorSystem().catch(() => null),
     api.monitorHistory().catch(() => []),
     api.alertRules().catch(() => []),
@@ -1987,9 +1984,6 @@ async function renderMonitor(el) {
     api.emailNotifiers().catch(() => []),
     api.digest().catch(() => null),
     api.me().catch(() => ({ role: "" })),
-    api.upsStatus().catch(() => ({ present: false })),
-    api.upsConfig().catch(() => ({})),
-    api.upsList().catch(() => []),
   ]);
   const isAdmin = me.role === "admin";
 
@@ -2013,8 +2007,6 @@ async function renderMonitor(el) {
         <span><span class="swatch" style="background:var(--ok)"></span>${esc(t("monitor.legendDisk", { path: system ? `(${system.diskPath})` : "" }))}</span>
       </div>
     </div>
-
-    ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
     <details class="card">
       <summary>${h2i("bell", esc(t("monitor.alertRules", { n: rules.length })))}</summary>
@@ -2094,8 +2086,6 @@ async function renderMonitor(el) {
       disk: history.map((h) => h.diskPercent),
     });
   }
-
-  wireUPS(el);
 
   const metricSelect = el.querySelector("#rule-metric");
   const toggleBooleanFields = () => {
@@ -2419,6 +2409,69 @@ function drawSparklineChart(canvas, series) {
   });
 }
 
+// ---------- 系統 ----------
+// 第三十輪覆核(資深產品經理 P2):安全頁原本是個雜物抽屜(改密碼、2FA、
+// 電源、帳號、HTTPS、VPN、稽核全塞一頁),而「電源」擺在安全頁下、「系統
+// 更新」擺在儀表板上都很怪。這裡開一個「系統」頁,把偏「維運/設定」性質的
+// 電源、系統更新、HTTPS、UPS 收攏在一起;安全頁只留驗證/VPN/稽核。
+async function renderSystem(el) {
+  const [version, update, https, me, upsStat, upsCfg, upsNames] = await Promise.all([
+    api.version().catch(() => ({ version: "?" })),
+    api.systemUpdate().catch(() => null),
+    api.httpsSettings().catch(() => ({ enabled: false })),
+    api.me().catch(() => ({ role: "" })),
+    api.upsStatus().catch(() => ({ present: false })),
+    api.upsConfig().catch(() => ({})),
+    api.upsList().catch(() => []),
+  ]);
+  const isAdmin = me.role === "admin";
+
+  el.innerHTML = `
+    <h1>${esc(t("system.title"))}</h1>
+    <p class="page-subtitle">${esc(t("system.subtitle"))}</p>
+
+    ${isAdmin ? `
+    <div class="card">
+      ${h2i("power", esc(t("power.title")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("power.hint"))}</p>
+      <div id="power-msg"></div>
+      <div class="btn-row">
+        <button class="secondary" id="power-reboot" type="button">${esc(t("power.reboot"))}</button>
+        <button class="danger" id="power-shutdown" type="button">${esc(t("power.shutdown"))}</button>
+      </div>
+    </div>` : ""}
+
+    ${renderSystemUpdateCard(update, version.version, isAdmin)}
+
+    ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
+
+    <div class="card">
+      ${h2i("lock", esc(t("security.https")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
+        ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
+        ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
+      </p>
+      ${https.certExpiresAt ? `<p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.certExpiresAt", { date: formatDateTime(https.certExpiresAt) }))} · ${esc(t("security.certAutoRenews"))}</p>` : ""}
+      ${https.restartRequiredNotice ? msg("warn", translateNotice(https.restartRequiredNotice)) : ""}
+      <div id="https-msg"></div>
+      <form class="stacked" id="https-form">
+        <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> ${esc(t("security.enableHttps"))}</label></div>
+        <div class="field">
+          <label>${esc(t("security.certHosts"))}</label>
+          <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10">${esc((https.hosts || []).join("\n"))}</textarea>
+          <div class="hint">${esc(t("security.certHostsHint"))}</div>
+        </div>
+        <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
+      </form>
+    </div>
+  `;
+
+  attachSystemUpdateHandlers(el, isAdmin);
+  wireUPS(el);
+  if (isAdmin) wirePowerButtons(el);
+  attachHTTPSFormHandlers(el);
+}
+
 // ---------- 安全 ----------
 
 async function renderSecurity(el) {
@@ -2426,8 +2479,7 @@ async function renderSecurity(el) {
   updateSidebarUser(me);
   const isAdmin = me.role === "admin";
 
-  const [https, vpnStatus, peers, accounts, auditLog] = await Promise.all([
-    api.httpsSettings().catch(() => ({ enabled: false })),
+  const [vpnStatus, peers, accounts, auditLog] = await Promise.all([
     api.vpnStatus().catch(() => ({ configured: false })),
     api.vpnPeers().catch(() => []),
     isAdmin ? api.authAccounts().catch(() => []) : Promise.resolve([]),
@@ -2453,17 +2505,6 @@ async function renderSecurity(el) {
     <div class="card" id="totp-card">
       ${renderTOTPSection(me.totpEnabled)}
     </div>
-
-    ${isAdmin ? `
-    <div class="card">
-      ${h2i("power", esc(t("power.title")))}
-      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("power.hint"))}</p>
-      <div id="power-msg"></div>
-      <div class="btn-row">
-        <button class="secondary" id="power-reboot" type="button">${esc(t("power.reboot"))}</button>
-        <button class="danger" id="power-shutdown" type="button">${esc(t("power.shutdown"))}</button>
-      </div>
-    </div>` : ""}
 
     ${isAdmin ? `
     <div class="card">
@@ -2503,26 +2544,6 @@ async function renderSecurity(el) {
     ` : ""}
 
     <div class="card">
-      ${h2i("lock", esc(t("security.https")))}
-      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
-        ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
-        ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
-      </p>
-      ${https.certExpiresAt ? `<p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.certExpiresAt", { date: formatDateTime(https.certExpiresAt) }))} · ${esc(t("security.certAutoRenews"))}</p>` : ""}
-      ${https.restartRequiredNotice ? msg("warn", translateNotice(https.restartRequiredNotice)) : ""}
-      <div id="https-msg"></div>
-      <form class="stacked" id="https-form">
-        <div class="checkbox-row"><label><input type="checkbox" name="enabled" ${https.enabled ? "checked" : ""}> ${esc(t("security.enableHttps"))}</label></div>
-        <div class="field">
-          <label>${esc(t("security.certHosts"))}</label>
-          <textarea name="hosts" rows="2" placeholder="nas.local&#10;192.168.1.10">${esc((https.hosts || []).join("\n"))}</textarea>
-          <div class="hint">${esc(t("security.certHostsHint"))}</div>
-        </div>
-        <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
-      </form>
-    </div>
-
-    <div class="card">
       ${h2i("shield", esc(t("security.vpn")))}
       ${renderVPNSection(vpnStatus, peers)}
     </div>
@@ -2533,8 +2554,6 @@ async function renderSecurity(el) {
   attachPasswordFormHandlers(el);
   attachTOTPHandlers(el);
   if (isAdmin) attachAccountsHandlers(el);
-  if (isAdmin) wirePowerButtons(el);
-  attachHTTPSFormHandlers(el);
   attachVPNHandlers(el);
 }
 

@@ -30,7 +30,7 @@ const dict = {
   "zh-Hant": {
     nav: {
       dashboard: "儀表板", storage: "儲存", files: "檔案", apps: "應用程式",
-      shares: "共享", users: "使用者", monitor: "監控", backup: "備份", security: "安全", doctor: "系統診斷",
+      shares: "共享", users: "共享使用者", monitor: "監控", backup: "備份", security: "安全", system: "系統", doctor: "系統診斷",
       logout: "登出",
     },
     common: {
@@ -138,6 +138,10 @@ const dict = {
       doneBody: "基本設定都好了。你可以到各個分頁繼續設定使用者、備份、監控告警、遠端連線(WireGuard)等進階功能。",
       ctaTitle: "還沒設定好?", ctaBody: "用新手設定精靈一步步把儲存池與共享設定好,幾分鐘就能用。",
       ctaButton: "開始新手設定",
+    },
+    system: {
+      title: "系統",
+      subtitle: "電源、系統更新、HTTPS 憑證、UPS 不斷電系統等維運設定。",
     },
     power: {
       title: "系統電源",
@@ -280,7 +284,7 @@ const dict = {
       exportAdded: "匯出已新增並套用。", exportAddedWarn: "匯出已存起來,但套用失敗:{warn}",
     },
     users: {
-      title: "使用者",
+      title: "共享使用者",
       subtitle: "帳號同時是系統帳號與 Samba 帳號,沒有互動式登入殼層 —— 純粹是檔案共享的身份。",
       accounts: "帳號({n})",
       colUsername: "使用者名稱", colComment: "備註",
@@ -377,8 +381,8 @@ const dict = {
       vpnAddClient: "新增用戶端並產生設定檔",
       vpnClientAdded: "已新增用戶端「{name}」,下面是它的設定檔內容 —— 只會顯示這一次,請立刻複製或匯入用戶端裝置。",
       vpnDeleteConfirm: "確定要刪除這個用戶端嗎?刪除後該裝置會立刻無法再連線,且無法復原。",
-      accounts: "帳號管理({n})",
-      accountsHint: "管理誰可以登入這個 Web 管理介面。「管理者」可以做任何事;「檢視者」只能查看現有設定跟資料,不能新增/修改/刪除任何東西(包含自己的密碼、兩步驟驗證除外——那算「管理自己的帳號」,不算「管理 NAS」)。這裡看到的帳號跟「使用者」頁面的 SMB/NFS 帳號是完全不同的兩件事。",
+      accounts: "Web 登入帳號({n})",
+      accountsHint: "管理誰可以登入這個 Web 管理介面。「管理者」可以做任何事;「檢視者」只能查看現有設定跟資料,不能新增/修改/刪除任何東西(包含自己的密碼、兩步驟驗證除外——那算「管理自己的帳號」,不算「管理 NAS」)。這裡看到的帳號跟「共享使用者」頁面的 SMB/NFS 帳號是完全不同的兩件事。",
       colUsername: "使用者名稱", colRole: "權限", colTOTP: "兩步驟驗證", youLabel: "(你)",
       noAccounts: "還沒有其他帳號。",
       newAccountUsername: "使用者名稱", newAccountPassword: "密碼(至少 8 個字元)", newAccountRole: "權限",
@@ -430,7 +434,7 @@ const dict = {
   "zh-Hans": {
     nav: {
       dashboard: "仪表盘", storage: "存储", files: "文件", apps: "应用",
-      shares: "共享", users: "用户", monitor: "监控", backup: "备份", security: "安全", doctor: "系统诊断",
+      shares: "共享", users: "共享用户", monitor: "监控", backup: "备份", security: "安全", system: "系统", doctor: "系统诊断",
       logout: "退出登录",
     },
     common: {
@@ -538,6 +542,10 @@ const dict = {
       doneBody: "基本设置都好了。你可以到各个分页继续设置用户、备份、监控告警、远程连接(WireGuard)等高级功能。",
       ctaTitle: "还没设置好?", ctaBody: "用新手设置向导一步步把存储池与共享设置好,几分钟就能用。",
       ctaButton: "开始新手设置",
+    },
+    system: {
+      title: "系统",
+      subtitle: "电源、系统更新、HTTPS 证书、UPS 不断电系统等运维设置。",
     },
     power: {
       title: "系统电源",
@@ -680,7 +688,7 @@ const dict = {
       exportAdded: "导出已创建并生效。", exportAddedWarn: "导出已保存,但生效失败:{warn}",
     },
     users: {
-      title: "用户",
+      title: "共享用户",
       subtitle: "账号同时是系统账号与 Samba 账号,没有交互式登录终端 —— 纯粹是文件共享的身份。",
       accounts: "账号({n})",
       colUsername: "用户名", colComment: "备注",
@@ -777,8 +785,8 @@ const dict = {
       vpnAddClient: "新建客户端并生成配置文件",
       vpnClientAdded: "已新建客户端「{name}」,下面是它的配置文件内容 —— 只会显示这一次,请立刻复制或导入客户端设备。",
       vpnDeleteConfirm: "确定要删除这个客户端吗?删除后该设备会立刻无法再连接,且无法恢复。",
-      accounts: "账号管理({n})",
-      accountsHint: "管理谁可以登录这个 Web 管理界面。「管理员」可以做任何事;「查看者」只能查看现有设置和数据,不能新增/修改/删除任何东西(自己的密码、两步验证除外——那属于「管理自己的账号」,不算「管理 NAS」)。这里看到的账号跟「用户」页面的 SMB/NFS 账号是完全不同的两件事。",
+      accounts: "Web 登录账号({n})",
+      accountsHint: "管理谁可以登录这个 Web 管理界面。「管理员」可以做任何事;「查看者」只能查看现有设置和数据,不能新增/修改/删除任何东西(自己的密码、两步验证除外——那属于「管理自己的账号」,不算「管理 NAS」)。这里看到的账号跟「共享用户」页面的 SMB/NFS 账号是完全不同的两件事。",
       colUsername: "用户名", colRole: "权限", colTOTP: "两步验证", youLabel: "(你)",
       noAccounts: "还没有其他账号。",
       newAccountUsername: "用户名", newAccountPassword: "密码(至少 8 个字符)", newAccountRole: "权限",
@@ -830,7 +838,7 @@ const dict = {
   "en": {
     nav: {
       dashboard: "Dashboard", storage: "Storage", files: "Files", apps: "Apps",
-      shares: "Shares", users: "Users", monitor: "Monitor", backup: "Backup", security: "Security", doctor: "System Doctor",
+      shares: "Shares", users: "Share Users", monitor: "Monitor", backup: "Backup", security: "Security", system: "System", doctor: "System Doctor",
       logout: "Log out",
     },
     common: {
@@ -938,6 +946,10 @@ const dict = {
       doneBody: "The basics are done. From here you can set up users, backups, monitoring alerts, and remote access (WireGuard) on their respective pages.",
       ctaTitle: "Not set up yet?", ctaBody: "Use the setup wizard to configure your storage pool and a share step by step — ready in a few minutes.",
       ctaButton: "Start setup wizard",
+    },
+    system: {
+      title: "System",
+      subtitle: "Operational settings: power, system updates, HTTPS certificates, and UPS.",
     },
     power: {
       title: "System power",
@@ -1080,9 +1092,9 @@ const dict = {
       exportAdded: "Export added and applied.", exportAddedWarn: "Export saved, but applying it failed: {warn}",
     },
     users: {
-      title: "Users",
+      title: "Share Users",
       subtitle: "Accounts are both system and Samba accounts with no interactive login shell — they exist purely as a file-sharing identity.",
-      accounts: "Accounts ({n})",
+      accounts: "Admin accounts ({n})",
       colUsername: "Username", colComment: "Comment",
       noUsers: "No users created yet",
       username: "Username", comment: "Comment", password: "Password",
@@ -1178,7 +1190,7 @@ const dict = {
       vpnClientAdded: "Added client “{name}” — its configuration is shown below. It's only shown this once, so copy or import it into the client device right away.",
       vpnDeleteConfirm: "Delete this client? The device will immediately lose its connection and this cannot be undone.",
       accounts: "Account Management ({n})",
-      accountsHint: "Manage who can log into this web admin interface. An Admin account can do anything; a Viewer account can only look at existing settings and data — it can't create, change, or delete anything (except its own password and two-factor setup, which counts as managing your own account, not managing the NAS). These accounts are a completely different thing from the SMB/NFS accounts on the Users page.",
+      accountsHint: "Manage who can log into this web admin interface. An Admin account can do anything; a Viewer account can only look at existing settings and data — it can't create, change, or delete anything (except its own password and two-factor setup, which counts as managing your own account, not managing the NAS). These accounts are a completely different thing from the SMB/NFS accounts on the Share Users page.",
       colUsername: "Username", colRole: "Role", colTOTP: "Two-Factor", youLabel: "(you)",
       noAccounts: "No other accounts yet.",
       newAccountUsername: "Username", newAccountPassword: "Password (at least 8 characters)", newAccountRole: "Role",
