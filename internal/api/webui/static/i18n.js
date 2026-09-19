@@ -1124,6 +1124,14 @@ const errorMap = {
   "no user with that username": { "zh-Hant": "找不到這個使用者名稱。", "zh-Hans": "找不到这个用户名。", "en": "No user with that username." },
   "password is required": { "zh-Hant": "必須填寫密碼。", "zh-Hans": "必须填写密码。", "en": "Password is required." },
   "password must not contain control characters or line breaks": { "zh-Hant": "密碼不能包含換行或控制字元。", "zh-Hans": "密码不能包含换行或控制字符。", "en": "Password must not contain control characters or line breaks." },
+  // 第三十輪覆核(資深 UI 設計師)抓到:後端這些「尚未設定」的提示原本帶著
+  // 給工程師看的 REST 路徑尾巴(": PUT /api/... first"),直接漏到使用者畫面上。
+  // 這裡收成乾淨的在地化句子;translateError 也另有 fallback 會把未收錄錯誤的
+  // 路徑尾巴切掉,兩者搭配。
+  "no storage pool has been configured yet: PUT /api/v1/storage/pool first": { "zh-Hant": "尚未設定儲存池,請先到「儲存」頁建立。", "zh-Hans": "尚未设置存储池,请先到「存储」页创建。", "en": "No storage pool has been set up yet — create one on the Storage page first." },
+  "the storage array has been configured but is not started yet: POST /api/v1/storage/array/start first": { "zh-Hant": "儲存陣列已設定但尚未啟動,請先到「儲存」頁啟動。", "zh-Hans": "存储阵列已设置但尚未启动,请先到「存储」页启动。", "en": "The storage array is configured but not started yet — start it on the Storage page first." },
+  "no wireguard interface has been configured yet: PUT /api/v1/vpn/interface first": { "zh-Hant": "尚未設定 VPN,請先到「安全」頁設定 WireGuard 介面。", "zh-Hans": "尚未设置 VPN,请先到「安全」页设置 WireGuard 接口。", "en": "VPN is not set up yet — configure the WireGuard interface on the Security page first." },
+  "no update manifest url has been configured yet: set one first": { "zh-Hant": "尚未設定更新來源,請先在「系統更新」填入 manifest 網址。", "zh-Hans": "尚未设置更新源,请先在「系统更新」填入 manifest 网址。", "en": "No update source is set — enter a manifest URL in System Update first." },
   "no alert rule with that id": { "zh-Hant": "找不到這個 ID 的告警規則。", "zh-Hans": "找不到这个 ID 的告警规则。", "en": "No alert rule with that ID." },
   "no notifier with that id": { "zh-Hant": "找不到這個 ID 的通知管道。", "zh-Hans": "找不到这个 ID 的通知渠道。", "en": "No notifier with that ID." },
   "not authenticated: please log in": { "zh-Hant": "尚未登入,請先登入。", "zh-Hans": "尚未登录,请先登录。", "en": "Not logged in — please log in first." },
@@ -1416,8 +1424,33 @@ export function t(key, vars) {
 // translateError 把後端回傳的英文錯誤字串(err.message)翻成目前語言—
 // 只翻譯已知、乾淨的固定訊息(見上面 errorMap 的說明),查不到的原樣
 // 傳回去,不強行翻譯帶有動態內容的技術性錯誤。
+// errorPatterns 處理「動態、無法精確查表」的後端錯誤:例如 docker 的錯誤
+// 訊息會夾帶 socket 路徑、dial 失敗細節,每次內容都不同,沒辦法用 errorMap
+// 精確比對。這裡用少數幾條 pattern 把「這一類」錯誤收斂成一句在地化說明。
+const errorPatterns = [
+  {
+    re: /docker daemon|dockerd|docker\.sock/i,
+    msg: {
+      "zh-Hant": "Docker 尚未安裝或未啟動。",
+      "zh-Hans": "Docker 尚未安装或未启动。",
+      "en": "Docker is not installed or not running.",
+    },
+  },
+];
+
 export function translateError(rawMessage) {
+  if (rawMessage == null) return rawMessage;
   const entry = errorMap[rawMessage];
-  if (!entry) return rawMessage;
-  return entry[currentLocale] || entry[FALLBACK_LOCALE] || rawMessage;
+  if (entry) return entry[currentLocale] || entry[FALLBACK_LOCALE] || rawMessage;
+  // 收錄不到的動態錯誤:先試 pattern。
+  for (const p of errorPatterns) {
+    if (p.re.test(rawMessage)) {
+      return p.msg[currentLocale] || p.msg[FALLBACK_LOCALE] || rawMessage;
+    }
+  }
+  // 最後的清理:把給工程師看的 "... : GET /api/v1/... first" 這種 REST 路徑/
+  // HTTP 動詞尾巴切掉,不要把 stack-trace 風格的字丟到使用者面前(第三十輪
+  // 覆核抓到儀表板/檔案頁會出現這種字)。切完若變空字串就退回原文。
+  const cleaned = rawMessage.replace(/:\s*(GET|POST|PUT|DELETE|PATCH|HEAD)\s+\/\S.*$/i, "").trim();
+  return cleaned || rawMessage;
 }
