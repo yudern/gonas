@@ -50,13 +50,23 @@ func GenerateCode(secret string, at time.Time) (string, error) {
 // TOTP 實作(包含 Google Authenticator 本身)的標準做法 —— 使用者手機
 // 時鐘只要慢個幾秒,沒有這個容忍度就永遠登不進去。
 func ValidateCode(secret, code string, at time.Time) (bool, error) {
+	_, ok, err := ValidateCodeWithCounter(secret, code, at)
+	return ok, err
+}
+
+// ValidateCodeWithCounter 跟 ValidateCode 一樣驗證 TOTP,但額外回傳「是哪一個
+// 時間窗(counter)對上的」。第三十輪覆核(資深安全工程師)指出 TOTP 碼在
+// 30 秒窗內可被重放 —— 呼叫端(登入)可以把這個 counter 記下來,拒絕同一個
+// (或更舊的)counter 再次被用,消除窗內重放。matched counter 只在 ok 為
+// true 時有意義。
+func ValidateCodeWithCounter(secret, code string, at time.Time) (uint64, bool, error) {
 	key, err := decodeSecret(secret)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	code = strings.TrimSpace(code)
 	if len(code) != totpDigits {
-		return false, nil
+		return 0, false, nil
 	}
 
 	counter := totpCounter(at)
@@ -71,10 +81,10 @@ func ValidateCode(secret, code string, at time.Time) (bool, error) {
 			c += uint64(skew)
 		}
 		if hmac.Equal([]byte(hotp(key, c, totpDigits)), []byte(code)) {
-			return true, nil
+			return c, true, nil
 		}
 	}
-	return false, nil
+	return 0, false, nil
 }
 
 // ProvisioningURI 產生標準的 otpauth:// URI,格式跟 Google Authenticator

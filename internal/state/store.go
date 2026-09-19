@@ -164,6 +164,18 @@ type AdminAccount struct {
 	// omitempty:一般帳號沒有這個旗標,序列化時不必寫出來,保持
 	// state.json 乾淨、也跟舊版檔案相容。
 	MustChangePassword bool `json:"mustChangePassword,omitempty"`
+
+	// RecoveryCodes 是 2FA 救援碼的 SHA-256(hex),一組一次性代碼(第三十輪
+	// 覆核補上):啟用 TOTP 時產生,弄丟驗證器時可用其中一組代替 TOTP 碼登入,
+	// 用掉一組就從這裡移除一組。永遠只存雜湊,不存明文(明文只在產生當下
+	// 回給使用者看一次)。omitempty:沒啟用 2FA 的帳號不必寫出來。
+	RecoveryCodes []string `json:"recoveryCodes,omitempty"`
+
+	// LastTOTPCounter 是這個帳號最近一次成功登入所用的 TOTP 時間窗
+	// (counter)。第三十輪覆核抓到 TOTP 碼在 30 秒窗內可重放 —— 登入驗證
+	// 成功後把 counter 記在這裡,拒絕同一個或更舊的 counter 再次被用,消除
+	// 窗內重放。omitempty:沒用過 TOTP 登入的帳號是 0。
+	LastTOTPCounter uint64 `json:"lastTotpCounter,omitempty"`
 }
 
 // 目前僅有的兩種帳號權限。RoleAdmin 是完全權限(建立/修改/刪除任何

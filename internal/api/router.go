@@ -357,6 +357,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/auth/totp/setup", s.requireAuth(s.handleAuthTOTPSetup))
 	mux.HandleFunc("POST /api/v1/auth/totp/enable", s.requireAuth(s.handleAuthTOTPEnable))
 	mux.HandleFunc("POST /api/v1/auth/totp/disable", s.requireAuth(s.handleAuthTOTPDisable))
+	mux.HandleFunc("POST /api/v1/auth/totp/recovery-codes", s.requireAuth(s.handleAuthTOTPRecoveryCodes))
 	// 帳號管理(新增/刪除「其他」帳號、列出所有帳號)才是真正「管理 NAS」
 	// 的動作,一律要求 RoleAdmin。
 	mux.HandleFunc("GET /api/v1/auth/accounts", s.requireAdmin(s.handleAuthAccountsList))
@@ -364,6 +365,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/audit/log", s.requireAdmin(s.handleAuditLogGet))
 	mux.HandleFunc("POST /api/v1/auth/accounts", s.requireAdmin(s.handleAuthAccountsCreate))
 	mux.HandleFunc("DELETE /api/v1/auth/accounts/{username}", s.requireAdmin(s.handleAuthAccountsDelete))
+	mux.HandleFunc("POST /api/v1/auth/accounts/{username}/reset-totp", s.requireAdmin(s.handleAuthAccountsResetTOTP))
 
 	mux.HandleFunc("GET /api/v1/security/https", s.requireAuth(s.handleSecurityHTTPSGet))
 	mux.HandleFunc("PUT /api/v1/security/https", s.requireAdmin(s.handleSecurityHTTPSSet))

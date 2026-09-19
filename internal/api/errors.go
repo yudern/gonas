@@ -54,6 +54,7 @@ var (
 	errAdminUsernameTaken     = errors.New("an account with that username already exists")
 	errAdminAccountNotFound   = errors.New("no account with that username")
 	errCannotDeleteOwnAccount = errors.New("you cannot delete your own account while logged in as it: log in as a different admin account first")
+	errCannotResetOwnTOTP     = errors.New("to turn off your own two-factor authentication, use the disable option (which asks for your password)")
 	errCannotDeleteLastAdmin  = errors.New("cannot delete the last remaining admin-role account: at least one must always exist")
 
 	// 第十九輪:預設 admin(gonas/gonas)第一次登入必須先改密碼,改掉

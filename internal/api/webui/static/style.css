@@ -464,3 +464,21 @@ a { color: var(--accent); }
   .grid { grid-template-columns: 1fr; }
   form.stacked { max-width: none; }
 }
+
+/* 2FA 救援碼面板:等寬、兩欄、方便一次看完抄下(第三十輪覆核補上的 2FA 救援) */
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+}
+.recovery-grid code {
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  padding: 4px 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  border-radius: 6px;
+  text-align: center;
+}
+@media (max-width: 560px) {
+  .recovery-grid { grid-template-columns: 1fr; }
+}

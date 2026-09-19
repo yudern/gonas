@@ -341,15 +341,54 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if admin.TOTPEnabled {
-		valid, err := security.ValidateCode(admin.TOTPSecret, req.TOTPCode, time.Now())
+		counter, valid, err := security.ValidateCodeWithCounter(admin.TOTPSecret, req.TOTPCode, time.Now())
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if !valid {
+		switch {
+		case valid && counter > admin.LastTOTPCounter:
+			// 正常 TOTP 驗證通過。記下這次用的 counter,之後同一個或更舊的
+			// counter 一律拒絕 —— 消除「同一個 6 位數碼在 30 秒窗內被攔截後
+			// 重放」的可能(第三十輪覆核抓到的 TOTP 重放)。
+			if err := s.store.Update(func(st *state.State) error {
+				if i := findAdminIndex(st.Admins, admin.Username); i >= 0 {
+					st.Admins[i].LastTOTPCounter = counter
+				}
+				return nil
+			}); err != nil {
+				s.logger.Error("recording totp counter failed", "err", err)
+			}
+		case valid:
+			// 碼本身算得出來,但 counter 不比上次新 —— 這個碼(或更舊的)已經
+			// 用過了,判定為重放,拒絕。
 			s.loginLimiter.RecordFailure(ip)
 			writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
 			return
+		default:
+			// 不是合法 TOTP,再看看是不是一組還沒用過的救援碼。比對＋消耗都在
+			// 同一個 store.Update 裡原子完成(避免兩個登入同時用同一組碼)。
+			consumed := false
+			if err := s.store.Update(func(st *state.State) error {
+				i := findAdminIndex(st.Admins, admin.Username)
+				if i < 0 {
+					return nil
+				}
+				if idx, ok := security.MatchRecoveryCode(req.TOTPCode, st.Admins[i].RecoveryCodes); ok {
+					codes := st.Admins[i].RecoveryCodes
+					st.Admins[i].RecoveryCodes = append(codes[:idx], codes[idx+1:]...)
+					consumed = true
+				}
+				return nil
+			}); err != nil {
+				s.logger.Error("consuming recovery code failed", "err", err)
+			}
+			if !consumed {
+				s.loginLimiter.RecordFailure(ip)
+				writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
+				return
+			}
+			s.logger.Warn("login used a 2FA recovery code", "user", admin.Username)
 		}
 	}
 
@@ -527,18 +566,28 @@ func (s *Server) handleAuthTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 啟用成功的同時產生一組一次性救援碼(第三十輪覆核補上的 2FA 救援路徑)。
+	// 明文只在這個回應裡回給使用者看一次,state 只存雜湊。
+	plain, hashed, err := security.GenerateRecoveryCodes(0)
+	if err != nil {
+		s.logger.Error("generating recovery codes failed", "err", err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	if err := s.store.Update(func(st *state.State) error {
 		i := findAdminIndex(st.Admins, sess.Username)
 		if i < 0 {
 			return errAdminNotConfigured
 		}
 		st.Admins[i].TOTPEnabled = true
+		st.Admins[i].RecoveryCodes = hashed
 		return nil
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string][]string{"recoveryCodes": plain})
 }
 
 type totpDisableRequest struct {
@@ -578,12 +627,48 @@ func (s *Server) handleAuthTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		}
 		st.Admins[i].TOTPSecret = ""
 		st.Admins[i].TOTPEnabled = false
+		st.Admins[i].RecoveryCodes = nil
+		st.Admins[i].LastTOTPCounter = 0
 		return nil
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAuthTOTPRecoveryCodes 讓已啟用 2FA 的使用者重新產生一組救援碼(舊的
+// 全部作廢)—— 抄丟了、或用掉幾組想補滿時用。新的明文一樣只回一次。
+func (s *Server) handleAuthTOTPRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	sess, _ := r.Context().Value(sessionContextKey).(security.Session)
+
+	admin, found := findAdmin(s.store.Snapshot().Admins, sess.Username)
+	if !found {
+		writeError(w, http.StatusConflict, errAdminNotConfigured)
+		return
+	}
+	if !admin.TOTPEnabled {
+		writeError(w, http.StatusConflict, errTOTPNotSetUp)
+		return
+	}
+	plain, hashed, err := security.GenerateRecoveryCodes(0)
+	if err != nil {
+		s.logger.Error("regenerating recovery codes failed", "err", err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		i := findAdminIndex(st.Admins, sess.Username)
+		if i < 0 {
+			return errAdminNotConfigured
+		}
+		st.Admins[i].RecoveryCodes = hashed
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]string{"recoveryCodes": plain})
 }
 
 // --- Phase 13：管理其他帳號(帳號管理頁面)-------------------------------
@@ -719,5 +804,44 @@ func (s *Server) handleAuthAccountsDelete(w http.ResponseWriter, r *http.Request
 	// 帳號已經從 state 移除，這個使用者名下任何還留著的 session 立刻
 	// 失效——不用等 24 小時的 session TTL 到期，也不需要 gonasd 重啟。
 	s.sessions.RevokeAllForUser(target)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAuthAccountsResetTOTP 讓管理者清掉「另一個」帳號的 2FA(第三十輪覆核
+// 補上的 lockout 救援路徑):某個使用者弄丟驗證器、救援碼也用光/沒抄,原本
+// 就永久登不進去 —— 由另一個管理者從帳號管理頁把他的 2FA 重設掉,他就能只用
+// 密碼登入、再重新設定 2FA。requireAdmin(見 router.go)。
+//
+// 刻意「不能重設自己」:重設自己的 2FA 應該走 /auth/totp/disable(要重新輸入
+// 密碼),而不是這個免密碼的管理動作 —— 避免「趁別人登入的畫面沒鎖」就一鍵
+// 拿掉本人的 2FA。想清掉自己的請用停用流程。
+func (s *Server) handleAuthAccountsResetTOTP(w http.ResponseWriter, r *http.Request) {
+	sess, _ := r.Context().Value(sessionContextKey).(security.Session)
+	target := r.PathValue("username")
+
+	if target == sess.Username {
+		writeError(w, http.StatusConflict, errCannotResetOwnTOTP)
+		return
+	}
+
+	if err := s.store.Update(func(st *state.State) error {
+		i := findAdminIndex(st.Admins, target)
+		if i < 0 {
+			return errAdminAccountNotFound
+		}
+		st.Admins[i].TOTPSecret = ""
+		st.Admins[i].TOTPEnabled = false
+		st.Admins[i].RecoveryCodes = nil
+		st.Admins[i].LastTOTPCounter = 0
+		return nil
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errAdminAccountNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+	s.logger.Warn("admin reset another account's 2FA", "by", sess.Username, "target", target)
 	w.WriteHeader(http.StatusNoContent)
 }

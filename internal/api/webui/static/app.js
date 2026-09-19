@@ -183,7 +183,7 @@ function showLoginGate() {
     <form class="stacked" id="login-form">
       <div class="field"><label>${esc(t("auth.username"))}</label><input type="text" name="username" autocomplete="username" required></div>
       <div class="field"><label>${esc(t("auth.password"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
-      <div class="field"><label>${esc(t("auth.totpCode"))}</label><input type="text" name="totpCode" inputmode="numeric" pattern="[0-9]*" placeholder="123456" autocomplete="one-time-code"></div>
+      <div class="field"><label>${esc(t("auth.totpCode"))}</label><input type="text" name="totpCode" placeholder="123456" autocomplete="one-time-code"><div class="hint">${esc(t("auth.totpOrRecoveryHint"))}</div></div>
       <div class="btn-row"><button type="submit">${esc(t("auth.loginBtn"))}</button></div>
     </form>
   `;
@@ -2409,7 +2409,9 @@ async function renderSecurity(el) {
                 <td>${esc(a.username)}${a.username === me.username ? ` <span class="pill neutral">${esc(t("security.youLabel"))}</span>` : ""}</td>
                 <td>${esc(a.role === "admin" ? t("auth.roleAdmin") : t("auth.roleViewer"))}</td>
                 <td>${a.totpEnabled ? `<span class="pill ok">${esc(t("security.totpEnabledPill"))}</span>` : `<span class="pill neutral">${esc(t("security.totpDisabledPill"))}</span>`}</td>
-                <td>${a.username === me.username ? "" : `<button class="secondary" data-del-account="${esc(a.username)}">${esc(t("common.delete"))}</button>`}</td>
+                <td>${a.username === me.username ? "" : `
+                  ${a.totpEnabled ? `<button class="secondary" data-reset-totp="${esc(a.username)}">${esc(t("security.resetTOTP"))}</button> ` : ""}
+                  <button class="secondary" data-del-account="${esc(a.username)}">${esc(t("common.delete"))}</button>`}</td>
               </tr>
             `).join("") : `<tr><td colspan="4" class="empty-state">${esc(t("security.noAccounts"))}</td></tr>`}
           </tbody>
@@ -2545,6 +2547,20 @@ function attachAccountsHandlers(el) {
     });
   });
 
+  el.querySelectorAll("[data-reset-totp]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const username = btn.dataset.resetTotp;
+      if (!confirm(t("security.resetTOTPConfirm", { name: username }))) return;
+      try {
+        await api.resetAccountTOTP(username);
+        el.querySelector("#account-msg").innerHTML = msg("ok", t("security.resetTOTPOk", { name: username }));
+        await renderSecurity(el);
+      } catch (err) {
+        el.querySelector("#account-msg").innerHTML = msg("error", err.message);
+      }
+    });
+  });
+
   const form = el.querySelector("#account-form");
   if (!form) return;
   form.addEventListener("submit", async (ev) => {
@@ -2580,12 +2596,28 @@ function attachPasswordFormHandlers(el) {
   });
 }
 
+// recoveryCodesPanel 產生「只顯示一次」的救援碼面板:一組等寬字體的代碼、
+// 抄下收好的提醒,以及一個「我已保存」按鈕(呼叫端把它接去 renderSecurity
+// 重新整理)。刻意用 warn 色系強調「這頁關掉就再也看不到」。
+function recoveryCodesPanel(codes) {
+  return `
+    <div class="card" style="border-color:var(--warn);background:var(--warn-soft);margin-top:12px">
+      ${h2i("key", esc(t("security.recoveryTitle")))}
+      <p style="font-size:12.5px;margin:0 0 10px">${esc(t("security.recoveryIntro"))}</p>
+      <div class="recovery-grid">${codes.map((c) => `<code>${esc(c)}</code>`).join("")}</div>
+      <div class="btn-row" style="margin-top:12px"><button type="button" id="recovery-done">${esc(t("security.recoveryDone"))}</button></div>
+    </div>
+  `;
+}
+
 function renderTOTPSection(enabled) {
   if (enabled) {
     return `
       ${h2i("otp", esc(t("security.totp")))}
       <p style="margin:0 0 12px"><span class="pill ok">${esc(t("security.totpEnabledPill"))}</span></p>
       <div id="totp-msg"></div>
+      <div id="totp-recovery-area"></div>
+      <div class="btn-row" style="margin:0 0 16px"><button type="button" class="secondary" id="totp-regen">${esc(t("security.recoveryRegenerate"))}</button></div>
       <form class="stacked" id="totp-disable-form">
         <div class="field"><label>${esc(t("security.totpCurrentPassword"))}</label><input type="password" name="password" autocomplete="current-password" required></div>
         <div class="btn-row"><button type="submit" class="danger">${esc(t("security.totpDisable"))}</button></div>
@@ -2622,15 +2654,39 @@ function attachTOTPHandlers(el) {
           ev.preventDefault();
           const f = new FormData(ev.target);
           try {
-            await api.totpEnable(f.get("code").trim());
+            const res = await api.totpEnable(f.get("code").trim());
             box.innerHTML = msg("ok", t("security.totpEnabled"));
-            await renderSecurity(el);
+            // 顯示救援碼(只有這一次),使用者按「我已保存」後才重新整理。
+            const codes = (res && res.recoveryCodes) || [];
+            el.querySelector("#totp-setup-area").innerHTML = recoveryCodesPanel(codes);
+            const done = el.querySelector("#recovery-done");
+            if (done) done.addEventListener("click", () => renderSecurity(el));
           } catch (err) {
             box.innerHTML = msg("error", err.message);
           }
         });
       } catch (err) {
         box.innerHTML = msg("error", err.message);
+      }
+    });
+  }
+
+  const regenBtn = el.querySelector("#totp-regen");
+  if (regenBtn) {
+    regenBtn.addEventListener("click", async () => {
+      const box = el.querySelector("#totp-msg");
+      if (!confirm(t("security.recoveryRegenConfirm"))) return;
+      try {
+        const res = await api.totpRegenerateRecoveryCodes();
+        const codes = (res && res.recoveryCodes) || [];
+        const area = el.querySelector("#totp-recovery-area");
+        if (area) {
+          area.innerHTML = recoveryCodesPanel(codes);
+          const done = area.querySelector("#recovery-done");
+          if (done) done.addEventListener("click", () => { area.innerHTML = ""; });
+        }
+      } catch (err) {
+        if (box) box.innerHTML = msg("error", err.message);
       }
     });
   }
