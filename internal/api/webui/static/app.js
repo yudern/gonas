@@ -664,8 +664,69 @@ async function wizardDisks(el) {
   el.querySelector("[data-wz-skip]").addEventListener("click", () => wizardGo(el, 2));
 }
 
+// poolCandidates 挑出「已經備好、掛在 /mnt 底下」的碟——這些才是能加進儲存池
+// 的對象(系統碟掛在 / 或 /boot,不會是 /mnt 開頭,自然被排除)。第三十輪
+// 覆核(資深產品經理)把嚮導這一步從「手打路徑」改成勾選,靠的就是這份清單。
+function poolCandidates(disks) {
+  return (disks || []).filter((d) => d.mountpoint && d.mountpoint.indexOf("/mnt/") === 0);
+}
+
+// poolDiskPicker 把候選碟畫成一排「勾選 + 資料/同位切換」。預設把「最大的
+// 一顆」設成同位碟 —— SnapRAID 要求同位碟不小於最大的資料碟,把最大的當同位
+// 是最不會出錯的預設,使用者要改也行。
+function poolDiskPicker(candidates) {
+  let maxIdx = 0;
+  candidates.forEach((d, i) => { if (d.sizeBytes > candidates[maxIdx].sizeBytes) maxIdx = i; });
+  return candidates.map((d, i) => {
+    const nm = "role-" + d.path.replace(/[^a-zA-Z0-9]/g, "_");
+    const parityDefault = i === maxIdx && candidates.length >= 2;
+    return `<div class="pool-disk-row">
+      <label class="pool-disk-pick"><input type="checkbox" class="pool-pick" data-mount="${esc(d.mountpoint)}" data-role-name="${esc(nm)}" checked>
+        <span class="pool-disk-info"><code>${esc(d.path)}</code><span class="prepare-meta">${formatBytes(d.sizeBytes)} · ${d.rotational ? "HDD" : "SSD/NVMe"} · ${esc(d.mountpoint)}</span></span>
+      </label>
+      <span class="pool-role-toggle">
+        <label><input type="radio" name="${nm}" value="data" ${parityDefault ? "" : "checked"}>${esc(t("storage.roleData"))}</label>
+        <label><input type="radio" name="${nm}" value="parity" ${parityDefault ? "checked" : ""}>${esc(t("storage.roleParity"))}</label>
+      </span>
+    </div>`;
+  }).join("");
+}
+
+// collectPool 從勾選狀態組出要送給後端的 pool 設定,並做「至少一顆資料碟、
+// 至少一顆同位碟」的前端檢查。content 檔位置自動推導(放在每顆資料碟上,不足
+// 兩份就補到同位碟),使用者完全不用碰 SnapRAID 的內部細節。回傳 {pool} 或
+// {error}。
+function collectPool(el, name, mountPoint) {
+  const data = [], parity = [];
+  el.querySelectorAll(".pool-pick").forEach((cb) => {
+    if (!cb.checked) return;
+    const role = el.querySelector(`input[name="${cb.dataset.roleName}"]:checked`);
+    (role && role.value === "parity" ? parity : data).push(cb.dataset.mount);
+  });
+  if (data.length === 0) return { error: t("storage.needData") };
+  if (parity.length === 0) return { error: t("storage.needParity") };
+  const content = data.slice();
+  for (const p of parity) { if (content.length >= 2) break; content.push(p); }
+  return { pool: { name: name.trim(), mountPoint: mountPoint.trim(), dataDisks: data, parityDisks: parity, contentFiles: content } };
+}
+
+// poolParityNote:一句話 + 小圖解釋同位碟在做什麼(第三十輪覆核要求)。
+function poolParityNote() {
+  return `<div class="pool-parity-note">
+    <svg viewBox="0 0 120 40" aria-hidden="true" class="pool-parity-diagram">
+      <rect x="2" y="10" width="20" height="20" rx="3"/><rect x="26" y="10" width="20" height="20" rx="3"/><rect x="50" y="10" width="20" height="20" rx="3"/>
+      <rect x="90" y="10" width="20" height="20" rx="3" class="parity"/>
+      <path d="M74 20h12" /><path d="M82 16l4 4-4 4"/>
+    </svg>
+    <p>${esc(t("storage.parityExplain"))}</p>
+  </div>`;
+}
+
 async function wizardPool(el) {
-  const arr = await api.arrayStatus().catch(() => ({ state: "unconfigured" }));
+  const [arr, disks] = await Promise.all([
+    api.arrayStatus().catch(() => ({ state: "unconfigured" })),
+    api.disks().catch(() => []),
+  ]);
   if (arr.state !== "unconfigured") {
     el.innerHTML = wizardShell(
       `<h2>${esc(t("setup.poolTitle"))}</h2>${msg("ok", t("setup.poolAlready"))}`,
@@ -675,16 +736,27 @@ async function wizardPool(el) {
     el.querySelector("[data-wz-next]").addEventListener("click", () => wizardGo(el, 3));
     return;
   }
+  const candidates = poolCandidates(disks);
+  if (candidates.length === 0) {
+    el.innerHTML = wizardShell(`
+      <h2>${esc(t("setup.poolTitle"))}</h2>
+      ${msg("warn", t("storage.poolNoPrepared"))}
+    `, { back: true, skip: true });
+    el.querySelector("[data-wz-back]").addEventListener("click", () => wizardGo(el, 1));
+    el.querySelector("[data-wz-skip]").addEventListener("click", () => wizardGo(el, 3));
+    return;
+  }
   el.innerHTML = wizardShell(`
     <h2>${esc(t("setup.poolTitle"))}</h2>
     <p style="color:var(--text-dim)">${t("setup.poolBody")}</p>
+    ${poolParityNote()}
     <div id="wz-pool-msg"></div>
     <form class="stacked" id="wz-pool-form">
       <div class="field"><label>${esc(t("storage.poolName"))}</label><input type="text" name="name" value="tank" required></div>
       <div class="field"><label>${esc(t("storage.poolMountPoint"))}</label><input type="text" name="mountPoint" value="/mnt/tank" required></div>
-      <div class="field"><label>${esc(t("storage.dataDisks"))}</label><textarea name="dataDisks" rows="2" placeholder="/mnt/disk1"></textarea></div>
-      <div class="field"><label>${esc(t("storage.parityDisks"))}</label><textarea name="parityDisks" rows="2" placeholder="/mnt/parity1"></textarea></div>
-      <div class="field"><label>${esc(t("storage.contentFiles"))}</label><textarea name="contentFiles" rows="2" placeholder="/mnt/disk1&#10;/boot/config/snapraid"></textarea></div>
+      <div class="field"><label>${esc(t("storage.choosePoolDisks"))}</label>
+        <div class="pool-disk-list">${poolDiskPicker(candidates)}</div>
+      </div>
       <div class="btn-row"><button type="submit">${esc(t("storage.savePool"))}</button></div>
     </form>
   `, { back: true, skip: true });
@@ -693,14 +765,11 @@ async function wizardPool(el) {
   el.querySelector("#wz-pool-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
-    const pool = {
-      name: f.get("name").trim(), mountPoint: f.get("mountPoint").trim(),
-      dataDisks: linesOf(f.get("dataDisks")), parityDisks: linesOf(f.get("parityDisks")),
-      contentFiles: linesOf(f.get("contentFiles")),
-    };
     const box = el.querySelector("#wz-pool-msg");
+    const res = collectPool(el, f.get("name"), f.get("mountPoint"));
+    if (res.error) { box.innerHTML = msg("error", res.error); return; }
     try {
-      await api.setPool(pool);
+      await api.setPool(res.pool);
       wizardGo(el, 3);
     } catch (err) {
       box.innerHTML = msg("error", err.message);

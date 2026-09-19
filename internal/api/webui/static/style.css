@@ -482,3 +482,30 @@ a { color: var(--accent); }
 @media (max-width: 560px) {
   .recovery-grid { grid-template-columns: 1fr; }
 }
+
+/* 新手嚮導:儲存池視覺化硬碟選擇器(第三十輪覆核把「手打路徑」改成勾選) */
+.pool-disk-list { display: flex; flex-direction: column; gap: 8px; }
+.pool-disk-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  flex-wrap: wrap;
+}
+.pool-disk-pick { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1 1 auto; min-width: 0; }
+.pool-disk-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pool-disk-info code { font-size: 13px; }
+.pool-role-toggle { display: inline-flex; gap: 4px; background: var(--surface-2, rgba(127,127,127,0.08)); border-radius: 8px; padding: 2px; flex: none; }
+.pool-role-toggle label { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.pool-role-toggle input { accent-color: var(--accent); }
+.pool-parity-note {
+  display: flex; align-items: center; gap: 12px; margin: 12px 0;
+  padding: 12px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--border);
+}
+.pool-parity-note p { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+.pool-parity-diagram { width: 96px; height: 32px; flex: none; }
+.pool-parity-diagram rect { fill: none; stroke: var(--text-faint); stroke-width: 1.6; }
+.pool-parity-diagram rect.parity { stroke: var(--accent); }
+.pool-parity-diagram path { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+@media (max-width: 560px) {
+  .pool-disk-row { align-items: flex-start; }
+  .pool-parity-diagram { display: none; }
+}
