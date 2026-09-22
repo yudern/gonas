@@ -19,6 +19,7 @@ type prepFakeRunner struct {
 	lsblkType   string            // lsblk 回報的 type;空字串預設 "disk"
 	uuid        string
 	failMkfs    bool
+	busyMounts  map[string]bool // 已經有東西掛在上面的掛載點(模擬 findmnt)
 }
 
 func (f *prepFakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -34,6 +35,12 @@ func (f *prepFakeRunner) Run(ctx context.Context, name string, args ...string) (
 			typ = "disk"
 		}
 		return []byte(`{"blockdevices":[{"path":"` + dev + `","type":"` + typ + `","mountpoint":"` + mp + `"}]}`), nil
+	case "findmnt":
+		target := args[len(args)-1]
+		if f.busyMounts[target] {
+			return []byte(target + "\n"), nil
+		}
+		return nil, errors.New("findmnt: not mounted") // 模擬非零退出
 	case "mkfs.ext4":
 		if f.failMkfs {
 			return nil, errors.New("mkfs boom")
@@ -79,6 +86,40 @@ func TestPrepareDisk_HappyPath(t *testing.T) {
 	data, _ := os.ReadFile(fstab)
 	if !strings.Contains(string(data), "UUID=ABC-123 /mnt/disk1 ext4") {
 		t.Errorf("fstab missing entry, got: %q", string(data))
+	}
+}
+
+func TestPrepareDisk_RefusesBusyMountpoint(t *testing.T) {
+	// 真機測試抓到的坑:第二顆碟想掛到已經有碟的 /mnt/disk1,必須被擋、
+	// 而且不能跑到 mkfs(否則就把一顆好碟格式化了卻掛不上去)。
+	r := &prepFakeRunner{
+		lsblkMounts: map[string]string{"/dev/sdc": ""},
+		busyMounts:  map[string]bool{"/mnt/disk1": true},
+		uuid:        "x",
+	}
+	_, err := PrepareDisk(context.Background(), r, "/dev/sdc", "/mnt/disk1", filepath.Join(t.TempDir(), "fstab"))
+	if err == nil {
+		t.Fatal("expected refusal for an already-used mount point, got nil")
+	}
+	if r.ran("mkfs.ext4") {
+		t.Fatal("SAFETY BUG: mkfs ran even though the mount point was already in use")
+	}
+}
+
+func TestPrepareDisk_AllowsFreeMountpoint(t *testing.T) {
+	// disk1 已被佔用,但這顆要掛到空閒的 disk2 —— 應該正常通過。
+	fstab := filepath.Join(t.TempDir(), "fstab")
+	r := &prepFakeRunner{
+		lsblkMounts: map[string]string{"/dev/sdc": ""},
+		busyMounts:  map[string]bool{"/mnt/disk1": true},
+		uuid:        "DEF-456",
+	}
+	res, err := PrepareDisk(context.Background(), r, "/dev/sdc", "/mnt/disk2", fstab)
+	if err != nil {
+		t.Fatalf("expected success mounting to a free point, got: %v", err)
+	}
+	if res.Mountpoint != "/mnt/disk2" {
+		t.Fatalf("unexpected mountpoint: %+v", res)
 	}
 }
 

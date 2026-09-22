@@ -69,6 +69,17 @@ func PrepareDisk(ctx context.Context, r Runner, device, mountpoint, fstabPath st
 		return res, errors.New("refusing to format: the disk (or a partition on it) is currently mounted — GoNAS never formats an in-use disk, including the system disk")
 	}
 
+	// 第五十三輪(真機測試抓到):目標掛載點必須是空閒的,不能已經有別的碟
+	// 掛在上面。Linux 的 mount 允許「堆疊掛載」——把第二顆碟掛到已經有碟的
+	// /mnt/disk1,不會報錯,但後掛的會蓋住先掛的,寫進去的資料進了看不到的
+	// 那一層;而且 appendFstabEntry 對同一個掛載點是冪等的,只會留第一筆,
+	// 重開機後只有一顆掛得回來。結果是儲存池把「同一個掛載點」收到不只一次
+	// (使用者看到的『同一顆碟被列了不止一次』其實是這個),更糟的是靜默
+	// 資料遺失。所以動手 mkfs 之前先擋掉。
+	if mountpointBusy(ctx, r, mountpoint) {
+		return res, errors.New("that mount point is already in use by another disk — pick a different one such as /mnt/disk2")
+	}
+
 	// 格式化成 ext4(SnapRAID 的資料碟/校驗碟直接用整碟檔案系統,不需要
 	// 額外切分割表)。-F 不互動詢問、-q 安靜輸出。
 	if _, err := r.Run(ctx, "mkfs.ext4", "-F", "-q", device); err != nil {
@@ -95,6 +106,18 @@ func PrepareDisk(ctx context.Context, r Runner, device, mountpoint, fstabPath st
 	}
 
 	return PrepareResult{Device: device, Mountpoint: mountpoint, FSType: "ext4", UUID: uuid}, nil
+}
+
+// mountpointBusy 回報 mp 這個掛載點目前是不是已經有東西掛在上面。用
+// findmnt 精準比對(--mountpoint 是「剛好掛在這個路徑」而不是「這個路徑
+// 底下」);findmnt 對「沒有東西掛在那裡」會以非零狀態結束,Runner 把它
+// 變成 err,這裡就當作空閒。findmnt 屬 util-linux,Debian 一定有。
+func mountpointBusy(ctx context.Context, r Runner, mp string) bool {
+	out, err := r.Run(ctx, "findmnt", "-rno", "TARGET", "--mountpoint", mp)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 func validateMountpoint(mp string) error {

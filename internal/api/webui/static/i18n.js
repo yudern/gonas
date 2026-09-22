@@ -1411,6 +1411,11 @@ const errorMap = {
     "zh-Hans": "拒绝格式化:这颗盘(或其上的分区)目前正被挂载——GoNAS 绝不格式化使用中的盘,系统盘也在此列。",
     "en": "Refusing to format: the disk (or a partition on it) is currently mounted — GoNAS never formats an in-use disk, including the system disk.",
   },
+  "that mount point is already in use by another disk — pick a different one such as /mnt/disk2": {
+    "zh-Hant": "這個掛載點已經被另一顆碟用了——請換一個,例如 /mnt/disk2。",
+    "zh-Hans": "这个挂载点已经被另一颗盘用了——请换一个,例如 /mnt/disk2。",
+    "en": "That mount point is already in use by another disk — pick a different one such as /mnt/disk2.",
+  },
   "the mount point must be under /mnt/ (for example /mnt/disk1)": {
     "zh-Hant": "掛載點必須位於 /mnt/ 底下(例如 /mnt/disk1)。",
     "zh-Hans": "挂载点必须位于 /mnt/ 底下(例如 /mnt/disk1)。",

@@ -936,12 +936,30 @@ async function renderStorage(el) {
 // 另外把 0 位元組的虛擬區塊裝置(zram、空的 loop 等)也濾掉 —— 它們不是
 // 真的可以拿來做儲存的硬碟,列出來只會讓使用者困惑。
 function renderPrepareList(disks) {
-  const candidates = (disks || []).filter((d) => !d.inUse && d.sizeBytes > 0);
+  const all = disks || [];
+  const candidates = all.filter((d) => !d.inUse && d.sizeBytes > 0);
   if (!candidates.length) {
     return `<p class="empty-state">${esc(t("storage.prepareNoCandidates"))}</p>`;
   }
-  return candidates.map((d, i) => {
-    const suggested = `/mnt/disk${i + 1}`;
+  // 第五十三輪(真機測試抓到):建議掛載點原本用候選清單的 index+1,但一顆
+  // 一顆準備時,每準備好一顆它就從候選清單消失,下一顆的 index 又回到 0,
+  // 於是每顆都被建議成 /mnt/disk1 —— 使用者照建議按下去,好幾顆全掛到
+  // /mnt/disk1,最後在建立儲存池時撞成「同一顆碟被列了不止一次」。改成掃描
+  // 「已經被任何碟(含已掛載的)佔用的 /mnt/diskN 編號」,每顆都配一個真正
+  // 還沒被用到的編號。
+  const usedNums = new Set();
+  all.forEach((d) => {
+    const m = /^\/mnt\/disk(\d+)$/.exec(d.mountpoint || "");
+    if (m) usedNums.add(Number(m[1]));
+  });
+  let nextNum = 0;
+  const nextFreeMount = () => {
+    do { nextNum += 1; } while (usedNums.has(nextNum));
+    usedNums.add(nextNum);
+    return `/mnt/disk${nextNum}`;
+  };
+  return candidates.map((d) => {
+    const suggested = nextFreeMount();
     return `<div class="prepare-row" data-device="${esc(d.path)}">
       <div class="prepare-info">
         <code>${esc(d.path)}</code>
