@@ -643,13 +643,21 @@ fi
 #
 # 依賴:python3(裝了 Xcode CLT 的 Mac 一定有)。沒有 python3 就跳過、
 # 印 warning、不中斷建置——寧可少換這張圖,也不要讓整個 ISO 建不出來。
-GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/logo_installer.png"
+#
+# 第五十三輪(使用者實機測試):把 gtk 安裝器裡那張 logo 換成 GoNAS logo 之後,
+# 實機上那個位置顯示成「找不到圖片」的破圖(initrd 本身沒壞——安裝器有正常
+# 開起來、在讀 udeb——是那張 logo 在真實 d-i 環境裡讀不出來)。我們無法在
+# 沙盒/CI 裡燒 ISO 開機驗證,所以依使用者決定:那個位置「乾脆留空」——換成
+# 一張有效的「全透明」PNG,讓那個位置什麼都不顯示(不會是破圖、也不會是
+# Debian logo)。要改回顯示 GoNAS logo 的話,把下面這行指回 logo_installer.png
+# 即可(那張圖仍保留在 branding/ 底下),但要記得再實機驗證一次能不能顯示。
+GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/installer-logo-blank.png"
 if [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
     echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "warning: python3 not found on this build machine — skipping graphical-installer logo rebranding (the boot menu is still GoNAS-branded; install python3 to also rebrand the graphical installer logo)" >&2
 else
-    echo "==> rebranding the graphical installer logo (Debian -> GoNAS) inside gtk initrd(s)"
+    echo "==> blanking the graphical installer logo (replacing it with a transparent image) inside gtk initrd(s)"
     # 找出所有 initrd 檔(不同版本/架構路徑不同:install.amd/gtk/initrd.gz、
     # install.a64/gtk/initrd.gz 等)。對每個都跑一次 rebrander——沒有 logo
     # 的 initrd(例如純文字安裝的那個)會回傳 2、原檔不動,無害;有 logo
@@ -665,22 +673,22 @@ else
         # rebrander 回傳:0=換到、2=這個 initrd 沒 logo(略過)、1=出錯。
         if python3 "$SCRIPT_DIR/lib/rebrand-installer-initrd.py" "$initrd" "$GONAS_INSTALLER_LOGO"; then
             GTK_LOGO_REPLACED=$((GTK_LOGO_REPLACED + 1))
-            echo "    - rebranded logo in ${initrd#"$EXTRACT_DIR"/}"
+            echo "    - blanked logo in ${initrd#"$EXTRACT_DIR"/}"
         else
             _rc=$?
             # 2 是「這個 initrd 裡沒有 logo」,是正常情況(文字安裝的 initrd),
             # 不當錯誤。只有 1(真的出錯)才印出來提醒——但仍不中斷建置,
             # 因為開機選單品牌化已經生效,少換這張圖不至於毀掉整份 ISO。
             if [ "$_rc" != "2" ]; then
-                echo "warning: rebrander failed on ${initrd#"$EXTRACT_DIR"/} (rc=$_rc) — leaving it unchanged; the graphical installer for that image may still show the Debian logo" >&2
+                echo "warning: logo-blanking failed on ${initrd#"$EXTRACT_DIR"/} (rc=$_rc) — leaving it unchanged; the graphical installer for that image may still show the stock Debian logo" >&2
             fi
         fi
     done < "$WORK_DIR/initrd-files.list"
-    echo "==> graphical installer logo: rebranded $GTK_LOGO_REPLACED of $INITRD_FOUND initrd file(s) (initrds without an installer logo are skipped, which is normal)"
+    echo "==> graphical installer logo: blanked in $GTK_LOGO_REPLACED of $INITRD_FOUND initrd file(s) (initrds without an installer logo are skipped, which is normal)"
     if [ "$INITRD_FOUND" = "0" ]; then
-        echo "warning: found no initrd files under the ISO tree — the graphical installer logo could not be rebranded; verify the ISO layout" >&2
+        echo "warning: found no initrd files under the ISO tree — the graphical installer logo could not be blanked; verify the ISO layout" >&2
     elif [ "$GTK_LOGO_REPLACED" = "0" ]; then
-        echo "warning: found initrd files but none contained an installer logo to replace — the graphical installer may still show the Debian logo; this Debian build may store the logo elsewhere (verify on a real boot and report back)" >&2
+        echo "warning: found initrd files but none contained an installer logo to blank — the graphical installer may still show the Debian logo; this Debian build may store the logo elsewhere (verify on a real boot and report back)" >&2
     fi
 fi
 

@@ -231,6 +231,30 @@ with tempfile.TemporaryDirectory() as d:
             got = int(hdr[102:110], 16)
             check("crc: c_check recomputed to match new logo data", got == want)
 
+# --- 8. 第五十三輪:實際 commit 在 branding/ 底下的「空白」logo 資產,要能
+# 正常被 rebrander 換進去(自我檢查通過),而且它本身要是一張有效的 PNG。
+# build-iso.sh 現在預設用這張透明圖把安裝器 logo 位置留空(見該檔說明)。---
+blank_asset = os.path.join(os.path.dirname(os.path.abspath(__file__)), "branding", "installer-logo-blank.png")
+check("blank asset exists in branding/", os.path.isfile(blank_asset))
+if os.path.isfile(blank_asset):
+    blank_bytes = open(blank_asset, "rb").read()
+    check("blank asset is a valid PNG", blank_bytes[:8] == b"\x89PNG\r\n\x1a\n")
+    dims = rb._png_dims(blank_bytes)
+    check("blank asset has real dimensions", dims[0] > 0 and dims[1] > 0)
+    real_cpio = build_cpio([("./init", b"x"), ("usr/share/graphics/logo_installer.png", orig_logo)])
+    with tempfile.TemporaryDirectory() as d:
+        initrd = os.path.join(d, "initrd.gz")
+        open(initrd, "wb").write(gzip.compress(real_cpio, 9))
+        rc, replaced = rb.rebrand(initrd, blank_asset)  # 自我檢查在 rebrand 內,失敗會丟例外
+        check("blank asset: rebrand returns 0 (replaced, self-check passed)", rc == 0)
+        ents, _ = rb._parse_newc(rb._gunzip_all(open(initrd, "rb").read()))
+        byname = {e[1].decode(): e[3] for e in ents}
+        got = byname["usr/share/graphics/logo_installer.png"]
+        # 沒有 PIL 時原樣寫入(bytes 相符);有 PIL 時會縮回原圖尺寸,兩種情況
+        # 都要仍是一張有效 PNG、且已不是原本的 Debian logo。
+        check("blank asset: logo replaced (no longer the Debian logo)", got != orig_logo)
+        check("blank asset: replacement is still a valid PNG", got[:8] == b"\x89PNG\r\n\x1a\n")
+
 print()
 if FAIL:
     print("==> one or more rebrand-initrd test cases FAILED")

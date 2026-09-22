@@ -120,10 +120,13 @@ label install
 	append vga=788 ---
 EOF
 gonas_patch_boot_menu_file "$CASE5" "$APPEND_EXTRA"
-if grep -q 'GoNAS Installer' "$CASE5" && grep -q 'Install GoNAS' "$CASE5" && ! grep -q 'Debian GNU/Linux installer' "$CASE5"; then
-    echo "PASS: branding text replaced"
+# 第五十三輪:menu title 現在會整行刪除(避免疊在 splash 上),所以標題那句
+# 不再存在;要驗證的是「選單項目」的品牌字有換、且完全沒有 Debian 殘留、
+# 且 menu title 行確實被拿掉。
+if grep -q 'Install GoNAS' "$CASE5" && ! grep -q 'Debian' "$CASE5" && ! grep -q 'menu title' "$CASE5"; then
+    echo "PASS: branding text replaced and menu title line removed"
 else
-    echo "FAIL: branding text was not replaced as expected. Actual content:" >&2
+    echo "FAIL: branding text was not replaced as expected, or menu title not removed. Actual content:" >&2
     sed 's/^/    | /' "$CASE5" >&2
     FAIL=1
 fi
@@ -143,13 +146,15 @@ menuentry "Debian GNU/Linux" {
 }
 EOF
 gonas_patch_boot_menu_file "$CASE6" "$APPEND_EXTRA"
+# menuentry 的顯示字要換成 GoNAS;menu title 行要被刪掉;而「用磁碟標籤找開機
+# 檔」那行 search --label 'Debian 13.6.0 amd64 1' 是功能性字串,絕對不能動。
 if grep -q 'menuentry "GoNAS"' "$CASE6" \
-   && grep -q 'GoNAS Installer boot menu' "$CASE6" \
+   && ! grep -q 'menu title' "$CASE6" \
    && grep -q "label 'Debian 13.6.0 amd64 1'" "$CASE6" \
    && ! grep -q 'label .GoNAS 13' "$CASE6"; then
-    echo "PASS: branding replaced display text but left the search --label volume label untouched"
+    echo "PASS: menuentry rebranded, menu title removed, search --label volume label untouched"
 else
-    echo "FAIL: branding either missed the menuentry label or (dangerously) rewrote the search --label volume label. Actual content:" >&2
+    echo "FAIL: branding missed the menuentry, left a menu title, or (dangerously) rewrote the search --label volume label. Actual content:" >&2
     sed 's/^/    | /' "$CASE6" >&2
     FAIL=1
 fi
@@ -168,14 +173,39 @@ menuentry "Debian Installer" {
 }
 EOF
 gonas_patch_boot_menu_file "$CASE7" "$APPEND_EXTRA"
-if grep -q 'GoNAS installer main menu' "$CASE7" \
+# 短寫標題 "Debian installer main menu" 這一行是 menu title,現在會被整行刪掉;
+# menuentry "Debian Installer" 的顯示字要換成 GoNAS;帶版本號的 search --label
+# 不能動。
+if ! grep -q 'menu title' "$CASE7" \
    && grep -q 'menuentry "GoNAS Installer"' "$CASE7" \
    && grep -q "label 'Debian 13.6.0 amd64 1'" "$CASE7" \
    && ! grep -q 'label .GoNAS 13' "$CASE7"; then
-    echo "PASS: short-form 'Debian installer/Installer' rebranded, version-labeled search left intact"
+    echo "PASS: short-form menuentry rebranded, menu title removed, version-labeled search left intact"
 else
-    echo "FAIL: short-form branding missed, or (dangerously) rewrote the search --label volume label. Actual content:" >&2
+    echo "FAIL: short-form branding missed, left a menu title, or (dangerously) rewrote the search --label volume label. Actual content:" >&2
     sed 's/^/    | /' "$CASE7" >&2
+    FAIL=1
+fi
+
+# --- 案例 8: 第五十三輪(實機重疊)——vesamenu 的 `menu title` 必須被整行
+# 刪掉(它會疊在已有品牌字的 splash 背景圖上,兩層字重疊變亂碼),而選單
+# 項目(label/kernel/append)必須原封不動、preseed 參數照樣注入得進去。---
+CASE8="$TEST_WORK_DIR/case8-menu-title-removed.cfg"
+cat > "$CASE8" <<'EOF'
+menu title GoNAS Installer menu (BIOS mode)
+label install
+	menu label ^Graphical install
+	kernel /install.amd/vmlinuz
+	append vga=788 initrd=/install.amd/gtk/initrd.gz ---
+EOF
+gonas_patch_boot_menu_file "$CASE8" "$APPEND_EXTRA"
+if ! grep -q 'menu title' "$CASE8" \
+   && grep -q 'menu label ^Graphical install' "$CASE8" \
+   && grep -q "$APPEND_MARKER" "$CASE8"; then
+    echo "PASS: menu title line removed while menu entries and preseed injection are intact"
+else
+    echo "FAIL: menu title was not removed, or a menu entry / preseed injection was damaged. Actual content:" >&2
+    sed 's/^/    | /' "$CASE8" >&2
     FAIL=1
 fi
 

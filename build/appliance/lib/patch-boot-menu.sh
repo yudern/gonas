@@ -86,4 +86,15 @@ gonas_patch_boot_menu_file() {
     # 讓機器開不了機的 `search --label 'Debian 13.x ...'` 地雷。仍然刻意
     # 「不」做整檔盲目 s/Debian/GoNAS/g,理由見上面那段長註解。
     gonas_sed_inplace 's/Debian GNU\/Linux installer/GoNAS Installer/g; s/Install Debian GNU\/Linux/Install GoNAS/g; s/Debian GNU\/Linux/GoNAS/g; s/Debian Installer/GoNAS Installer/g; s/Debian installer/GoNAS installer/g; s/Install Debian/Install GoNAS/g' "$_pbm_file" || true
+
+    # 第五十三輪(使用者實機拍到):BIOS 開機選單的背景圖(branding/splash.png)
+    # 本身已經印上「GoNAS / NETWORK ATTACHED STORAGE」品牌字,但 vesamenu.c32
+    # 還會把自己的 `menu title` 這一行文字疊在背景圖的同一塊位置,兩層字重疊
+    # 變成一團看不懂的亂碼(標題「GoNAS Installer menu (BIOS mode)」剛好壓在
+    # splash 的 tagline 上)。splash 已經完整負責品牌顯示,所以這裡把 `menu
+    # title` 整行刪掉,只留背景圖的字,重疊就消失。純顯示調整,不影響開機/
+    # 安裝行為;選單項目(Graphical install 等)的位置由 menu vshift/rows 決定,
+    # 不受標題行有無影響。grub(UEFI)沒有 `menu title` 這種會疊在 splash 上的
+    # 標題,不受影響。
+    gonas_sed_inplace '/^[[:space:]]*menu title[[:space:]]/d' "$_pbm_file" || true
 }
