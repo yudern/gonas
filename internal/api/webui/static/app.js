@@ -2776,8 +2776,17 @@ function attachTOTPHandlers(el) {
     beginBtn.addEventListener("click", async () => {
       const box = el.querySelector("#totp-msg");
       try {
-        const { secret, provisioningUri } = await api.totpSetup();
+        const { secret, provisioningUri, qrCodeSvg } = await api.totpSetup();
+        // 有 QR 就先顯示「掃描」路徑:手機驗證器 App 直接掃這張圖即可;
+        // 掃不了(或想手動)的人再往下看密鑰。qrCodeSvg 是後端用純標準函式庫
+        // 產生的自成一體 SVG(離線可用),直接塞進畫面。
+        const qrBlock = qrCodeSvg
+          ? `<p style="color:var(--text-dim);font-size:12.5px;margin:0 0 8px">${esc(t("security.totpScanHint"))}</p>
+             <div class="totp-qr" style="background:#fff;padding:10px;border-radius:10px;display:inline-block;line-height:0">${qrCodeSvg}</div>
+             <p style="color:var(--text-faint);font-size:12px;margin:12px 0 4px">${esc(t("security.totpOrManual"))}</p>`
+          : "";
         el.querySelector("#totp-setup-area").innerHTML = `
+          ${qrBlock}
           <p style="color:var(--text-dim);font-size:12.5px">${esc(t("security.totpSetupHint"))}</p>
           <p><code style="word-break:break-all">${esc(secret)}</code></p>
           <p style="font-size:11.5px;color:var(--text-faint);word-break:break-all">${esc(provisioningUri)}</p>

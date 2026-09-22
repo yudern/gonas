@@ -12,12 +12,18 @@ import (
 type doctorRunner struct {
 	calls   []string
 	failCmd bool
+	// installErr,若非空,只讓「apt-get install」那一步回這個錯誤(update 照常
+	// 成功),用來模擬「找不到套件」之類的離線情境。
+	installErr error
 }
 
 func (d *doctorRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	d.calls = append(d.calls, name+" "+strings.Join(args, " "))
 	if d.failCmd {
 		return nil, errors.New("apt boom")
+	}
+	if d.installErr != nil && strings.Contains(strings.Join(args, " "), "apt-get install") {
+		return nil, d.installErr
 	}
 	return nil, nil
 }
@@ -83,6 +89,35 @@ func TestHandleDoctorInstall_SingleFlight(t *testing.T) {
 	}
 	if len(dr.calls) != 0 {
 		t.Fatalf("apt must NOT run for a rejected concurrent install, got calls: %v", dr.calls)
+	}
+}
+
+// TestHandleDoctorInstall_OfflinePackageNotFound(第五十三輪 實機):離線
+// NAS 上 apt 找不到套件(「Unable to locate package」)時,要回 502 + 可行動
+// 的訊息,而不是把 apt 的原始英文錯誤直接丟出去。
+func TestHandleDoctorInstall_OfflinePackageNotFound(t *testing.T) {
+	s := newTestServer(t)
+	dr := &doctorRunner{installErr: errors.New("env [...] apt-get install: exit status 100 (stderr: E: Unable to locate package samba)")}
+	s.runner = dr
+	rec := httptest.NewRecorder()
+	s.handleDoctorInstall(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"apt":"samba"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 when apt can't locate the package, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "current sources") && !strings.Contains(rec.Body.String(), "no internet") {
+		t.Fatalf("expected an actionable offline/network message, got: %s", rec.Body.String())
+	}
+}
+
+// TestHandleDoctorInstall_NoInstallationCandidate 覆蓋另一種 apt 常見講法。
+func TestHandleDoctorInstall_NoInstallationCandidate(t *testing.T) {
+	s := newTestServer(t)
+	dr := &doctorRunner{installErr: errors.New("exit status 100 (stderr: E: Package 'nfs-kernel-server' has no installation candidate)")}
+	s.runner = dr
+	rec := httptest.NewRecorder()
+	s.handleDoctorInstall(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"apt":"nfs-kernel-server"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for 'no installation candidate', got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

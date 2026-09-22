@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bng147/gonas/internal/doctor"
@@ -27,6 +28,14 @@ var errPackageNotInstallable = errors.New("that package is not in the installabl
 // errInstallInProgress 是固定英文錯誤(前端 errorMap 翻譯):已經有一個
 // 一鍵安裝在跑,同一時間只允許一個(見 Server.doctorInstalling)。
 var errInstallInProgress = errors.New("a package install is already in progress, please wait for it to finish")
+
+// errPackageUnavailable 是固定英文錯誤(前端 errorMap 翻譯):apt 在目前的
+// 套件來源裡找不到這個套件(「Unable to locate package」/「no installation
+// candidate」)。第五十三輪使用者實機遇到:這台 NAS 是離線安裝的,開機後
+// 若沒有對外網路(或連不到 Debian 鏡像),apt 的套件索引是空的,一鍵補裝
+// 就會這樣失敗。給一個看得懂、可行動的訊息,而不是把 apt 的原始英文錯誤
+// 直接丟給使用者。
+var errPackageUnavailable = errors.New("apt could not find that package in the current sources — this NAS may have no internet access or cannot reach the Debian mirror; installing optional packages needs a working network connection")
 
 // handleDoctorInstall 用 apt 一鍵補裝一個選用套件(修掉「原廠映像沒裝
 // mergerfs/snapraid/samba/docker,新手在嚮導建立儲存池那一步卡死、而文件叫
@@ -60,13 +69,28 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	s.logger.Info("installing optional package via web Doctor", "apt", req.Apt)
-	// 先更新套件列表(best-effort:失敗就讓後面的 install 自己回報真正原因),
-	// 再非互動安裝。用 `env DEBIAN_FRONTEND=noninteractive ...` 避免 debconf
-	// 跳出互動式問題把安裝卡住;全程 argv 傳參、不經過 shell,套件名又已經過
-	// 白名單,沒有指令注入風險。
-	_, _ = s.runner.Run(ctx, "apt-get", "update")
-	if _, err := s.runner.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", req.Apt); err != nil {
-		s.logger.Error("optional package install failed", "apt", req.Apt, "err", err)
+	// 先更新套件列表(best-effort:更新單一來源失敗 apt 也會回非零,不能因此
+	// 就一律當成致命——真正裝不裝得起來由下面的 install 決定),再非互動安裝。
+	// 用 `env DEBIAN_FRONTEND=noninteractive ...` 避免 debconf 跳出互動式問題
+	// 把安裝卡住;全程 argv 傳參、不經過 shell,套件名又已經過白名單,沒有
+	// 指令注入風險。
+	if out, err := s.runner.Run(ctx, "apt-get", "update"); err != nil {
+		s.logger.Warn("apt-get update reported an error before doctor install (continuing)", "apt", req.Apt, "err", err, "out", string(out))
+	}
+	out, err := s.runner.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", req.Apt)
+	if err != nil {
+		s.logger.Error("optional package install failed", "apt", req.Apt, "err", err, "out", string(out))
+		// 「找不到套件」的兩種 apt 常見講法(來自 stderr,cmdrunner 會把 stderr
+		// 併進錯誤字串)——代表這台 NAS 的 apt 索引是空的/連不到鏡像,幾乎都是
+		// 離線或套件來源沒設好,不是這個套件真的不存在。給可行動的訊息。
+		combined := strings.ToLower(err.Error() + " " + string(out))
+		if strings.Contains(combined, "unable to locate package") ||
+			strings.Contains(combined, "has no installation candidate") ||
+			strings.Contains(combined, "could not resolve") ||
+			strings.Contains(combined, "failed to fetch") {
+			writeError(w, http.StatusBadGateway, errPackageUnavailable)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

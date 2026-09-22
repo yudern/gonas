@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bng147/gonas/internal/qrcode"
 	"github.com/bng147/gonas/internal/security"
 	"github.com/bng147/gonas/internal/state"
 )
@@ -517,6 +518,12 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 type totpSetupResponse struct {
 	Secret          string `json:"secret"`
 	ProvisioningURI string `json:"provisioningUri"`
+	// QRCodeSVG 是把 ProvisioningURI 編成的 QR code(自成一體的 SVG 字串),
+	// 讓使用者直接用手機驗證器 App 掃描,不用手動逐字輸入密鑰。用純標準函式庫
+	// 的 internal/qrcode 產生(這台 NAS 常常沒網路,不能靠外部服務/CDN 產圖),
+	// 前端直接把它塞進畫面即可。萬一編碼失敗(理論上不會,otpauth URI 長度
+	// 遠在容量內),就留空字串,前端退回只顯示密鑰+URI。
+	QRCodeSVG string `json:"qrCodeSvg,omitempty"`
 }
 
 // handleAuthTOTPSetup 產生一把新的 TOTP 密鑰並先存進 state(但
@@ -546,9 +553,16 @@ func (s *Server) handleAuthTOTPSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uri := security.ProvisioningURI(secret, sess.Username, "GoNAS")
+	// QR 產生失敗不致命:密鑰與 URI 仍照舊回,前端還能手動輸入(見前端退路)。
+	qrSVG, qrErr := qrcode.EncodeSVG(uri, 4, 4)
+	if qrErr != nil {
+		s.logger.Warn("generating totp qr code failed; returning secret/uri only", "err", qrErr)
+	}
 	writeJSON(w, http.StatusOK, totpSetupResponse{
 		Secret:          secret,
-		ProvisioningURI: security.ProvisioningURI(secret, sess.Username, "GoNAS"),
+		ProvisioningURI: uri,
+		QRCodeSVG:       qrSVG,
 	})
 }
 
