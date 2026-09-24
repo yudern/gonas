@@ -2,9 +2,26 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrMergerfsNotInstalled 是固定英文錯誤(前端 errorMap 翻譯):要啟動儲存池
+// 需要 mergerfs 這個外部程式,但它還沒安裝。第五十五輪(使用者實機):離線
+// NAS 上 mergerfs 沒裝,啟動陣列時 mergerfs 的 exec 直接回「executable file
+// not found in $PATH」——那對使用者是天書。這裡把它換成一句看得懂、知道下一步
+// 怎麼做的話。
+var ErrMergerfsNotInstalled = errors.New("mergerfs is not installed — the storage pool needs it to combine your data disks; install it from the System Doctor page (or it comes preinstalled on the offline appliance image)")
+
+// looksLikeMissingBinary 判斷一個 exec 錯誤是不是「找不到執行檔」。os/exec
+// 在 PATH 裡找不到程式時,錯誤字串會含「executable file not found」;有些
+// 情況(檔案在但不可執行/路徑怪)會是「no such file or directory」。
+func looksLikeMissingBinary(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "executable file not found") ||
+		strings.Contains(s, "no such file or directory")
+}
 
 // mergerfsOptions 是預設掛載選項,對應 Unraid 式的使用習慣:
 //   - func.create=mfs           新檔案寫到「剩餘空間最多」的那顆碟(Most Free Space),
@@ -35,6 +52,11 @@ func MountPool(ctx context.Context, r Runner, cfg PoolConfig) error {
 		return fmt.Errorf("refusing to mount invalid pool config: %w", err)
 	}
 	if _, err := r.Run(ctx, "mergerfs", BuildMergerfsArgs(cfg)...); err != nil {
+		if looksLikeMissingBinary(err) {
+			// 回固定英文句子(不含 %w 包裝),讓前端 errorMap 對得到、翻成
+			// 看得懂的提示,而不是把 exec 的原始英文錯誤丟出去。
+			return ErrMergerfsNotInstalled
+		}
 		return fmt.Errorf("mergerfs mount failed: %w", err)
 	}
 	return nil

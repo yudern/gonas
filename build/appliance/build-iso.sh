@@ -361,12 +361,15 @@ mkdir -p "$GONAS_ON_ISO/release-$ARCH" "$GONAS_ON_ISO/overlay"
 echo "==> embedding gonasd release tarball and appliance overlay"
 tar -xzf "$RELEASE_TARBALL" -C "$GONAS_ON_ISO/release-$ARCH" --strip-components=1
 cp "$SCRIPT_DIR/late-command.sh" "$GONAS_ON_ISO/late-command.sh"
+# 第五十五輪:離線把選用套件從 DVD 裝進目標系統的腳本,由 preseed 的
+# late_command 在安裝程式環境呼叫(見 preseed.cfg 與該腳本開頭)。
+cp "$SCRIPT_DIR/install-offline-packages.sh" "$GONAS_ON_ISO/install-offline-packages.sh"
 # 這裡設執行位元純粹是「如果 xorriso/Rock Ridge 真的保留得住,那就順便
 # 帶著」的防禦性做法——實際的安裝路徑完全不依賴它(late-command.sh 用
 # `sh` 呼叫、install.sh 用 `-f` 找 gonasd,見各自檔案的說明),第十九輪
 # 覆閱把 gonasd 也一起加進來,理由同上:多帶一層保險,少一個「萬一哪天
 # 又改回依賴執行位元」的隱患。
-chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh" "$GONAS_ON_ISO/release-$ARCH/gonasd" 2>/dev/null || true
+chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/install-offline-packages.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh" "$GONAS_ON_ISO/release-$ARCH/gonasd" 2>/dev/null || true
 cp -a "$SCRIPT_DIR/overlay/." "$GONAS_ON_ISO/overlay/"
 cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 # late-command.sh 第十三輪覆閱之後會 `. `一份 lib/detect-arch.sh 來源
@@ -652,7 +655,12 @@ fi
 # Debian logo)。要改回顯示 GoNAS logo 的話,把下面這行指回 logo_installer.png
 # 即可(那張圖仍保留在 branding/ 底下),但要記得再實機驗證一次能不能顯示。
 GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/installer-logo-blank.png"
-if [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
+if [ "${GONAS_SKIP_INSTALLER_LOGO:-0}" = "1" ]; then
+    # 逃生開關(第五十五輪):萬一改 initrd 的 logo 又在你的映像上出問題,
+    # 用 `GONAS_SKIP_INSTALLER_LOGO=1 make iso-amd64` 就完全不動 initrd,
+    # 安裝時顯示 Debian 原本的(有效)logo、絕不會是破圖,馬上有一份能用的 ISO。
+    echo "==> GONAS_SKIP_INSTALLER_LOGO=1 set — leaving the installer initrd untouched (the graphical installer will show Debian's own valid logo)" >&2
+elif [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
     echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "warning: python3 not found on this build machine — skipping graphical-installer logo rebranding (the boot menu is still GoNAS-branded; install python3 to also rebrand the graphical installer logo)" >&2

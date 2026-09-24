@@ -9,6 +9,10 @@ import (
 	"text/template"
 )
 
+// ErrSnapraidNotInstalled 是固定英文錯誤(前端 errorMap 翻譯):同位校驗需要
+// snapraid 這個外部程式,但它還沒安裝(見 ErrMergerfsNotInstalled 的說明,同理)。
+var ErrSnapraidNotInstalled = errors.New("snapraid is not installed — parity protection needs it; install it from the System Doctor page (or it comes preinstalled on the offline appliance image)")
+
 // snapraidConfTemplate 產生 SnapRAID 設定檔內容。格式規格見
 // https://www.snapraid.it/manual —— 這裡只用得到最核心的 parity/content/data
 // 三種指令,exclude 清單先給幾個常見的雜訊檔案(縮圖快取、Docker 疊層等),
@@ -79,6 +83,11 @@ func RunSnapraid(ctx context.Context, r Runner, configPath string, action Snapra
 			if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
 				return out, nil
 			}
+		}
+		if looksLikeMissingBinary(err) {
+			// 第五十五輪:snapraid 沒裝時,回看得懂的固定英文句(前端 errorMap
+			// 翻譯),而不是 exec 的原始「executable file not found」。
+			return out, ErrSnapraidNotInstalled
 		}
 		return out, fmt.Errorf("snapraid %s (config=%s): %w", action, configPath, err)
 	}

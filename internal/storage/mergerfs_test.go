@@ -2,9 +2,37 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
+
+// TestMountPool_MergerfsNotInstalled(第五十五輪 實機):mergerfs 沒裝時,
+// exec 會回「executable file not found in $PATH」;MountPool 要把它翻成
+// ErrMergerfsNotInstalled 這個固定、可翻譯的錯誤,而不是原始 exec 錯誤。
+func TestMountPool_MergerfsNotInstalled(t *testing.T) {
+	r := &fakeRunner{err: map[string]error{
+		"mergerfs": errors.New(`exec: "mergerfs": executable file not found in $PATH`),
+	}}
+	err := MountPool(context.Background(), r, testPoolConfig())
+	if !errors.Is(err, ErrMergerfsNotInstalled) {
+		t.Fatalf("expected ErrMergerfsNotInstalled, got: %v", err)
+	}
+}
+
+// 其他 mergerfs 錯誤(不是「找不到執行檔」)仍照舊包成 mount failed。
+func TestMountPool_OtherMergerfsErrorNotMisclassified(t *testing.T) {
+	r := &fakeRunner{err: map[string]error{
+		"mergerfs": errors.New("fuse: device not found, try 'modprobe fuse' first"),
+	}}
+	err := MountPool(context.Background(), r, testPoolConfig())
+	if errors.Is(err, ErrMergerfsNotInstalled) {
+		t.Fatalf("a non-missing-binary error must NOT be reported as 'not installed': %v", err)
+	}
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
 
 func TestBuildMergerfsArgs(t *testing.T) {
 	args := BuildMergerfsArgs(testPoolConfig())

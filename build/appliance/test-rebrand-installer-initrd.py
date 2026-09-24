@@ -255,6 +255,40 @@ if os.path.isfile(blank_asset):
         check("blank asset: logo replaced (no longer the Debian logo)", got != orig_logo)
         check("blank asset: replacement is still a valid PNG", got[:8] == b"\x89PNG\r\n\x1a\n")
 
+# --- 9. 第五十五輪:同長度就地覆寫。替換圖比原 logo 小時,換完後那個項目的
+# 位元組長度必須跟原本「一模一樣」(靠補 NUL),而且該項目之後的所有 bytes
+# 必須完全不動(cpio 結構零位移)——這正是前兩次真機破圖想根治的點。---
+big_logo = png(300, 100, (10, 20, 30, 255))  # 一定比透明小圖大
+marker = b"MARKER-AFTER-LOGO-STAYS-PUT-1234567890"
+sl_cpio = build_cpio([
+    ("./init", b"x"),
+    ("usr/share/graphics/logo_installer.png", big_logo),
+    ("zzz/after.bin", marker),
+])
+# 找出原始 cpio 裡「logo 資料結束後」的所有 bytes(含後續項目),換完要一致。
+orig_ents, orig_tail = rb._parse_newc(sl_cpio)
+orig_logo_len = None
+for e in orig_ents:
+    if e[1].decode().endswith("logo_installer.png"):
+        orig_logo_len = len(e[3])
+with tempfile.TemporaryDirectory() as d:
+    initrd = os.path.join(d, "initrd")  # 不壓縮,直接測 cpio 結構
+    open(initrd, "wb").write(sl_cpio)
+    if os.path.isfile(blank_asset):
+        rc, replaced = rb.rebrand(initrd, blank_asset)
+        check("same-length: rebrand returns 0", rc == 0)
+        new_raw = open(initrd, "rb").read()
+        new_ents, _ = rb._parse_newc(new_raw)
+        nb = {e[1].decode(): e[3] for e in new_ents}
+        new_logo = nb["usr/share/graphics/logo_installer.png"]
+        check("same-length: logo entry keeps the original byte length", len(new_logo) == orig_logo_len)
+        check("same-length: padded logo still decodes as a valid PNG",
+              new_logo[:8] == b"\x89PNG\r\n\x1a\n" and rb._png_dims(new_logo)[0] > 0)
+        check("same-length: file after the logo is byte-identical / still present",
+              nb.get("zzz/after.bin") == marker)
+        # 總長度也不該變(整個 archive 零位移)。
+        check("same-length: whole archive length unchanged", len(new_raw) == len(sl_cpio))
+
 print()
 if FAIL:
     print("==> one or more rebrand-initrd test cases FAILED")

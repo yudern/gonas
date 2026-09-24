@@ -175,14 +175,27 @@ def _is_logo(clean_name):
 
 
 def _replace_in_entries(entries, gonas_png):
-    """就地把 entries 裡的 logo 換成 GoNAS logo(必要時縮回原尺寸),回傳被換掉
-    的清單(含原/新尺寸與新位元組長度,供自我檢查與回報用)。"""
+    """就地把 entries 裡的 logo 換成新的 PNG,回傳被換掉的清單(含原/新尺寸與
+    新位元組長度,供自我檢查與回報用)。
+
+    第五十五輪(真機第三次):前兩次(換 GoNAS logo、換透明圖)在使用者的
+    真實映像上都變成破圖,而且是「不管換什麼內容都破」——代表問題出在「換掉
+    的檔案長度跟原本不一樣,導致後面的 cpio 項目位移/重新對齊」這條路上,不是
+    圖的內容。這裡改成「同長度就地覆寫」:把新 PNG 補上結尾的 NUL bytes,湊到
+    跟原檔一模一樣的位元組長度(PNG 解碼器遇到 IEND 就停,結尾多餘的 bytes 會
+    被忽略,圖仍然有效)。這樣 filesize 欄位不變、該項目後面的所有 bytes 位置
+    完全不動,對整個 cpio 結構等於零改動,只有這個檔案的資料區換了內容。
+    只有在新 PNG 比原檔還大(裝不下)時,才退回舊的「換長度」行為。"""
     replaced = []
     for e in entries:
         clean_name = e[1].decode("latin-1")
         if _is_logo(clean_name):
             ow, oh = _png_dims(e[3])
+            orig_len = len(e[3])
             new_png = _maybe_resize(gonas_png, ow, oh)
+            if len(new_png) <= orig_len:
+                # 同長度就地覆寫:補 NUL 到原長度,結構零位移。
+                new_png = new_png + b"\x00" * (orig_len - len(new_png))
             nw, nh = _png_dims(new_png)
             e[3] = new_png
             replaced.append((clean_name, ow, oh, nw, nh, len(new_png)))
