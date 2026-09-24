@@ -48,8 +48,12 @@ func (e Export) Validate() error {
 			return fmt.Errorf("nfs export %q: client rule for %q has no options", e.Path, clientLabel(c.CIDR))
 		}
 		for _, o := range c.Options {
-			if hasControlChars(o) || strings.ContainsAny(o, " \t,()") {
-				return fmt.Errorf("nfs export %q: option %q cannot contain spaces, commas, parentheses, or control characters", e.Path, o)
+			// 第五十六輪覆核(S1):除了會破壞 exports 格式的空白/逗號/括號,
+			// 也擋掉 < > " ' 這些 HTML 標記字元。前端顯示 export 選項那格已經改成
+			// esc() 了(才是真正的防線),這裡多擋一層 defense-in-depth,讓一個
+			// 合法的 NFS 選項本來就不該出現的字元進不了 state。
+			if hasControlChars(o) || strings.ContainsAny(o, " \t,()<>\"'") {
+				return fmt.Errorf("nfs export %q: option %q contains characters that are not allowed in an NFS option (spaces, commas, parentheses, angle brackets, or quotes)", e.Path, o)
 			}
 		}
 	}

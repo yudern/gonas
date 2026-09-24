@@ -49,6 +49,20 @@ func TestGenerateExportsConfig_RejectsClientWithNoOptions(t *testing.T) {
 	}
 }
 
+// TestGenerateExportsConfig_RejectsMarkupInOption(第五十六輪 S1):NFS 選項
+// 不該含 HTML 標記字元(defense-in-depth,前端顯示那格也已改 esc)。
+func TestGenerateExportsConfig_RejectsMarkupInOption(t *testing.T) {
+	for _, bad := range []string{"rw<svg", "sync\"x", "ro'y", "no>root"} {
+		exports := []Export{{
+			Path:    "/mnt/tank/media",
+			Clients: []NFSClientRule{{CIDR: "10.0.0.0/8", Options: []string{bad}}},
+		}}
+		if _, err := GenerateExportsConfig(exports); err == nil {
+			t.Fatalf("expected error for option containing markup char: %q", bad)
+		}
+	}
+}
+
 func TestReloadNFS_CallsExportfs(t *testing.T) {
 	r := &fakeRunner{}
 	if err := ReloadNFS(context.Background(), r); err != nil {

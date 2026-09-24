@@ -347,32 +347,39 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		switch {
-		case valid && counter > admin.LastTOTPCounter:
-			// 正常 TOTP 驗證通過。記下這次用的 counter,之後同一個或更舊的
-			// counter 一律拒絕 —— 消除「同一個 6 位數碼在 30 秒窗內被攔截後
-			// 重放」的可能(第三十輪覆核抓到的 TOTP 重放)。
+		if valid {
+			// 第五十六輪覆核(QA1/S2):防重放的「counter 是否比上次新」比對必須
+			// 在交易「裡面」對「當下持久化的值」做,不能拿交易外的 snapshot
+			// (admin.LastTOTPCounter)判斷——否則兩個並發登入帶同一個碼時,兩者
+			// 都讀到同一個舊 snapshot、都通過檢查、都寫入,重放就成立;而且若有
+			// 更新的登入已經把計數器推得更高,這裡還會把它「寫回較小值」重開重放窗。
+			// 改成在 store.Update 內原子地重新比對:只有 counter 仍嚴格大於當下的
+			// LastTOTPCounter 才接受並前進,accepted 記錄結果。
+			accepted := false
 			if err := s.store.Update(func(st *state.State) error {
-				if i := findAdminIndex(st.Admins, admin.Username); i >= 0 {
+				i := findAdminIndex(st.Admins, admin.Username)
+				if i < 0 {
+					return errAdminNotConfigured
+				}
+				if counter > st.Admins[i].LastTOTPCounter {
 					st.Admins[i].LastTOTPCounter = counter
+					accepted = true
 				}
 				return nil
 			}); err != nil {
 				// fail-closed(第五十二輪覆核 S-2):計數器沒能持久化就不能放行。
-				// 原本這裡只記 log 就繼續登入,但那樣 LastTOTPCounter 沒前進,
-				// 剛用的這個碼在 30 秒窗內還能被重放——防重放形同虛設。寧可這次
-				// 登入回 500、使用者重試,也不要留下重放窗。
 				s.logger.Error("recording totp counter failed", "err", err)
 				writeError(w, http.StatusInternalServerError, errInternalServerError)
 				return
 			}
-		case valid:
-			// 碼本身算得出來,但 counter 不比上次新 —— 這個碼(或更舊的)已經
-			// 用過了,判定為重放,拒絕。
-			s.loginLimiter.RecordFailure(ip)
-			writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
-			return
-		default:
+			if !accepted {
+				// 碼合法,但交易內看到的 counter 不比目前值新 —— 這個碼(或更舊的)
+				// 已經用過了,判定為重放,拒絕。
+				s.loginLimiter.RecordFailure(ip)
+				writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
+				return
+			}
+		} else {
 			// 不是合法 TOTP,再看看是不是一組還沒用過的救援碼。比對＋消耗都在
 			// 同一個 store.Update 裡原子完成(避免兩個登入同時用同一組碼)。
 			consumed := false
@@ -391,8 +398,6 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 				// fail-closed(第五十二輪覆核 S-2):比對到救援碼、但寫檔失敗時,
 				// consumed 已經是 true 卻沒真的持久化「移除這枚碼」——若這裡只記
 				// log 就放行,這枚一次性救援碼在磁碟上仍然有效,等於能被重複使用。
-				// 一律回 500、不放行,使用者重試時要嘛寫檔恢復正常真的消耗掉、
-				// 要嘛還是失敗但碼也還沒被當成用掉,兩邊都一致。
 				s.logger.Error("consuming recovery code failed", "err", err)
 				writeError(w, http.StatusInternalServerError, errInternalServerError)
 				return
@@ -583,7 +588,11 @@ func (s *Server) handleAuthTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errTOTPNotSetUp)
 		return
 	}
-	valid, err := security.ValidateCode(admin.TOTPSecret, req.Code, time.Now())
+	// 第五十六輪覆核(S3):啟用時就把用掉的 counter 記下來,否則這個「啟用碼」
+	// 在它的有效窗內(30–90 秒)還能被拿去 /auth/login 登入一次(login 只看
+	// counter > 0)——等於一個一次性重放窗。用 WithCounter 版本取得 counter,
+	// 連同 TOTPEnabled 一起寫進 state。
+	enableCounter, valid, err := security.ValidateCodeWithCounter(admin.TOTPSecret, req.Code, time.Now())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -609,6 +618,8 @@ func (s *Server) handleAuthTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		}
 		st.Admins[i].TOTPEnabled = true
 		st.Admins[i].RecoveryCodes = hashed
+		// 記下啟用時用掉的 counter,擋掉「用啟用碼再登入一次」的重放窗(S3)。
+		st.Admins[i].LastTOTPCounter = enableCounter
 		return nil
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)

@@ -194,6 +194,46 @@ func TestHandleAuthTOTPRecoveryCodes_RequiresPassword(t *testing.T) {
 	}
 }
 
+// TestHandleAuthTOTPEnable_CodeNotReplayableAtLogin(第五十六輪 S3):啟用 2FA
+// 用掉的那個碼,不能還能拿去 /auth/login 登入一次——啟用時就要把 counter 記下。
+func TestHandleAuthTOTPEnable_CodeNotReplayableAtLogin(t *testing.T) {
+	s := newAuthTestServer(t)
+	cookie := seedAdmin(t, s, "alice", "alice-password-1", state.RoleAdmin)
+	secret, err := security.GenerateSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 直接把密鑰寫進 state(模擬走過 /totp/setup),但 TOTPEnabled 還是 false。
+	if err := s.store.Update(func(st *state.State) error {
+		st.Admins[findAdminIndex(st.Admins, "alice")].TOTPSecret = secret
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := s.sessions.Validate(cookie.Value)
+
+	code, err := security.GenerateCode(secret, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 啟用 2FA(用 code)。
+	reqEn := httptest.NewRequest(http.MethodPost, "/api/v1/auth/totp/enable", jsonBodyRaw(totpCodeRequest{Code: code}))
+	recEn := httptest.NewRecorder()
+	s.handleAuthTOTPEnable(recEn, reqEn.WithContext(contextWithSession(reqEn, sess)))
+	if recEn.Code != http.StatusOK {
+		t.Fatalf("enable expected 200, got %d: %s", recEn.Code, recEn.Body.String())
+	}
+	admin, _ := findAdmin(s.store.Snapshot().Admins, "alice")
+	if admin.LastTOTPCounter == 0 {
+		t.Fatalf("expected LastTOTPCounter to be recorded on enable (S3)")
+	}
+	// 用同一個 code 登入 —— 必須被當成重放拒絕。
+	rec := loginWithTOTP(s, "alice", "alice-password-1", code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected the enable code to be rejected as replay at login, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func sameStringSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

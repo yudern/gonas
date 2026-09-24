@@ -1846,7 +1846,7 @@ async function renderShares(el) {
           <thead><tr><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colClientRules"))}</th></tr></thead>
           <tbody>
             ${exportsList.length ? exportsList.map((e) => `
-              <tr><td><code>${esc(e.path)}</code></td><td>${(e.clients || []).map((c) => `${esc(c.cidr || "*")}(${(c.options || []).join(",")})`).join(", ")}</td></tr>
+              <tr><td><code>${esc(e.path)}</code></td><td>${(e.clients || []).map((c) => `${esc(c.cidr || "*")}(${esc((c.options || []).join(","))})`).join(", ")}</td></tr>
             `).join("") : `<tr><td colspan="2" class="empty-state">${esc(t("shares.noExports"))}</td></tr>`}
           </tbody>
         </table>
