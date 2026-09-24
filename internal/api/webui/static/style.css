@@ -200,6 +200,10 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bor
 th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); font-weight: 600; }
 tbody tr:last-child td { border-bottom: none; }
 .table-wrap { overflow-x: auto; }
+/* 第五十六輪覆核(UI-3):table 是 width:100%,在窄螢幕上會被壓縮到跟容器一樣寬,
+   於是 overflow-x:auto 永遠不會觸發,欄位被擠成一個字一行、掛載點那欄還被切掉。
+   給 table-wrap 裡的表格一個 min-width,窄螢幕就會改成「橫向捲動」而不是擠壓。 */
+.table-wrap table { min-width: 560px; }
 
 .pill {
   display: inline-block;
@@ -246,7 +250,18 @@ button {
 button:hover { filter: brightness(1.05); }
 button.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 button.danger { background: var(--danger); }
-button:disabled { opacity: 0.55; cursor: default; }
+/* 第五十六輪覆核(UI-5):停用狀態一律用同一種「灰掉」的樣式,不分主要/次要。
+   原本只設 opacity,停用的主要按鈕還是一片可點的 teal,跟旁邊灰掉的次要按鈕
+   放一起看起來像「一個能點、一個不能點」。統一成中性灰,兩個都明顯不可點。 */
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  border-color: var(--border);
+  filter: none;
+}
+button:disabled:hover { filter: none; }
 
 /* 鍵盤操作的焦點框:只在鍵盤 focus(:focus-visible)時出現,滑鼠點擊不會
    跳出來干擾視覺。用 accent 色描邊 + 一點 offset,深淺色模式下都看得清楚。

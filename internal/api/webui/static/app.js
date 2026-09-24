@@ -200,7 +200,7 @@ function showLoginGate() {
         showApp();
       }
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -237,7 +237,7 @@ function showForcedPasswordChange() {
       await api.changePassword(f.get("oldPassword"), f.get("newPassword"));
       showApp();
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -273,7 +273,7 @@ function showSetupGate() {
       location.hash = "#/setup";
       showApp();
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -434,7 +434,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
         await renderSystem(el);
       } catch (err) {
         const box = el.querySelector("#update-msg");
-        if (box) box.innerHTML = msg("error", err.message);
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -449,7 +449,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       } catch (err) {
         checkBtn.disabled = false;
         const box = el.querySelector("#update-msg");
-        if (box) box.innerHTML = msg("error", err.message);
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -478,7 +478,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
         applyBtn.textContent = t("update.applyNow");
         if (checkBtn2) checkBtn2.disabled = false;
         const box = el.querySelector("#update-msg");
-        if (box) box.innerHTML = msg("error", err.message);
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -506,7 +506,7 @@ function attachSystemUpdateHandlers(el, isAdmin) {
         if (applyBtn2) applyBtn2.disabled = false;
         if (checkBtn3) checkBtn3.disabled = false;
         const box = el.querySelector("#update-msg");
-        if (box) box.innerHTML = msg("error", err.message);
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -797,12 +797,12 @@ async function wizardPool(el) {
     const f = new FormData(ev.target);
     const box = el.querySelector("#wz-pool-msg");
     const res = collectPool(el, f.get("name"), f.get("mountPoint"));
-    if (res.error) { box.innerHTML = msg("error", res.error); return; }
+    if (res.error) { box.innerHTML = msg("error", translateError(res.error)); return; }
     try {
       await api.setPool(res.pool);
       wizardGo(el, 3);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -842,7 +842,7 @@ async function wizardShare(el) {
         wizardGo(el, 4);
       }
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -870,7 +870,7 @@ async function renderStorage(el) {
         <span class="pill ${arrayPillClass(arrayStatus.state)}">${esc(arrayLabel(arrayStatus.state))}</span>
         ${arrayStatus.mountPoint ? ` · ${esc(t("storage.mountPoint"))} <code>${esc(arrayStatus.mountPoint)}</code>` : ""}
       </p>
-      ${arrayStatus.error ? msg("error", arrayStatus.error) : ""}
+      ${arrayStatus.error ? msg("error", translateError(arrayStatus.error)) : ""}
       <div class="btn-row">
         <button id="start-array" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.startArray"))}</button>
         <button id="stop-array" class="secondary" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.stopArray"))}</button>
@@ -940,13 +940,13 @@ async function renderStorage(el) {
       const f = new FormData(ev.target);
       const box = el.querySelector("#pool-msg");
       const res = collectPool(el, f.get("name"), f.get("mountPoint"));
-      if (res.error) { box.innerHTML = msg("error", res.error); return; }
+      if (res.error) { box.innerHTML = msg("error", translateError(res.error)); return; }
       try {
         await api.setPool(res.pool);
         box.innerHTML = msg("ok", t("storage.poolSaved"));
         await renderStorage(el);
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -1014,7 +1014,7 @@ function wirePrepareDisk(el, rerender) {
         box.innerHTML = msg("ok", t("storage.prepareDone", { device: res.device, mount: res.mountpoint }));
         await rerenderFn(el);
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
         btn.disabled = false;
       }
     });
@@ -1030,7 +1030,7 @@ async function runAction(fn, rerender, el) {
     await fn();
     await rerender(el);
   } catch (err) {
-    el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+    el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
   }
 }
 
@@ -1117,7 +1117,7 @@ async function renderFiles(el) {
 
   if (!status.available) {
     root.innerHTML = `
-      ${msg("warn", t("files.unavailable", { reason: status.reason || "" }))}
+      ${msg("warn", t("files.unavailable", { reason: translateError(status.reason) || "" }))}
       <p class="hint">${esc(t("files.unavailableHint"))}</p>
     `;
     return;
@@ -1156,7 +1156,7 @@ async function renderFiles(el) {
       await api.filesTrashEmpty();
       await loadTrash(root);
     } catch (err) {
-      root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+      root.querySelector("#trash-msg").innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -1358,7 +1358,7 @@ async function openFilePreview(root, path) {
         await api.filesWriteText(path, newContent);
         panel.querySelector("#file-editor-msg").innerHTML = msg("ok", t("files.saved"));
       } catch (err) {
-        panel.querySelector("#file-editor-msg").innerHTML = msg("error", err.message);
+        panel.querySelector("#file-editor-msg").innerHTML = msg("error", translateError(err.message));
       }
     });
   } catch (err) {
@@ -1495,7 +1495,7 @@ async function loadTrash(root) {
           await loadTrash(root);
           await loadFilesList(root);
         } catch (err) {
-          root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+          root.querySelector("#trash-msg").innerHTML = msg("error", translateError(err.message));
         }
       });
     });
@@ -1506,12 +1506,12 @@ async function loadTrash(root) {
           await api.filesTrashDeleteItem(btn.dataset.purge);
           await loadTrash(root);
         } catch (err) {
-          root.querySelector("#trash-msg").innerHTML = msg("error", err.message);
+          root.querySelector("#trash-msg").innerHTML = msg("error", translateError(err.message));
         }
       });
     });
   } catch (err) {
-    list.innerHTML = msg("error", err.message);
+    list.innerHTML = msg("error", translateError(err.message));
   }
 }
 
@@ -1591,7 +1591,7 @@ async function renderApps(el) {
         await api.uninstallApp(btn.dataset.uninstall);
         await renderApps(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -1631,7 +1631,7 @@ async function renderApps(el) {
         box.innerHTML = msg("ok", t("apps.installSuccess"));
         setTimeout(() => renderApps(el), 600);
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   });
@@ -1657,7 +1657,7 @@ async function renderApps(el) {
           }],
         };
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
         return;
       }
       try {
@@ -1665,7 +1665,7 @@ async function renderApps(el) {
         box.innerHTML = msg("ok", t("apps.installSuccess"));
         setTimeout(() => renderApps(el), 600);
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -1864,7 +1864,7 @@ async function renderShares(el) {
   el.querySelectorAll("[data-del-share]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       try { await api.deleteShare(btn.dataset.delShare); await renderShares(el); }
-      catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", err.message)); }
+      catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message))); }
     });
   });
 
@@ -1884,7 +1884,7 @@ async function renderShares(el) {
       const res = await api.createShare(share);
       box.innerHTML = res.applied ? msg("ok", t("shares.shareAdded")) : msg("warn", t("shares.shareAddedWarn", { warn: res.warning || "" }));
       await renderShares(el);
-    } catch (err) { box.innerHTML = msg("error", err.message); }
+    } catch (err) { box.innerHTML = msg("error", translateError(err.message)); }
   });
 
   el.querySelector("#export-form").addEventListener("submit", async (ev) => {
@@ -1899,7 +1899,7 @@ async function renderShares(el) {
       const res = await api.createExport(exp);
       box.innerHTML = res.applied ? msg("ok", t("shares.exportAdded")) : msg("warn", t("shares.exportAddedWarn", { warn: res.warning || "" }));
       await renderShares(el);
-    } catch (err) { box.innerHTML = msg("error", err.message); }
+    } catch (err) { box.innerHTML = msg("error", translateError(err.message)); }
   });
 }
 
@@ -1940,7 +1940,7 @@ async function renderUsers(el) {
     btn.addEventListener("click", async () => {
       if (!confirm(t("users.deleteConfirm", { name: btn.dataset.delUser }))) return;
       try { await api.deleteUser(btn.dataset.delUser); await renderUsers(el); }
-      catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", err.message)); }
+      catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message))); }
     });
   });
 
@@ -1952,7 +1952,7 @@ async function renderUsers(el) {
       const res = await api.createUser({ username: f.get("username").trim(), comment: f.get("comment").trim(), password: f.get("password") });
       box.innerHTML = res.sambaWarning ? msg("warn", t("users.userCreatedWarn", { warn: res.sambaWarning })) : msg("ok", t("users.userCreated"));
       await renderUsers(el);
-    } catch (err) { box.innerHTML = msg("error", err.message); }
+    } catch (err) { box.innerHTML = msg("error", translateError(err.message)); }
   });
 }
 
@@ -2037,7 +2037,7 @@ function wireUPS(el) {
       // UPS 卡第五十一輪搬到「系統」頁,存檔後要重畫「系統」頁(不是監控頁)。
       await renderSystem(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -2169,7 +2169,7 @@ async function renderMonitor(el) {
         await api.deleteAlertRule(btn.dataset.delRule);
         await renderMonitor(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -2189,7 +2189,7 @@ async function renderMonitor(el) {
       box.innerHTML = msg("ok", t("monitor.ruleAdded"));
       await renderMonitor(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -2199,7 +2199,7 @@ async function renderMonitor(el) {
         await api.deleteNotifier(btn.dataset.delNotifier);
         await renderMonitor(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -2214,7 +2214,7 @@ async function renderMonitor(el) {
       box.innerHTML = msg("ok", t("monitor.notifierAdded"));
       await renderMonitor(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -2224,7 +2224,7 @@ async function renderMonitor(el) {
         await api.deleteEmailNotifier(btn.dataset.delEmailNotifier);
         await renderMonitor(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -2249,7 +2249,7 @@ async function renderMonitor(el) {
       box.innerHTML = msg("ok", t("monitor.notifierAdded"));
       await renderMonitor(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -2337,7 +2337,7 @@ function attachDigestHandlers(el) {
       box.innerHTML = msg("ok", t("monitor.digestSaved"));
       await renderMonitor(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -2350,7 +2350,7 @@ function attachDigestHandlers(el) {
         const res = await api.sendDigestNow();
         box.innerHTML = msg("ok", translateNotice(res.message));
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       } finally {
         sendNowBtn.disabled = false;
       }
@@ -2637,13 +2637,13 @@ function wirePowerButtons(el) {
   if (reboot) reboot.addEventListener("click", async () => {
     if (!confirmByTyping(t("power.wordReboot"))) return;
     try { await api.powerReboot(); box.innerHTML = msg("ok", t("power.rebootSent")); }
-    catch (err) { box.innerHTML = msg("error", err.message); }
+    catch (err) { box.innerHTML = msg("error", translateError(err.message)); }
   });
   const shutdown = el.querySelector("#power-shutdown");
   if (shutdown) shutdown.addEventListener("click", async () => {
     if (!confirmByTyping(t("power.wordShutdown"))) return;
     try { await api.powerShutdown(); box.innerHTML = msg("ok", t("power.shutdownSent")); }
-    catch (err) { box.innerHTML = msg("error", err.message); }
+    catch (err) { box.innerHTML = msg("error", translateError(err.message)); }
   });
 }
 
@@ -2697,7 +2697,7 @@ function attachAccountsHandlers(el) {
         await api.deleteAuthAccount(username);
         await renderSecurity(el);
       } catch (err) {
-        el.querySelector("#account-msg").innerHTML = msg("error", err.message);
+        el.querySelector("#account-msg").innerHTML = msg("error", translateError(err.message));
       }
     });
   });
@@ -2711,7 +2711,7 @@ function attachAccountsHandlers(el) {
         el.querySelector("#account-msg").innerHTML = msg("ok", t("security.resetTOTPOk", { name: username }));
         await renderSecurity(el);
       } catch (err) {
-        el.querySelector("#account-msg").innerHTML = msg("error", err.message);
+        el.querySelector("#account-msg").innerHTML = msg("error", translateError(err.message));
       }
     });
   });
@@ -2727,7 +2727,7 @@ function attachAccountsHandlers(el) {
       box.innerHTML = msg("ok", t("security.accountCreated"));
       await renderSecurity(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -2746,7 +2746,7 @@ function attachPasswordFormHandlers(el) {
       box.innerHTML = msg("ok", t("security.passwordUpdated"));
       ev.target.reset();
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -2829,11 +2829,11 @@ function attachTOTPHandlers(el) {
             const done = el.querySelector("#recovery-done");
             if (done) done.addEventListener("click", () => renderSecurity(el));
           } catch (err) {
-            box.innerHTML = msg("error", err.message);
+            box.innerHTML = msg("error", translateError(err.message));
           }
         });
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -2858,7 +2858,7 @@ function attachTOTPHandlers(el) {
         }
         regenForm.reset();
       } catch (err) {
-        if (box) box.innerHTML = msg("error", err.message);
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -2874,7 +2874,7 @@ function attachTOTPHandlers(el) {
         box.innerHTML = msg("ok", t("security.totpDisabled"));
         await renderSecurity(el);
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -2897,7 +2897,7 @@ function attachHTTPSFormHandlers(el) {
       const hbox = el.querySelector("#https-msg");
       if (hbox) hbox.innerHTML = msg("ok", t("security.httpsSaved"));
     } catch (err) {
-      el.querySelector("#https-msg").innerHTML = msg("error", err.message);
+      el.querySelector("#https-msg").innerHTML = msg("error", translateError(err.message));
     }
   });
 }
@@ -2962,7 +2962,7 @@ function attachVPNHandlers(el) {
       box.innerHTML = msg("ok", t("security.vpnIfaceSaved"));
       await renderSecurity(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -2986,7 +2986,7 @@ function attachVPNHandlers(el) {
         await refreshPeerList(el);
         ev.target.reset();
       } catch (err) {
-        box.innerHTML = msg("error", err.message);
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
@@ -3002,7 +3002,7 @@ function attachPeerDeleteHandlers(el) {
         await api.deleteVPNPeer(btn.dataset.delPeer);
         await refreshPeerList(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -3178,7 +3178,7 @@ function attachBackupHandlers(el) {
       box.innerHTML = msg("ok", t("backup.jobAdded"));
       await renderBackup(el);
     } catch (err) {
-      box.innerHTML = msg("error", err.message);
+      box.innerHTML = msg("error", translateError(err.message));
     }
   });
 
@@ -3194,7 +3194,7 @@ function attachBackupJobRowHandlers(el) {
         const res = await api.runBackupJob(btn.dataset.runJob);
         el.insertAdjacentHTML("afterbegin", msg("ok", translateNotice(res.message)));
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
         btn.disabled = false;
         btn.textContent = t("backup.runNow");
       }
@@ -3208,7 +3208,7 @@ function attachBackupJobRowHandlers(el) {
         await api.deleteBackupJob(btn.dataset.delJob);
         await renderBackup(el);
       } catch (err) {
-        el.insertAdjacentHTML("afterbegin", msg("error", err.message));
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });
   });
@@ -3229,7 +3229,7 @@ function attachBackupJobRowHandlers(el) {
           ? `<ul class="snapshot-list">${snapshots.map((s) => `<li><code>${esc(s.name)}</code> · ${esc(formatDateTime(s.createdAt))}</li>`).join("")}</ul>`
           : `<p class="empty-state">${esc(t("backup.noSnapshots"))}</p>`;
       } catch (err) {
-        panel.innerHTML = msg("error", err.message);
+        panel.innerHTML = msg("error", translateError(err.message));
       }
     });
   });
