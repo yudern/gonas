@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -50,6 +51,13 @@ func BuildMergerfsArgs(cfg PoolConfig) []string {
 func MountPool(ctx context.Context, r Runner, cfg PoolConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("refusing to mount invalid pool config: %w", err)
+	}
+	// 第五十五輪覆核(產品 P2):聯合掛載點目錄不存在的話,mergerfs 會直接失敗
+	// (「mergerfs mount failed: ... No such file or directory」)。準備硬碟那步
+	// 只會 mkdir 各顆資料碟的 /mnt/diskN,不會建這個聯合掛載點(/mnt/tank),
+	// 所以這裡在掛載前先把它建出來。0o755:一般人也讀得到、只有 root 能改。
+	if err := os.MkdirAll(cfg.MountPoint, 0o755); err != nil {
+		return fmt.Errorf("creating pool mount point %q failed: %w", cfg.MountPoint, err)
 	}
 	if _, err := r.Run(ctx, "mergerfs", BuildMergerfsArgs(cfg)...); err != nil {
 		if looksLikeMissingBinary(err) {

@@ -39,6 +39,15 @@ func (s *Server) handleSharesCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 第五十五輪覆核(產品 P2):共享指向的資料夾要先建出來,否則 smb.conf 雖然
+	// 寫好了,Windows/Mac 連進來只會得到「找不到網路名稱」(BAD_NETWORK_NAME)。
+	// 正常流程此時陣列已掛在 /mnt/tank,mkdir 會落在 mergerfs union 上;
+	// best-effort:建不了(例如陣列還沒掛)不擋住建立共享——設定還是會存,
+	// 資料夾之後(啟動陣列或手動)補上即可。
+	if err := os.MkdirAll(sh.Path, 0o2775); err != nil {
+		s.logger.Warn("could not create the share folder (share config still saved)", "path", sh.Path, "err", err)
+	}
+
 	var allShares []share.Share
 	if err := s.store.Update(func(st *state.State) error {
 		for _, existing := range st.Shares {

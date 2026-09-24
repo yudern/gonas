@@ -268,6 +268,17 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	if pool := store.Snapshot().Pool; pool != nil {
 		s.array = storage.NewArray(*pool)
 		diskPath = pool.MountPoint
+		// 第五十五輪覆核(產品 P1):開機時若已經設定過 pool,就自動把陣列掛回來。
+		// mergerfs 是 FUSE 掛載,沒有寫進 fstab(也不適合),所以「重開機後儲存
+		// 會不會自己回來」完全靠這裡 —— gonasd 由 systemd 開機啟動,啟動時把
+		// union 重新掛上。best-effort:掛不起來(例如 mergerfs 還沒裝、或某顆資料
+		// 碟還沒掛)只記 log、把狀態留在 failed,儀表板會顯示「啟動陣列」讓使用者
+		// 手動處理,絕不擋住 daemon 啟動。
+		if err := s.array.Start(context.Background(), s.runner); err != nil {
+			logger.Warn("auto-starting the storage array on boot failed (leaving it stopped; start it from the dashboard)", "err", err)
+		} else {
+			logger.Info("storage array auto-started on boot", "mountPoint", pool.MountPoint)
+		}
 	}
 
 	s.monitorCollector = monitor.NewCollector(diskPath)

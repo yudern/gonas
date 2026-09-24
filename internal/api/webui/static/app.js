@@ -312,11 +312,33 @@ async function renderDashboard(el) {
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("setup.ctaBody"))}</p>
       <div class="btn-row"><a href="#/setup"><button type="button">${esc(t("setup.ctaButton"))}</button></a></div>
     </div>` : ""}
+    ${isAdmin && (arrayStatus.state === "stopped" || arrayStatus.state === "failed") ? `
+    <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
+      ${h2i("array", esc(t("dashboard.arrayDownTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("dashboard.arrayDownBody"))}${arrayStatus.error ? " " + esc(translateError(arrayStatus.error)) : ""}</p>
+      <div id="dash-array-msg"></div>
+      <div class="btn-row"><button type="button" id="dash-start-array">${esc(t("storage.startArray"))}</button></div>
+    </div>` : ""}
     <div class="card">
       ${h2i("link", esc(t("dashboard.quickLinks")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
     </div>
   `;
+
+  const dashStart = el.querySelector("#dash-start-array");
+  if (dashStart) {
+    dashStart.addEventListener("click", async () => {
+      const box = el.querySelector("#dash-array-msg");
+      dashStart.disabled = true;
+      try {
+        await api.startArray();
+        await renderDashboard(el);
+      } catch (err) {
+        if (box) box.innerHTML = msg("error", translateError(err.message) || err.message);
+        dashStart.disabled = false;
+      }
+    });
+  }
 }
 
 // renderSystemUpdateCard 顯示 Phase 17 自我更新功能的狀態:目前版本、

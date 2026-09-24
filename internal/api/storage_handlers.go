@@ -118,6 +118,18 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 	// 跟畫面上其他地方顯示的陣列資訊對不起來。
 	s.monitorCollector.SetDiskPath(pool.MountPoint)
 
+	// 第五十五輪覆核(產品 P1):設定好 pool 之後直接把陣列掛起來,讓它「馬上
+	// 就能用」——新手嚮導建完 pool 就接著建共享,如果這裡不掛,使用者做完整個
+	// 嚮導,/mnt/tank 卻沒掛載,檔案頁打不開、剛建的共享也是空的,而且畫面上
+	// 完全沒有提示要去按「啟動陣列」。掛載是安全且預期的動作(不像 snapraid
+	// sync 有副作用),所以在這裡連帶做。best-effort:掛不起來(mergerfs 沒裝
+	// 之類)不讓「存設定」跟著失敗——設定已經存好了,回傳的 status 會帶著
+	// failed 狀態與原因(前端 errorMap 會翻成看得懂的話,例如「mergerfs 尚未
+	// 安裝」),使用者照著提示去補裝、再從儀表板按「啟動陣列」即可。
+	if err := array.Start(r.Context(), s.runner); err != nil {
+		s.logger.Warn("auto-starting the array after saving the pool failed (config saved; array left stopped)", "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, array.Status())
 }
 

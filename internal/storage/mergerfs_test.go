@@ -3,9 +3,26 @@ package storage
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestMountPool_CreatesMountPoint(第五十五輪覆核 P2):MountPool 要在掛載前
+// 把聯合掛載點目錄建出來,否則 mergerfs 會因為目錄不存在而失敗。
+func TestMountPool_CreatesMountPoint(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tank")
+	cfg := testPoolConfig()
+	cfg.MountPoint = dir
+	r := &fakeRunner{} // mergerfs 假裝成功
+	if err := MountPool(context.Background(), r, cfg); err != nil {
+		t.Fatalf("MountPool returned error: %v", err)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("expected mount point %q to have been created as a directory, err=%v", dir, err)
+	}
+}
 
 // TestMountPool_MergerfsNotInstalled(第五十五輪 實機):mergerfs 沒裝時,
 // exec 會回「executable file not found in $PATH」;MountPool 要把它翻成
