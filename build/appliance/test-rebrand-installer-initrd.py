@@ -255,39 +255,49 @@ if os.path.isfile(blank_asset):
         check("blank asset: logo replaced (no longer the Debian logo)", got != orig_logo)
         check("blank asset: replacement is still a valid PNG", got[:8] == b"\x89PNG\r\n\x1a\n")
 
-# --- 9. 第五十五輪:同長度就地覆寫。替換圖比原 logo 小時,換完後那個項目的
-# 位元組長度必須跟原本「一模一樣」(靠補 NUL),而且該項目之後的所有 bytes
-# 必須完全不動(cpio 結構零位移)——這正是前兩次真機破圖想根治的點。---
-big_logo = png(300, 100, (10, 20, 30, 255))  # 一定比透明小圖大
+# --- 9. 第五十九輪(真正的根因):logo_installer.png 是「symlink → logo_debian.png」。
+# rebrander 必須把這個 symlink 項目「轉成真正的一般檔案」,內容放 GoNAS PNG,
+# 而不是把 PNG bytes 寫進 symlink(那會變成壞 symlink → 實機破圖)。這一格是
+# 直接固化前三次真機破圖的根因與正解。---
+SL_LNK = 0o120777   # S_IFLNK | 0777
 marker = b"MARKER-AFTER-LOGO-STAYS-PUT-1234567890"
-sl_cpio = build_cpio([
+# 手工組一個「含 symlink logo 項目」的 cpio:logo_installer.png 型別是 symlink,
+# 資料是它指向的目標路徑字串(就跟真實 gtk initrd 一模一樣)。
+sym_cpio = build_cpio([
     ("./init", b"x"),
-    ("usr/share/graphics/logo_installer.png", big_logo),
-    ("zzz/after.bin", marker),
+    ("usr/share/graphics/logo_installer.png", b"logo_debian.png"),  # 下面覆寫成 symlink mode
 ])
-# 找出原始 cpio 裡「logo 資料結束後」的所有 bytes(含後續項目),換完要一致。
-orig_ents, orig_tail = rb._parse_newc(sl_cpio)
-orig_logo_len = None
-for e in orig_ents:
+# build_cpio 預設用 0o100644 一般檔;這一格需要 symlink,重建那一個項目。
+sym_cpio = (
+    newc_entry("./init", b"x", ino=1)
+    + newc_entry("usr/share/graphics/logo_installer.png", b"logo_debian.png", mode=SL_LNK, ino=2)
+    + newc_entry("zzz/after.bin", marker, ino=3)
+    + newc_entry("TRAILER!!!", b"", mode=0, ino=0)
+)
+sym_cpio += b"\x00" * ((-len(sym_cpio)) % 512)
+# 先確認這一格輸入真的是 symlink(否則測了個寂寞)。
+pre_ents, _ = rb._parse_newc(sym_cpio)
+pre_mode = None
+for e in pre_ents:
     if e[1].decode().endswith("logo_installer.png"):
-        orig_logo_len = len(e[3])
+        pre_mode = rb._header_mode(e[0])
+check("symlink: test input logo really is a symlink", pre_mode is not None and (pre_mode & rb.S_IFMT) == rb.S_IFLNK)
 with tempfile.TemporaryDirectory() as d:
-    initrd = os.path.join(d, "initrd")  # 不壓縮,直接測 cpio 結構
-    open(initrd, "wb").write(sl_cpio)
-    if os.path.isfile(blank_asset):
-        rc, replaced = rb.rebrand(initrd, blank_asset)
-        check("same-length: rebrand returns 0", rc == 0)
-        new_raw = open(initrd, "rb").read()
-        new_ents, _ = rb._parse_newc(new_raw)
-        nb = {e[1].decode(): e[3] for e in new_ents}
-        new_logo = nb["usr/share/graphics/logo_installer.png"]
-        check("same-length: logo entry keeps the original byte length", len(new_logo) == orig_logo_len)
-        check("same-length: padded logo still decodes as a valid PNG",
-              new_logo[:8] == b"\x89PNG\r\n\x1a\n" and rb._png_dims(new_logo)[0] > 0)
-        check("same-length: file after the logo is byte-identical / still present",
-              nb.get("zzz/after.bin") == marker)
-        # 總長度也不該變(整個 archive 零位移)。
-        check("same-length: whole archive length unchanged", len(new_raw) == len(sl_cpio))
+    initrd = os.path.join(d, "initrd")  # 不壓縮,直接驗 cpio 結構/型別
+    open(initrd, "wb").write(sym_cpio)
+    glogo = os.path.join(d, "g.png")
+    open(glogo, "wb").write(gonas_logo)
+    rc, replaced = rb.rebrand(initrd, glogo)
+    check("symlink: rebrand returns 0 (converted)", rc == 0)
+    new_ents, _ = rb._parse_newc(open(initrd, "rb").read())
+    nb = {e[1].decode(): e for e in new_ents}
+    le = nb["usr/share/graphics/logo_installer.png"]
+    new_mode = rb._header_mode(le[0])
+    check("symlink: entry converted to a regular file (S_IFREG, not S_IFLNK)",
+          (new_mode & rb.S_IFMT) == rb.S_IFREG)
+    check("symlink: converted entry now holds a valid PNG (GoNAS logo, not the symlink target)",
+          le[3][:8] == b"\x89PNG\r\n\x1a\n" and le[3] != b"logo_debian.png")
+    check("symlink: file after the logo is intact", nb["zzz/after.bin"][3] == marker)
 
 print()
 if FAIL:

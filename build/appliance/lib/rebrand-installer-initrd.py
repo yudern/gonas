@@ -35,13 +35,22 @@ import sys, os, gzip, lzma, struct
 # 檔名明確是安裝器 logo 的那幾個,不會誤傷其他 PNG。
 LOGO_SUFFIXES = (
     "usr/share/graphics/logo_installer.png",
+    "usr/share/graphics/logo_installer_dark.png",
     "usr/share/graphics/logo_debian.png",
+    "usr/share/graphics/logo_debian_dark.png",
     "/logo_installer.png",
+    "/logo_installer_dark.png",
     "/logo_debian.png",
+    "/logo_debian_dark.png",
 )
 
 NEWC_MAGIC = b"070701"
 NEWC_CRC_MAGIC = b"070702"
+
+# cpio c_mode 的檔案類型位元(跟 <sys/stat.h> 的 S_IFMT 一致)。
+S_IFMT = 0xF000
+S_IFLNK = 0xA000  # symlink
+S_IFREG = 0x8000  # regular file
 
 
 def _detect_and_decompress(raw):
@@ -174,30 +183,61 @@ def _is_logo(clean_name):
     return any(clean_name.endswith(suf) for suf in LOGO_SUFFIXES)
 
 
+def _header_mode(header):
+    """讀 newc header 的 c_mode 欄位(bytes 14:22,16 進位)。"""
+    return int(header[14:22], 16)
+
+
+def _set_header_mode(header, mode):
+    """回傳一份 c_mode 被改成 mode 的 header(其餘 byte 不動)。維持原欄位的
+    大小寫風格,跟 _emit_entries 改 filesize 的做法一致。"""
+    field = header[14:22]
+    fmt = "%08x" if field == field.lower() else "%08X"
+    patched = bytearray(header)
+    patched[14:22] = (fmt % mode).encode("ascii")
+    return bytes(patched)
+
+
 def _replace_in_entries(entries, gonas_png):
-    """就地把 entries 裡的 logo 換成新的 PNG,回傳被換掉的清單(含原/新尺寸與
+    """就地把 entries 裡的 logo 換成 GoNAS PNG,回傳被換掉的清單(原/新尺寸與
     新位元組長度,供自我檢查與回報用)。
 
-    第五十五輪(真機第三次):前兩次(換 GoNAS logo、換透明圖)在使用者的
-    真實映像上都變成破圖,而且是「不管換什麼內容都破」——代表問題出在「換掉
-    的檔案長度跟原本不一樣,導致後面的 cpio 項目位移/重新對齊」這條路上,不是
-    圖的內容。這裡改成「同長度就地覆寫」:把新 PNG 補上結尾的 NUL bytes,湊到
-    跟原檔一模一樣的位元組長度(PNG 解碼器遇到 IEND 就停,結尾多餘的 bytes 會
-    被忽略,圖仍然有效)。這樣 filesize 欄位不變、該項目後面的所有 bytes 位置
-    完全不動,對整個 cpio 結構等於零改動,只有這個檔案的資料區換了內容。
-    只有在新 PNG 比原檔還大(裝不下)時,才退回舊的「換長度」行為。"""
+    第五十九輪(真正的根因):使用者把 gtk initrd 抽出來後發現——
+    `usr/share/graphics/logo_installer.png` **是一個 symlink**,指向
+    `logo_debian.png`(真正的圖由「載入安裝元件」階段的 udeb 提供,initrd 裡
+    只有這個 symlink)。前三次(第 53/55/57 輪)實機都破圖的真正原因,是舊的
+    做法「把 PNG bytes 直接寫進這個 symlink 項目、卻沒改它的檔案型別」,結果
+    變成一個「symlink 目標路徑=一串 PNG 二進位」的壞 symlink,d-i 一 follow
+    就變成破圖(而且正好在「載入安裝元件」載入佈景時出現)——跟 PNG 格式、
+    cpio 對齊、檔案長度全都無關,是「改到 symlink」這件事本身。
+    >
+    > 正解:遇到 symlink 型別的 logo 項目時,把它「轉成一個真正的一般檔案」
+    > (c_mode 從 S_IFLNK 改成 S_IFREG|0644),內容放 GoNAS logo。這正是
+    > debian-installer 給衍生版覆蓋品牌用的機制——衍生版就是覆蓋
+    > logo_installer.png 這個檔。轉成真檔之後,gtk 前端載入 logo_installer.png
+    > 直接拿到 GoNAS 圖,不需要再 follow symlink,也就不會破圖。
+    >
+    > 若哪天遇到的是「真的一般檔案」(不是 symlink),就照舊直接換內容(必要
+    > 時用 _maybe_resize 縮回原圖尺寸,版面才不跑掉)。"""
     replaced = []
     for e in entries:
         clean_name = e[1].decode("latin-1")
-        if _is_logo(clean_name):
+        if not _is_logo(clean_name):
+            continue
+        mode = _header_mode(e[0])
+        if (mode & S_IFMT) == S_IFLNK:
+            # symlink → 轉成真正的一般檔案,內容放 GoNAS logo(原尺寸,不縮放:
+            # symlink 的資料是路徑字串、沒有原圖尺寸可對照)。
+            e[0] = _set_header_mode(e[0], S_IFREG | 0o644)
+            e[3] = gonas_png
+            nw, nh = _png_dims(gonas_png)
+            replaced.append((clean_name, 0, 0, nw, nh, len(gonas_png)))
+        else:
+            # 一般檔案:直接換內容,有 PIL 就縮回原圖尺寸。
             ow, oh = _png_dims(e[3])
-            orig_len = len(e[3])
             new_png = _maybe_resize(gonas_png, ow, oh)
-            if len(new_png) <= orig_len:
-                # 同長度就地覆寫:補 NUL 到原長度,結構零位移。
-                new_png = new_png + b"\x00" * (orig_len - len(new_png))
-            nw, nh = _png_dims(new_png)
             e[3] = new_png
+            nw, nh = _png_dims(new_png)
             replaced.append((clean_name, ow, oh, nw, nh, len(new_png)))
     return replaced
 

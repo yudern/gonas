@@ -173,16 +173,21 @@ gpg 版本差異而壞掉的邏輯還是好的。
    `usr/share/graphics/logo_installer.png`、再打包回去(這條拆-換-打包邏輯有
    離線單元測試 `test-rebrand-installer-initrd.py`)。
    >
-   > **第 53/55/57 輪實機都破圖的教訓,以及第五十九輪的正解**:先前在「沒有
-   > 原始 logo 檔可對照」的情況下,盲目產生一張 360x96 的 GoNAS PNG 去換,
-   > 真機上那個位置一直顯示成「找不到圖片」。第五十八輪一度改走 newt 文字
-   > 前端閃避,但使用者要的是圖形界面,已回退。第五十九輪的做法:**先取得
-   > 使用者真機 ISO 裡的原始 gtk initrd,對照原始 logo 的「確切尺寸與 PNG
-   > 格式(bit depth / color type / interlace)」,產生一張格式完全相符的
-   > GoNAS 版本**,並在沙盒裡對真的 initrd 跑一次 rebrander、把換好的檔案抽
-   > 回來確認是有效可解碼的 PNG,才收版。branding/logo_installer.png 就是這樣
-   > 對齊出來的。要臨時關掉這一步、讓圖形安裝器顯示 Debian 自己的 logo,用
-   > `GONAS_REBRAND_INSTALLER_LOGO=0 make iso-amd64`。
+   > **第 53/55/57 輪實機都破圖的「真正根因」(第五十九輪從使用者抽出的 initrd
+   > 查到)**:`usr/share/graphics/logo_installer.png` 在 gtk initrd 裡其實是一個
+   > **symlink**,指向 `logo_debian.png`(真正的圖由「載入安裝元件」階段的 udeb
+   > 提供,initrd 裡只有這個 symlink)。舊做法「把 PNG bytes 直接寫進這個 symlink
+   > 項目、卻沒改它的檔案型別」,結果變成一個「目標路徑=一串 PNG 二進位」的壞
+   > symlink,d-i 一 follow 就變破圖——正好在「載入安裝元件」載入佈景時出現。
+   > 跟 PNG 格式、cpio 對齊、檔案長度全都無關(前三輪一直往這些方向猜,全錯)。
+   > **正解**:rebrander 遇到 symlink 型別的 logo 項目時,把它「轉成真正的一般
+   > 檔案」(c_mode 從 S_IFLNK 改成 S_IFREG|0644),內容放 GoNAS logo——這正是
+   > debian-installer 給衍生版覆蓋品牌的官方機制(覆蓋 logo_installer.png)。
+   > 轉成真檔後,gtk 前端載入 logo_installer.png 直接拿到 GoNAS 圖,不再 follow
+   > symlink,就不會破圖。這條 symlink→一般檔的轉換有離線回歸測試固化
+   > (test-rebrand-installer-initrd.py 案例 9)。branding/logo_installer.png 是
+   > 一張 800x75 的 GoNAS 橫幅(對齊 Debian banner 的尺寸)。要臨時關掉這一步、
+   > 讓圖形安裝器顯示 Debian 自己的 logo,用 `GONAS_REBRAND_INSTALLER_LOGO=0 make ...`。
    (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`＋`branding/`,跟 web
    介面同一個圓角方塊＋橫槓構圖),潑濺圖與安裝器 logo 都是用它構出來的。
 
