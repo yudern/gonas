@@ -67,6 +67,7 @@ export const api = {
   setPool: (pool) => request("PUT", "/api/v1/storage/pool", pool),
   startArray: () => request("POST", "/api/v1/storage/array/start"),
   stopArray: () => request("POST", "/api/v1/storage/array/stop"),
+  syncArray: () => request("POST", "/api/v1/storage/array/sync"),
 
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
   containers: () => request("GET", "/api/v1/docker/containers"),

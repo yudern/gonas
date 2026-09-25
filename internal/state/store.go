@@ -30,7 +30,13 @@ import (
 // (空陣列/nil pool),這樣全新安裝、還沒有 state.json 檔案時可以直接用
 // 零值 State{} 開始運作,不需要特殊的「第一次執行」邏輯。
 type State struct {
-	Pool           *storage.PoolConfig     `json:"pool,omitempty"`
+	Pool *storage.PoolConfig `json:"pool,omitempty"`
+	// ParityLastSync 是最近一次 SnapRAID sync 成功完成的時間;nil 代表「從來
+	// 沒有成功同步過」——也就是「同位碟是空的、資料還沒有受保護」。第五十八輪
+	// 全鏈路覆核(產品 P1/QA)抓到:之前設了同位碟卻永遠不會 sync,UI 卻讓人
+	// 以為有保護。這個欄位讓 UI 能誠實顯示「尚未同步 / 已於 X 受保護」。設定
+	// pool(或改設定)時會清成 nil——新設定的同位保護要重新 sync 才算數。
+	ParityLastSync *time.Time              `json:"parityLastSync,omitempty"`
 	Shares         []share.Share           `json:"shares"`
 	Exports        []share.Export          `json:"exports"`
 	Users          []UserRecord            `json:"users"`

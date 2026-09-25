@@ -45,6 +45,10 @@ var (
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")
 	errInternalServerError  = errors.New("internal server error")
 
+	// 第五十八輪:SnapRAID 同位同步(handleStorageArraySync)共用的 sentinel 錯誤。
+	errNoParityDisks        = errors.New("this pool has no parity disk, so there is no parity to sync: add a parity disk in the pool settings first")
+	errParitySyncInProgress = errors.New("a parity sync is already running, please wait for it to finish")
+
 	// Phase 10：檔案管理員共用的 sentinel 錯誤。
 	errArrayNotStarted = errors.New("the storage array has been configured but is not started yet: POST /api/v1/storage/array/start first")
 	errMissingPath     = errors.New("the \"path\" query parameter is required")

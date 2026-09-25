@@ -105,8 +105,11 @@ type Server struct {
 	// fstabPath 是「準備硬碟」寫入開機自動掛載設定的檔案,正式環境是
 	// /etc/fstab;抽成欄位是為了讓測試指到暫存檔,不去動真的 /etc/fstab。
 	fstabPath string
-	docker    *docker.Client
-	store     *state.Store
+	// snapraidCfgPath 是 GoNAS 管理的 snapraid.conf 位置;抽成欄位(跟
+	// fstabPath 同理)是為了讓測試指到暫存檔,不去動真的 /etc/gonas/snapraid.conf。
+	snapraidCfgPath string
+	docker          *docker.Client
+	store           *state.Store
 
 	// dataDir 是 state.json 所在的目錄,同時也是 TLS 憑證(tls/)、
 	// WireGuard 設定檔(wireguard/)這些「GoNAS 自己產生、不是使用者
@@ -238,6 +241,13 @@ type Server struct {
 	// 安裝請求同時打進來會撞鎖、第二個以難懂的錯誤失敗。用一個 atomic 旗標
 	// 讓同一時間只跑一個安裝,後到的請求直接回 409,而不是讓它去撞 dpkg 鎖。
 	doctorInstalling atomic.Bool
+
+	// paritySyncing 是「SnapRAID 同位同步/校驗」的 single-flight 旗標(第五十八
+	// 輪全鏈路覆核 P1)。snapraid sync 在大陣列上可能跑很久,而且會寫同位碟,
+	// 同一時間只能有一個在跑;用一個 atomic 旗標讓同步在背景 goroutine 執行,
+	// 後到的請求直接回 409。狀態(進行中/上次結果)給 array 狀態端點回報。
+	paritySyncing atomic.Bool
+	paritySyncErr atomic.Pointer[string] // 上次同步的錯誤訊息(nil=上次成功或還沒跑過)
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -253,6 +263,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		startedAt:        time.Now(),
 		runner:           storage.NewExecRunner(),
 		fstabPath:        storage.DefaultFstabPath,
+		snapraidCfgPath:  defaultSnapraidConfigPath,
 		docker:           docker.NewClient(""),
 		store:            store,
 		dataDir:          dataDir,
@@ -424,6 +435,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("PUT /api/v1/storage/pool", s.requireAdmin(s.handleStoragePoolSet))
 	mux.HandleFunc("POST /api/v1/storage/array/start", s.requireAdmin(s.handleStorageArrayStart))
 	mux.HandleFunc("POST /api/v1/storage/array/stop", s.requireAdmin(s.handleStorageArrayStop))
+	mux.HandleFunc("POST /api/v1/storage/array/sync", s.requireAdmin(s.handleStorageArraySync))
 
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))

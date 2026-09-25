@@ -3,11 +3,33 @@ package api
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/storage"
 )
+
+// defaultSnapraidConfigPath 是 GoNAS 產生/管理的 SnapRAID 設定檔預設位置。
+// sync/scrub 都用 `-c` 明確指到這裡,不依賴 snapraid 的預設 /etc/snapraid.conf。
+// 實際路徑放在 Server.snapraidCfgPath(可被測試覆寫,見 router.go)。
+const defaultSnapraidConfigPath = "/etc/gonas/snapraid.conf"
+
+// writeSnapraidConfig 依 pool 產生並原子寫入 snapraid.conf(只有 pool 有同位碟
+// 時才有意義)。與 samba/nfs 設定一樣用 share.WriteConfigAtomically(先寫暫存檔
+// 再 rename + fsync),避免留下半份設定檔。
+func (s *Server) writeSnapraidConfig(pool storage.PoolConfig) error {
+	content, err := storage.GenerateSnapraidConfig(pool)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.snapraidCfgPath), 0o755); err != nil {
+		return err
+	}
+	return share.WriteConfigAtomically(s.snapraidCfgPath, content)
+}
 
 // handleStorageDisks 探測系統上目前有哪些區塊裝置。這是唯讀操作,
 // 所以不需要陣列先被設定好才能呼叫 —— 使用者第一次設定 pool 之前,
@@ -74,13 +96,89 @@ func (s *Server) handleStorageDisksSmart(w http.ResponseWriter, r *http.Request)
 
 // handleStorageArrayStatus 回傳目前陣列的狀態。還沒有人設定過 pool 時,
 // 回傳 "unconfigured" 而不是錯誤 —— 這是合法的初始狀態,不是異常。
+// arrayStatusResponse 在 storage.Status 之外,附上「同位保護」的真實狀態,讓
+// 前端能誠實顯示「已於 X 受保護 / 尚未同步(尚未受保護)」而不是讓使用者以為
+// 設了同位碟就自動有保護(第五十八輪產品 P1)。
+type arrayStatusResponse struct {
+	storage.Status
+	HasParity       bool       `json:"hasParity"`
+	Protected       bool       `json:"protected"` // 有同位碟且至少成功 sync 過一次
+	ParitySyncing   bool       `json:"paritySyncing"`
+	ParityLastSync  *time.Time `json:"parityLastSync,omitempty"`
+	ParitySyncError string     `json:"paritySyncError,omitempty"`
+}
+
 func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request) {
 	array := s.getArray()
 	if array == nil {
-		writeJSON(w, http.StatusOK, storage.Status{State: "unconfigured"})
+		writeJSON(w, http.StatusOK, arrayStatusResponse{Status: storage.Status{State: "unconfigured"}})
 		return
 	}
-	writeJSON(w, http.StatusOK, array.Status())
+	snap := s.store.Snapshot()
+	hasParity := snap.Pool != nil && len(snap.Pool.ParityDisks) > 0
+	resp := arrayStatusResponse{
+		Status:         array.Status(),
+		HasParity:      hasParity,
+		ParitySyncing:  s.paritySyncing.Load(),
+		ParityLastSync: snap.ParityLastSync,
+		Protected:      hasParity && snap.ParityLastSync != nil,
+	}
+	if e := s.paritySyncErr.Load(); e != nil {
+		resp.ParitySyncError = *e
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleStorageArraySync 觸發一次 SnapRAID sync(把目前資料狀態寫進同位碟,
+// 「正式產生保護」的動作)。第五十八輪全鏈路覆核 P1:先前設了同位碟卻永遠
+// 不會 sync,等於沒有保護。sync 在大陣列上可能跑很久且會寫同位碟,所以在背景
+// goroutine 執行、用 atomic 旗標保證同一時間只有一個,狀態由 array 狀態端點回報。
+func (s *Server) handleStorageArraySync(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Snapshot()
+	if snap.Pool == nil {
+		writeError(w, http.StatusBadRequest, errNoPoolConfigured)
+		return
+	}
+	if len(snap.Pool.ParityDisks) == 0 {
+		writeError(w, http.StatusBadRequest, errNoParityDisks)
+		return
+	}
+	if !s.paritySyncing.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errParitySyncInProgress)
+		return
+	}
+	pool := *snap.Pool
+	go func() {
+		defer s.paritySyncing.Store(false)
+		// 跟 HTTP 請求脫鉤的 context:sync 可能跑數小時,不能被瀏覽器關閉/斷線
+		// 中途砍掉。給一個很寬鬆的上限,正常不會觸發。
+		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+		defer cancel()
+		// 確保設定檔是最新的(daemon 可能重啟過、/etc 可能被清過)。
+		if err := s.writeSnapraidConfig(pool); err != nil {
+			msg := "writing snapraid.conf: " + err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("parity sync: could not write snapraid.conf", "err", err)
+			return
+		}
+		s.logger.Info("parity sync starting", "pool", pool.Name)
+		if out, err := storage.RunSnapraid(ctx, s.runner, s.snapraidCfgPath, storage.SnapraidSync); err != nil {
+			msg := err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("parity sync failed", "err", err, "out", string(out))
+			return
+		}
+		now := time.Now()
+		if err := s.store.Update(func(st *state.State) error {
+			st.ParityLastSync = &now
+			return nil
+		}); err != nil {
+			s.logger.Error("parity sync succeeded but recording the last-sync time failed", "err", err)
+		}
+		s.paritySyncErr.Store(nil)
+		s.logger.Info("parity sync completed", "pool", pool.Name)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "syncing"})
 }
 
 // handleStoragePoolSet 建立或取代目前的 pool 設定並持久化。刻意只驗證、
@@ -99,11 +197,22 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.Update(func(st *state.State) error {
 		st.Pool = &pool
+		// 新設定(或改設定)→ 同位保護要重新 sync 才算數,清掉上次同步時間,
+		// 免得 UI 用舊的 pool 的同步時間誤標成「已受保護」。
+		st.ParityLastSync = nil
 		return nil
 	}); err != nil {
 		s.logger.Error("persisting pool config failed", "err", err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	// 有同位碟就先把 snapraid.conf 寫出來,讓之後的「立即同步」有設定可用
+	// (best-effort:寫不出來不擋存設定,sync 時會再寫一次)。
+	if len(pool.ParityDisks) > 0 {
+		if err := s.writeSnapraidConfig(pool); err != nil {
+			s.logger.Warn("could not write snapraid.conf after saving pool (parity sync will regenerate it)", "err", err)
+		}
 	}
 
 	// 第五十八輪全鏈路覆核(QA3):如果原本就有一個「正在啟動中(started)」

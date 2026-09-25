@@ -614,6 +614,23 @@ function arrayPillClass(state) {
   return "";
 }
 
+// renderParityStatus 誠實顯示同位保護狀態(第五十八輪產品 P1):沒有同位碟就
+// 不顯示;有同位碟但從沒成功 sync 過 → 明確警告「尚未受保護」;同步中 → 顯示
+// 進行中;已同步過 → 顯示「已於 X 受保護」。上次同步失敗也一併顯示。
+function renderParityStatus(a) {
+  if (!a || !a.hasParity) return "";
+  let out = "";
+  if (a.paritySyncing) {
+    out += `<p style="margin:0 0 8px"><span class="pill warn">${esc(t("storage.paritySyncing"))}</span> <span style="color:var(--text-dim);font-size:12.5px">${esc(t("storage.paritySyncingHint"))}</span></p>`;
+  } else if (a.protected) {
+    out += `<p style="margin:0 0 8px"><span class="pill ok">${esc(t("storage.parityProtected", { time: formatDateTime(a.parityLastSync) }))}</span></p>`;
+  } else {
+    out += msg("warn", t("storage.parityNeverSynced"));
+  }
+  if (a.paritySyncError) out += msg("error", t("storage.paritySyncFailed", { msg: translateError(a.paritySyncError) }));
+  return out;
+}
+
 // ---------- 儲存 ----------
 
 // ---------- 新手設定精靈 ----------
@@ -874,9 +891,11 @@ async function renderStorage(el) {
         ${arrayStatus.mountPoint ? ` · ${esc(t("storage.mountPoint"))} <code>${esc(arrayStatus.mountPoint)}</code>` : ""}
       </p>
       ${arrayStatus.error ? msg("error", translateError(arrayStatus.error)) : ""}
+      ${renderParityStatus(arrayStatus)}
       <div class="btn-row">
         <button id="start-array" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.startArray"))}</button>
         <button id="stop-array" class="secondary" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.stopArray"))}</button>
+        ${arrayStatus.hasParity ? `<button id="sync-parity" class="secondary" ${arrayStatus.paritySyncing ? "disabled" : ""}>${esc(arrayStatus.paritySyncing ? t("storage.paritySyncing") : t("storage.syncParity"))}</button>` : ""}
       </div>
     </div>
 
@@ -927,6 +946,20 @@ async function renderStorage(el) {
 
   el.querySelector("#start-array").addEventListener("click", () => runAction(api.startArray, renderStorage, el));
   el.querySelector("#stop-array").addEventListener("click", () => runAction(api.stopArray, renderStorage, el));
+  const syncBtn = el.querySelector("#sync-parity");
+  if (syncBtn) {
+    syncBtn.addEventListener("click", async () => {
+      syncBtn.disabled = true;
+      try {
+        await api.syncArray();
+        // sync 在背景跑,重新載入頁面會顯示「同步中…」狀態。
+        await renderStorage(el);
+      } catch (err) {
+        el.querySelector("#pool-msg")?.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+        syncBtn.disabled = false;
+      }
+    });
+  }
 
   if (disks.length) loadSmartData(el);
 
