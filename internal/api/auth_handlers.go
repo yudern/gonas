@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +47,17 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// 第五十八輪資安覆核(#6)縱深防禦:對「會改動狀態」的請求(非
+		// GET/HEAD/OPTIONS)做同源檢查。原本唯一的 CSRF 防護是
+		// SameSite=Strict 的 session cookie,對現代瀏覽器有效但沒有第二層;
+		// 這裡加上 Origin/Referer 主機比對——跨站送來的偽造請求 Origin 會是
+		// 攻擊者的網站、對不上本站主機,直接擋掉。兩個標頭都沒有時放行
+		// (某些合法的非瀏覽器客戶端不送,主要防護仍是 SameSite cookie)。
+		if !isSafeHTTPMethod(r.Method) && !sameOriginRequest(r) {
+			writeError(w, http.StatusForbidden, errCrossOriginBlocked)
+			return
+		}
+
 		// 第三十一輪(測試工程師覆核的後續強化):如果這個帳號被標記為
 		// 「必須先改密碼」(appliance 預設 gonas/gonas 第一次登入),在這裡
 		// 就擋掉「除了看自己是誰、改密碼、登出以外」的所有請求——不只是
@@ -69,6 +82,36 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), sessionContextKey, sess)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// isSafeHTTPMethod 回報這個 HTTP 方法是不是「唯讀、不改動狀態」的安全方法
+// ——這些不需要做 CSRF 同源檢查(GET/HEAD/OPTIONS)。
+func isSafeHTTPMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
+// sameOriginRequest 判斷一個會改動狀態的請求是不是來自同一個來源(本站)。
+// 優先看 Origin 標頭(現代瀏覽器在非 GET 請求一定會送),沒有再退回 Referer;
+// 兩者都沒有就放行(見 requireAuth 呼叫處的說明)。比對的是「主機:埠」,
+// 不比對 scheme——反向代理終結 TLS 時 scheme 可能不一致,但主機一致就夠了。
+func sameOriginRequest(r *http.Request) bool {
+	check := func(raw string) (bool, bool) { // (matched, present)
+		if raw == "" {
+			return false, false
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return false, true
+		}
+		return u.Host == r.Host, true
+	}
+	if matched, present := check(r.Header.Get("Origin")); present {
+		return matched
+	}
+	if matched, present := check(r.Header.Get("Referer")); present {
+		return matched
+	}
+	return true
 }
 
 // passwordChangeExempt 回報某個端點在「帳號被標記必須先改密碼」時是否仍然
@@ -199,12 +242,23 @@ func findAdminIndex(admins []state.AdminAccount, username string) int {
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expires time.Time) {
+	// Secure 走 HTTPS 連線時才加,避免純 HTTP 部署時 Cookie 完全送不出去。
+	// 第五十八輪資安覆核(#4):反向代理終結 TLS 時,gonasd 看到的是純 HTTP
+	// (r.TLS == nil),Cookie 會少了 Secure。但「盲目相信 X-Forwarded-Proto」
+	// 反而危險(純 HTTP 的直連客戶端偽造這個標頭會讓 Cookie 設了 Secure、之後
+	// 回傳不了、等於被登出),所以只有在管理者明確設定 GONAS_TRUST_PROXY_HEADERS=1
+	// (代表「我前面確實有一個會設 X-Forwarded-Proto 的可信代理」)時才採信它。
+	secure := r.TLS != nil
+	if !secure && os.Getenv("GONAS_TRUST_PROXY_HEADERS") == "1" &&
+		strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		secure = true
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil, // 走 HTTPS 連線時才加上 Secure,避免同一份程式碼在純 HTTP 部署時讓 Cookie 完全送不出去
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 		Expires:  expires,
 	})
@@ -313,8 +367,8 @@ func clientIP(r *http.Request) string {
 }
 
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
-	if allowed, wait := s.loginLimiter.Allow(ip); !allowed {
+	ipKey := "ip:" + clientIP(r)
+	if allowed, wait := s.loginLimiter.Allow(ipKey); !allowed {
 		// Retry-After 用整數秒,無條件進位 —— 寧可讓使用者多等一點點,
 		// 也不要因為無條件捨去讓前端算出「已經可以重試了」但伺服器這邊
 		// 其實還沒解鎖,導致又白白吃一次 429。
@@ -326,6 +380,22 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if !readJSON(w, r, &req) {
 		return
+	}
+
+	// 第五十八輪資安覆核(#5):除了「每個來源 IP」的節流,再加一層「每個帳號」
+	// 的節流——擋掉來源 IP 分散/輪換、專打同一個帳號的分散式暴力嘗試。共用
+	// 同一個 limiter,以帶前綴的 key 分成兩個命名空間(避免某個 IP 字串剛好
+	// 等於某個帳號名而互相干擾)。
+	acctKey := "user:" + req.Username
+	if allowed, wait := s.loginLimiter.Allow(acctKey); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds()+1)))
+		writeError(w, http.StatusTooManyRequests, errTooManyLoginAttempts)
+		return
+	}
+	// recordFail 同時對 IP 與帳號兩個 key 記一次失敗。
+	recordFail := func() {
+		s.loginLimiter.RecordFailure(ipKey)
+		s.loginLimiter.RecordFailure(acctKey)
 	}
 
 	admins := s.store.Snapshot().Admins
@@ -343,7 +413,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		// 避免用「帳號存在要算雜湊、不存在秒回」的時間差枚舉帳號(第三十輪
 		// 覆核抓到的時序側信道)。
 		security.DummyVerify(req.Password)
-		s.loginLimiter.RecordFailure(ip)
+		recordFail()
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -354,7 +424,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.loginLimiter.RecordFailure(ip)
+		recordFail()
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -393,7 +463,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			if !accepted {
 				// 碼合法,但交易內看到的 counter 不比目前值新 —— 這個碼(或更舊的)
 				// 已經用過了,判定為重放,拒絕。
-				s.loginLimiter.RecordFailure(ip)
+				recordFail()
 				writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
 				return
 			}
@@ -421,7 +491,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !consumed {
-				s.loginLimiter.RecordFailure(ip)
+				recordFail()
 				writeError(w, http.StatusUnauthorized, errInvalidTOTPCode)
 				return
 			}
@@ -429,7 +499,8 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.loginLimiter.RecordSuccess(ip)
+	s.loginLimiter.RecordSuccess(ipKey)
+	s.loginLimiter.RecordSuccess(acctKey)
 	s.loginSession(w, r, admin.Username)
 }
 

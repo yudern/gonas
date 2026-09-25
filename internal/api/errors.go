@@ -45,6 +45,9 @@ var (
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")
 	errInternalServerError  = errors.New("internal server error")
 
+	// 第五十八輪資安覆核(#6):跨站(非同源)的狀態變更請求被擋下時回這個。
+	errCrossOriginBlocked = errors.New("cross-origin request blocked: this request did not come from the GoNAS web interface")
+
 	// 第五十八輪:SnapRAID 同位同步(handleStorageArraySync)共用的 sentinel 錯誤。
 	errNoParityDisks        = errors.New("this pool has no parity disk, so there is no parity to sync: add a parity disk in the pool settings first")
 	errParitySyncInProgress = errors.New("a parity sync is already running, please wait for it to finish")

@@ -268,6 +268,22 @@ a.secondary, a.danger {
 a.secondary { background: var(--surface-2); color: var(--text); }
 a.danger { background: var(--danger); color: #fff; border-color: transparent; }
 a.secondary:hover, a.danger:hover { filter: brightness(1.05); }
+/* a.btnlink:主要色的「連結型按鈕」,給導覽用的 CTA(例如儀表板上「去系統
+   診斷」「開始設定」)。第五十八輪 UI 覆核(#6):這些原本是 <a><button> 巢狀
+   (無效 HTML、兩個聚焦點),改成單一 <a class="btnlink"> 就對了。 */
+a.btnlink {
+  display: inline-block;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.btnlink:hover { filter: brightness(1.05); }
 /* 第五十六輪覆核(UI-5):停用狀態一律用同一種「灰掉」的樣式,不分主要/次要。
    原本只設 opacity,停用的主要按鈕還是一片可點的 teal,跟旁邊灰掉的次要按鈕
    放一起看起來像「一個能點、一個不能點」。統一成中性灰,兩個都明顯不可點。 */

@@ -115,6 +115,15 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 		} else if warn != "" {
 			s.logger.Warn("re-applying nfs exports after install did not fully succeed", "warn", warn)
 		}
+	case "docker.io":
+		// 第五十八輪產品覆核(#10):docker.io 裝好後 daemon 不一定會自動啟動/
+		// 開機啟用,儀表板會一直顯示「Docker 無法使用」、同一個「去 Doctor」連結
+		// 又剛按過,使用者卡住。best-effort 啟用+啟動 docker 服務,讓它裝完就能用。
+		if out, err := s.runner.Run(ctx, "systemctl", "enable", "--now", "docker"); err != nil {
+			s.logger.Warn("docker.io installed but enabling/starting the docker service failed", "err", err, "out", string(out))
+		} else {
+			reapplied = "docker service started"
+		}
 	}
 	resp := map[string]string{"apt": req.Apt, "status": "installed"}
 	if reapplied != "" {

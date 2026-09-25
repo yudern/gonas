@@ -68,6 +68,24 @@ function wireLangSwitcher() {
   });
 }
 
+// associateLabels 把每個 .field 裡的 <label> 用 for= 連到它的輸入控制項
+// (第五十八輪 UI 覆核 #3)。原本 91 個 <label> 沒有一個有 for=,點文字不會
+// 聚焦欄位、螢幕閱讀器也唸不出欄位名。各頁是動態 innerHTML 產生的,所以由
+// boot() 裡的 MutationObserver 在每次重繪後重跑;已配對過的(label 已有 for)
+// 直接略過,冪等。回傳這次新配對的數量。
+function associateLabels(root) {
+  let n = 0;
+  root.querySelectorAll(".field").forEach((field) => {
+    const label = field.querySelector("label");
+    const ctrl = field.querySelector("input, select, textarea");
+    if (!label || !ctrl || label.htmlFor) return;
+    if (!ctrl.id) ctrl.id = "f_" + Math.random().toString(36).slice(2, 9);
+    label.htmlFor = ctrl.id;
+    n++;
+  });
+  return n;
+}
+
 async function router() {
   const hash = location.hash.replace(/^#\//, "") || "dashboard";
   const route = routes[hash] ? hash : "dashboard";
@@ -119,6 +137,29 @@ async function boot() {
   wireLangSwitcher();
   wireNavToggle();
   setUnauthorizedHandler(showLoginGate);
+
+  // 第五十八輪 UI 覆核:兩個全站層級的無障礙/防呆機制。
+  // (a) 表單 label 關聯(#3):MutationObserver 在每次畫面重繪後自動重跑
+  //     associateLabels(頁面內容是動態產生的)。重跑前先 disconnect、跑完
+  //     再 observe,避免自己設定 for=/id 造成的變動又觸發自己形成迴圈。
+  const labelObserver = new MutationObserver(() => {
+    labelObserver.disconnect();
+    try { associateLabels(document.body); } finally {
+      labelObserver.observe(document.body, { childList: true, subtree: true });
+    }
+  });
+  associateLabels(document.body);
+  labelObserver.observe(document.body, { childList: true, subtree: true });
+  // (b) 送出中防重複點擊(#8):表單送出時暫時停用觸發的送出鈕。用捕獲階段
+  //     在表單自己的 handler 之前先停用。3 秒安全網自動恢復——成功的操作
+  //     通常會重繪(按鈕本來就消失),失敗留在原畫面的表單則能再送一次。
+  document.body.addEventListener("submit", (ev) => {
+    const btn = ev.submitter;
+    if (btn && btn.tagName === "BUTTON" && !btn.disabled) {
+      btn.disabled = true;
+      setTimeout(() => { btn.disabled = false; }, 3000);
+    }
+  }, true);
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
     try { await api.authLogout(); } catch { /* 就算 logout 呼叫本身失敗,也還是要讓使用者回到登入畫面 */ }
@@ -302,18 +343,18 @@ async function renderDashboard(el) {
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
-    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor"><button type="button" class="secondary">${esc(t("doctor.dashButton"))}</button></a></div>` : ""}
+    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor" class="secondary">${esc(t("doctor.dashButton"))}</a></div>` : ""}
     ${missingDeps.length ? `
     <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
       ${h2i("stethoscope", esc(t("doctor.dashTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("doctor.dashBody", { n: missingDeps.length, names: missingDeps.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
-      <div class="btn-row"><a href="#/doctor"><button type="button">${esc(t("doctor.dashButton"))}</button></a></div>
+      <div class="btn-row"><a href="#/doctor" class="btnlink">${esc(t("doctor.dashButton"))}</a></div>
     </div>` : ""}
     ${arrayStatus.state === "unconfigured" ? `
     <div class="card" style="border-color:var(--accent);background:var(--accent-soft)">
       ${h2i("sliders", esc(t("setup.ctaTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("setup.ctaBody"))}</p>
-      <div class="btn-row"><a href="#/setup"><button type="button">${esc(t("setup.ctaButton"))}</button></a></div>
+      <div class="btn-row"><a href="#/setup" class="btnlink">${esc(t("setup.ctaButton"))}</a></div>
     </div>` : ""}
     ${isAdmin && (arrayStatus.state === "stopped" || arrayStatus.state === "failed") ? `
     <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
@@ -396,7 +437,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
     </div>
   ` : "";
 
-  const settingsForm = isAdmin ? `
+  const settingsFormInner = `
     <form class="stacked" id="update-settings-form" style="margin-top:12px">
       <div class="field">
         <label>${esc(t("update.manifestUrl"))}</label>
@@ -404,8 +445,23 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
         <div class="hint">${esc(t("update.manifestUrlHint"))}</div>
       </div>
       <div class="btn-row"><button type="submit">${esc(t("update.saveSettings"))}</button></div>
-    </form>
-  ` : (!update.configured ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0">${esc(t("update.adminOnlyHint"))}</p>` : "");
+    </form>`;
+  // 第五十八輪產品覆核(#5):GoNAS 沒有官方更新來源,這個功能是給「自架更新
+  // 伺服器」的進階使用者用的。未設定時,把設定表單收進 <details> 折疊起來、
+  // 並明講沒有官方來源,避免一般使用者看到一個指向 example.com 的欄位以為
+  // 「更新壞了」。已設定的話照常顯示。
+  let settingsForm;
+  if (isAdmin) {
+    settingsForm = update.configured
+      ? settingsFormInner
+      : `<details style="margin-top:12px">
+          <summary style="cursor:pointer;color:var(--text-dim);font-size:12.5px">${esc(t("update.advancedSource"))}</summary>
+          <p class="hint" style="margin:8px 0 0">${esc(t("update.noOfficialSource"))}</p>
+          ${settingsFormInner}
+        </details>`;
+  } else {
+    settingsForm = !update.configured ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0">${esc(t("update.adminOnlyHint"))}</p>` : "";
+  }
 
   return `
     <div class="card">
@@ -690,7 +746,7 @@ async function wizardWelcome(el) {
   const depNote = missing.length ? `
     <div class="card" style="border-color:var(--warn);background:var(--warn-soft);margin-top:12px">
       <p style="margin:0 0 10px;font-size:12.5px">${esc(t("setup.depsMissing", { names: missing.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
-      <div class="btn-row"><a href="#/doctor"><button type="button">${esc(t("doctor.dashButton"))}</button></a></div>
+      <div class="btn-row"><a href="#/doctor" class="btnlink">${esc(t("doctor.dashButton"))}</a></div>
     </div>` : "";
   el.innerHTML = wizardShell(
     `<h2>${esc(t("setup.welcomeTitle"))}</h2><p style="color:var(--text-dim)">${t("setup.welcomeBody")}</p>${depNote}`,
@@ -1564,7 +1620,7 @@ async function renderApps(el) {
   el.innerHTML = `
     <h1>${esc(t("apps.title"))}</h1>
     <p class="page-subtitle">${esc(t("apps.subtitle"))}</p>
-    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor"><button type="button" class="secondary">${esc(t("doctor.dashButton"))}</button></a></div>` : ""}
+    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor" class="secondary">${esc(t("doctor.dashButton"))}</a></div>` : ""}
 
     <div class="card">
       ${h2i("box", esc(t("apps.installed", { n: installed.length })))}
@@ -2981,7 +3037,7 @@ function renderVPNSection(status, peers) {
       <form class="stacked" id="vpn-peer-form" style="margin-top:16px">
         <div class="field"><label>${esc(t("security.vpnDeviceName"))}</label><input type="text" name="name" placeholder="${esc(t("security.vpnDeviceNamePlaceholder"))}" required></div>
         <div class="field"><label>${esc(t("security.vpnAllowedIPs"))}</label><input type="text" name="allowedIPs" placeholder="10.10.0.2/32" required></div>
-        <div class="field"><label>${esc(t("security.vpnEndpoint"))}</label><input type="text" name="endpoint" placeholder="mynas.example.com:51820"></div>
+        <div class="field"><label>${esc(t("security.vpnEndpoint"))}</label><input type="text" name="endpoint" placeholder="mynas.example.com:51820"><div class="hint">${esc(t("security.vpnEndpointHint"))}</div></div>
         <div class="btn-row"><button type="submit">${esc(t("security.vpnAddClient"))}</button></div>
       </form>
       <div id="vpn-client-config"></div>
@@ -3104,7 +3160,7 @@ async function renderBackup(el) {
       <form class="stacked" id="backup-form" style="margin-top:16px">
         <div class="field"><label>${esc(t("backup.jobName"))}</label><input type="text" name="name" placeholder="${esc(t("backup.jobNamePlaceholder"))}" required></div>
         <div class="field"><label>${esc(t("backup.sourcePath"))}</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
-        <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required></div>
+        <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required><div class="hint">${esc(t("backup.destHint"))}</div></div>
         <div class="field"><label>${esc(t("backup.retention"))}</label><input type="number" name="retentionCount" value="7" min="1" required></div>
         <div class="field"><label>${esc(t("backup.scheduleKind"))}</label>
           <select name="scheduleKind" id="backup-schedule-kind">
