@@ -30,6 +30,20 @@ var (
 func CheckSmartHealth(ctx context.Context, r Runner, device string) (SmartHealth, error) {
 	out, err := r.Run(ctx, "smartctl", "-a", device)
 	if err != nil {
+		// 第五十八輪全鏈路覆核(QA2):smartctl 用「位元遮罩」結束碼回報狀態
+		// ——bit 3(值 8)正是「整體健康評估 = FAILING」時會設的位元,bit 6/7
+		// 代表有記錄到的錯誤等。也就是說,一顆「SMART 已判定故障」的碟,
+		// smartctl 會以非零結束碼退出,但完整報告(含 overall-health 那一行)
+		// 仍然印在 stdout 上(cmd.Output() 會把 stdout 一起帶回來)。原本只要
+		// 非零就丟棄輸出、回錯,上層 probeSmartFailed 遇到錯誤就 `continue`
+		// 略過那顆碟,結果 facts.SmartFailed 永遠是 false——SMART 告警對「正在
+		// 故障的那顆碟」永遠不會觸發,使用者不會收到通知。修法:只要輸出裡
+		// 有可解析的健康摘要,就把非零結束碼當成 smartctl 的狀態碼、照常解析;
+		// 只有「啟動失敗(找不到執行檔、開不了裝置)」這種輸出裡沒有健康行的
+		// 情況,才當成真的查詢失敗回錯。
+		if healthLineRe.Match(out) {
+			return parseSmartOutput(out), nil
+		}
 		return SmartHealth{}, fmt.Errorf("smartctl -a %s: %w", device, err)
 	}
 	return parseSmartOutput(out), nil

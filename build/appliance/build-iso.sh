@@ -611,18 +611,42 @@ done < "$CFG_LIST"
 # 至少要有一個真的包含剛剛注入的字串，不然就中止,不繼續往下包裝。
 # 逐行用 while 讀檔案清單(不是把 `$(cat ...)` 直接展開成命令列參數)
 # ,避免萬一檔名裡有空白/萬用字元被 shell 誤解析。
-INJECTED=0
+# 第五十八輪建置覆核(#1):原本這裡只要「任何一個檔案」含 marker 就算通過
+# (INJECTED=1; break)。但 amd64 的 DVD 同時有 isolinux/(BIOS 開機)與
+# boot/grub/(UEFI 開機)兩套選單;如果哪天 grub.cfg 格式變了、grub 那條
+# 注入沒命中,只要 isolinux 命中就仍然「通過」——結果是 BIOS 會自動安裝、
+# UEFI 卻開進手動安裝,而這正是這個專案的目標機器(UEFI 的 mini PC/NAS)。
+# 改成:isolinux 家族與 grub 家族「各自」只要存在(有檔案)就必須各自至少
+# 命中一個,任一家族存在卻整組都沒命中就中止,不產出這種「一半會自動裝、
+# 一半悄悄掉回手動」的 ISO。
+ISOLINUX_TOTAL=0; ISOLINUX_HIT=0
+GRUB_TOTAL=0; GRUB_HIT=0
 while read -r cfgfile; do
-    if grep -q "$APPEND_MARKER" "$cfgfile" 2>/dev/null; then
-        INJECTED=1
-        break
-    fi
+    case "$cfgfile" in
+        *isolinux*)
+            ISOLINUX_TOTAL=$((ISOLINUX_TOTAL + 1))
+            grep -q "$APPEND_MARKER" "$cfgfile" 2>/dev/null && ISOLINUX_HIT=1
+            ;;
+        *grub*)
+            GRUB_TOTAL=$((GRUB_TOTAL + 1))
+            grep -q "$APPEND_MARKER" "$cfgfile" 2>/dev/null && GRUB_HIT=1
+            ;;
+        *)
+            # 其他路徑(理論上不會有,find 只收 isolinux/ 與 boot/grub/)——
+            # 當成「沒有明確歸類的開機選單」,命中就記在 grub 家族一併看待。
+            grep -q "$APPEND_MARKER" "$cfgfile" 2>/dev/null && GRUB_HIT=1
+            ;;
+    esac
 done < "$CFG_LIST"
-if [ "$INJECTED" != "1" ]; then
-    echo "error: failed to inject the GoNAS preseed boot parameter into any boot menu config file — the sed patterns in this script no longer match this Debian release's isolinux/grub.cfg format. The resulting ISO would silently fall back to a fully manual install with no error at boot time. Refusing to continue; inspect the files listed in $CFG_LIST by hand and update the sed patterns above." >&2
+if [ "$ISOLINUX_TOTAL" -gt 0 ] && [ "$ISOLINUX_HIT" != "1" ]; then
+    echo "error: the isolinux (BIOS) boot menu is present but the GoNAS preseed parameter was NOT injected into any of its config files — the sed patterns no longer match this Debian release's isolinux format. A BIOS boot would silently fall back to a manual install. Refusing to continue; inspect the isolinux/* files in $CFG_LIST by hand." >&2
     exit 1
 fi
-echo "==> confirmed the GoNAS preseed boot parameter was injected successfully"
+if [ "$GRUB_TOTAL" -gt 0 ] && [ "$GRUB_HIT" != "1" ]; then
+    echo "error: the grub (UEFI) boot menu is present but the GoNAS preseed parameter was NOT injected into any of its config files — the sed patterns no longer match this Debian release's grub.cfg format. A UEFI boot (the common case for modern mini-PCs/NAS) would silently fall back to a manual install. Refusing to continue; inspect the boot/grub/* files in $CFG_LIST by hand." >&2
+    exit 1
+fi
+echo "==> confirmed the GoNAS preseed boot parameter was injected into every boot-menu family present (isolinux hits=$ISOLINUX_HIT/$ISOLINUX_TOTAL, grub hits=$GRUB_HIT/$GRUB_TOTAL)"
 
 # 縮短選單等待時間——這是「安裝媒體」的開機選單(裝完系統之後的
 # GRUB 選單品牌化/等待時間是 late-command.sh 在目標系統裡處理的，

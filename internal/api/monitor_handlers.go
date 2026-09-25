@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bng147/gonas/internal/monitor"
@@ -108,8 +109,32 @@ func (s *Server) handleMonitorAlertsDelete(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// redactWebhookURL 遮蔽 webhook URL 裡的密鑰部分——只保留 scheme://host,
+// 有路徑就以「/…」帶過(Slack/Discord 的密鑰通常就在路徑裡)。第五十八輪
+// 資安覆核(#2):notifier 清單端點是 requireAuth(不是 requireAdmin),
+// 低權限的 viewer 帳號讀得到,原本回傳完整 URL 等於把可對頻道發訊息的密鑰
+// 洩漏給 viewer。notifier 只有建立/刪除、沒有編輯,前端不需要拿回完整 URL,
+// 所以清單一律遮蔽。
+func redactWebhookURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(hidden)"
+	}
+	s := u.Scheme + "://" + u.Host
+	if u.Path != "" && u.Path != "/" {
+		s += "/…"
+	}
+	return s
+}
+
 func (s *Server) handleMonitorNotifiersList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Snapshot().Notifiers)
+	notifiers := s.store.Snapshot().Notifiers
+	out := make([]monitor.WebhookConfig, len(notifiers))
+	for i, n := range notifiers {
+		n.URL = redactWebhookURL(n.URL)
+		out[i] = n
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleMonitorNotifiersCreate(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +190,18 @@ func (s *Server) handleMonitorNotifiersDelete(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleMonitorEmailNotifiersList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.store.Snapshot().EmailNotifiers)
+	// 第五十八輪資安覆核(#1):這個端點是 requireAuth,viewer 帳號也讀得到。
+	// EmailConfig.Password 是 SMTP 密碼,絕不能回給前端(跟 auth 那邊「永不
+	// 回傳 PasswordHash/TOTPSecret」同一條規則)。清掉 Password 再回;因為它
+	// 帶 omitempty,清成空字串後就不會出現在 JSON 裡。email notifier 只有
+	// 建立/刪除、沒有編輯,前端不需要拿回密碼。
+	notifiers := s.store.Snapshot().EmailNotifiers
+	out := make([]monitor.EmailConfig, len(notifiers))
+	for i, n := range notifiers {
+		n.Password = ""
+		out[i] = n
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleMonitorEmailNotifiersCreate(w http.ResponseWriter, r *http.Request) {

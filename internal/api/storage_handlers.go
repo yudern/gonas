@@ -106,6 +106,18 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 第五十八輪全鏈路覆核(QA3):如果原本就有一個「正在啟動中(started)」
+	// 的陣列,重設 pool 前要先把舊的 mergerfs 卸載掉,否則:掛載點沒變時新的
+	// mergerfs 會疊掛在舊的 FUSE 掛載上面(寫入落在遮蔽層),掛載點變了時舊的
+	// 掛載會被留著、變成沒人追蹤的孤兒掛載。用舊 Array 自己的 cfg 卸載(Stop
+	// 用的是它記住的舊掛載點),才卸得到正確的位置。best-effort:卸不掉只記
+	// 警告,不擋住重設設定。
+	if old := s.getArray(); old != nil && old.Status().State == storage.StateStarted {
+		if err := old.Stop(r.Context(), s.runner); err != nil {
+			s.logger.Warn("could not unmount the previous array before reconfiguring (possible stale/stacked mount)", "err", err)
+		}
+	}
+
 	// 換掉記憶體裡的 Array 物件：新設定跟舊陣列的執行狀態沒有關係,
 	// 一律視為一個全新的、還沒啟動的陣列，即使舊陣列當時是 started 也一樣
 	// ——「編輯設定」不該悄悄延續舊的執行狀態。透過 setArray 在寫鎖下換

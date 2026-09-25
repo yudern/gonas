@@ -240,6 +240,41 @@ def compute_closure(pkgs, provides, targets):
     return needed, missing_targets
 
 
+def prune_unsatisfiable(pkgs, provides, available):
+    """反覆剔除「有某個相依群組無法被 (base 或 available 裡的套件) 滿足」的
+    套件,直到穩定,回傳可安全放進本機 repo 的套件名集合。
+
+    available 是「實際下載成功」的套件名集合。某個相依 .deb 下載失敗(不在
+    available)時,任何仍依賴它的套件都必須從 bundle 移除——否則離線 apt
+    install 會因未滿足相依而失敗。純資料處理、不碰網路,方便離線單元測試。"""
+    avail = set(available)
+    changed = True
+    while changed:
+        changed = False
+        for name in list(avail):
+            st = pkgs.get(name)
+            if st is None:
+                avail.discard(name)
+                changed = True
+                continue
+            dep_field = (st.get("Pre-Depends", "") + ", " + st.get("Depends", "")).strip(", ")
+            ok = True
+            for alts in _split_deps(dep_field):
+                grp_ok = False
+                for a in alts:
+                    chosen, by_base = _resolve_alt([a], pkgs, provides)
+                    if by_base or (chosen is not None and chosen in avail):
+                        grp_ok = True
+                        break
+                if not grp_ok:
+                    ok = False
+                    break
+            if not ok:
+                avail.discard(name)
+                changed = True
+    return avail
+
+
 def _sha256(data):
     h = hashlib.sha256()
     h.update(data)
@@ -295,10 +330,10 @@ def main(argv):
             % " ".join(missing_targets))
     log("dependency closure: %d packages to bundle" % len(needed))
 
-    # 3) 下載每個 .deb,攤平放進 out/,同時收集 Packages stanza。
+    # 3) 下載每個 .deb,攤平放進 out/。先全部下載,記錄「真的下載成功」的套件。
     os.makedirs(args.out, exist_ok=True)
-    packages_out = []
-    downloaded = 0
+    stanza_by_name = {}   # name -> (basename, stanza)
+    downloaded_names = set()
     total_bytes = 0
     # 依名稱排序,輸出穩定、方便 diff/除錯。
     for name in sorted(needed):
@@ -313,7 +348,7 @@ def main(argv):
         try:
             data = _http_get(url)
         except Exception as e:
-            log("WARNING: failed to download %s (%s) — this package may not install offline" % (url, e))
+            log("WARNING: failed to download %s (%s)" % (url, e))
             continue
         # 有 SHA256 就核對,抓到壞檔早點發現(apt 之後也會核對)。
         want = st.get("SHA256")
@@ -322,11 +357,37 @@ def main(argv):
             continue
         with open(dest, "wb") as f:
             f.write(data)
-        downloaded += 1
+        downloaded_names.add(name)
         total_bytes += len(data)
-        # 產生本機 flat repo 的 Packages stanza:沿用鏡像原本的所有欄位
-        # (含 Size/SHA256/MD5sum,apt 會拿來核對),只把 Filename 改寫成
-        # 相對本機 repo 根目錄的 `./basename`。
+        stanza_by_name[name] = (base, st)
+
+    if not downloaded_names:
+        log("ERROR: downloaded 0 packages — nothing to bundle.")
+        return 3
+
+    # 3.5) 第五十八輪建置覆核(#2):若有下載失敗,反覆剔除「相依解不開」的
+    # 套件,避免 Packages 裡留下「指向缺檔相依」的套件——那會讓離線 apt
+    # install 因未滿足相依而整個失敗。剔到穩定為止,只保留每個相依都能被
+    # (base 或已下載套件)滿足的套件。
+    satisfiable = prune_unsatisfiable(pkgs, provides, downloaded_names)
+    dropped = downloaded_names - satisfiable
+    if dropped:
+        log("WARNING: dropping %d package(s) from the offline bundle because a dependency could not be downloaded: %s"
+            % (len(dropped), " ".join(sorted(dropped))))
+    dropped_targets = [t for t in targets if t in pkgs and t not in satisfiable]
+    if dropped_targets:
+        log("WARNING: these requested packages will NOT be offline-installable (a dependency was missing) — they will need network: %s"
+            % " ".join(dropped_targets))
+    if not satisfiable:
+        log("ERROR: no package remained fully satisfiable after pruning — not writing a bundle.")
+        return 3
+
+    # 4) 只為「相依都齊全」的套件寫 flat repo 的 Packages(stanza 之間空一行,
+    # 結尾留一空行)。沿用鏡像原本的所有欄位(含 Size/SHA256/MD5sum,apt 會
+    # 拿來核對),只把 Filename 改寫成相對本機 repo 根目錄的 `./basename`。
+    packages_out = []
+    for name in sorted(satisfiable):
+        base, st = stanza_by_name[name]
         new_lines = []
         for key, val in st.items():
             if key == "Filename":
@@ -335,16 +396,11 @@ def main(argv):
                 new_lines.append("%s: %s" % (key, val))
         packages_out.append("\n".join(new_lines))
 
-    if downloaded == 0:
-        log("ERROR: downloaded 0 packages — nothing to bundle.")
-        return 3
-
-    # 4) 寫出 flat repo 的 Packages(stanza 之間空一行,結尾留一空行)。
     packages_path = os.path.join(args.out, "Packages")
     with open(packages_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(packages_out))
         f.write("\n")
-    log("wrote %s (%d packages, %.1f MiB total)" % (packages_path, downloaded, total_bytes / 1048576.0))
+    log("wrote %s (%d packages, %.1f MiB downloaded)" % (packages_path, len(packages_out), total_bytes / 1048576.0))
     return 0
 
 

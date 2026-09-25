@@ -172,6 +172,70 @@ func syncDir(dir string) {
 	_ = d.Close()
 }
 
+// EnsureSambaInclude 確保系統的 smb.conf 真的用 `include =` 把 GoNAS 產生的
+// 共享檔引入——否則我們寫得再漂亮的 gonas-shares.conf,smbd 從來不會讀到,
+// 使用者建立的 SMB 共享在網路上永遠看不到(Windows 連進來得到
+// BAD_NETWORK_NAME)。
+//
+// 第五十八輪全鏈路覆核(產品 P2)抓到的核心功能 bug:整個 internal/ 與
+// build/ 裡沒有任何一處會加這行 include,而 applySambaConfig 卻回報
+// applied:true,UI 顯示「共享已新增」,實際上完全沒生效。
+//
+// 設計上維持 internal/share 既有的「不覆寫、只增補」原則:
+//   - 已經有一行(未被註解的)`include = <includePath>` 就什麼都不做(冪等)。
+//   - smb.conf 存在但沒有那行 → 在檔尾補一行。include 是文字層級的引入,
+//     被引入的檔案開頭就是各自的 [共享名] 區段,所以放在檔尾也能正確生效,
+//     不會被前面某個區段「吃掉」。
+//   - smb.conf 不存在(理論上 samba 一裝好就會有;保險起見)→ 建一份最小的
+//     含 [global] 的檔案再加 include。
+//
+// best-effort 的呼叫端會把任何錯誤當成警告回報,不會讓「存共享設定」失敗。
+func EnsureSambaInclude(smbConfPath, includePath string) error {
+	existing, err := os.ReadFile(smbConfPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading %s: %w", smbConfPath, err)
+		}
+		// 不存在:建一份最小可用的 smb.conf(含 [global])再引入。
+		minimal := "# 由 GoNAS 建立的最小 smb.conf —— 只確保 GoNAS 管理的共享檔被引入。\n" +
+			"[global]\n" +
+			"\tinclude = " + includePath + "\n"
+		if err := os.MkdirAll(filepath.Dir(smbConfPath), 0o755); err != nil {
+			return fmt.Errorf("creating dir for %s: %w", smbConfPath, err)
+		}
+		return WriteConfigAtomically(smbConfPath, minimal)
+	}
+
+	// 已經有一行未被註解的 include 指到我們的檔案就不重複加。逐行掃描,
+	// 略過以 # 或 ; 開頭(去掉前導空白後)的註解行,比對 `include = <path>`
+	// (等號兩側空白不拘)。
+	for _, line := range strings.Split(string(existing), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		low := strings.ToLower(trimmed)
+		if strings.HasPrefix(low, "include") {
+			rest := strings.TrimSpace(trimmed[len("include"):])
+			if strings.HasPrefix(rest, "=") {
+				val := strings.TrimSpace(rest[1:])
+				if val == includePath {
+					return nil // 已經引入過了
+				}
+			}
+		}
+	}
+
+	// 沒有 → 在檔尾補一行。保留原本內容原封不動,只在後面接上。
+	appended := string(existing)
+	if !strings.HasSuffix(appended, "\n") {
+		appended += "\n"
+	}
+	appended += "\n# --- 由 GoNAS 自動加入:引入 GoNAS 管理的共享定義(請勿刪除這行,否則 GoNAS 共享會失效) ---\n" +
+		"include = " + includePath + "\n"
+	return WriteConfigAtomically(smbConfPath, appended)
+}
+
 // ValidateSambaConfig 用 testparm 檢查設定檔語法是否正確。刻意在 ReloadSamba
 // 之前呼叫這個 —— 寧可拒絕套用一份有問題的設定,也不要讓 smbd 因為設定檔
 // 壞掉而整個掛掉,那樣會讓所有共享同時斷線,而不只是新加的那個。

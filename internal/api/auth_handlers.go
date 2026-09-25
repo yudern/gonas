@@ -157,6 +157,24 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Unwrap 讓 http.ResponseController(以及任何用 http.ResponseController 尋找
+// 底層能力的程式碼)能穿透這層稽核包裝,取得底層 ResponseWriter 上的
+// Flush / ReadFrom / SetReadDeadline / SetWriteDeadline 等方法。
+//
+// 第五十八輪全鏈路覆核(QA1)抓到的真 bug:檔案上傳端點是 requireAdmin 的
+// 非 GET 請求,會被 statusRecorder 包住;上傳 handler 會呼叫
+// http.NewResponseController(w).SetReadDeadline(...) 來「解除」伺服器層級
+// 那個 20 秒 ReadTimeout(否則大檔案上傳傳超過 20 秒就會被中途切斷)。
+// http.ResponseController 找不到 SetReadDeadline、也找不到 Unwrap 時會回
+// errNotSupported,而 handler 把它 `_ =` 忽略掉——於是 deadline 從來沒被
+// 解除,20 秒的 ReadTimeout 照樣套用在上傳上,大檔案(區網上的多 GB 影片)
+// 傳到一半就失敗/被截斷。補上 Unwrap 後,ResponseController 會沿著這條
+// wrapper 鏈找到底層 net/http 的 *response,SetReadDeadline 就會真的生效;
+// 同時也一併恢復被這層包裝擋住的 Flush / ReadFrom 直通能力。
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // findAdmin 在帳號清單裡依使用者名稱找一筆,回傳的是副本——呼叫端如果
 // 要修改,得透過 store.Update 用同樣的方式在陣列裡重新找到索引再改,
 // 不能直接改這裡回傳的副本(修改不會反映回 store)。

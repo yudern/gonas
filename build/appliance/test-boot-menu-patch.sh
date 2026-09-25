@@ -40,7 +40,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_WORK_DIR="$(mktemp -d /tmp/gonas-boot-menu-test.XXXXXX)"
 trap 'rm -rf "$TEST_WORK_DIR"' EXIT
 
-APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# 第五十八輪:APPEND_EXTRA 帶上 DEBIAN_FRONTEND=newt(改走 newt 文字前端、
+# 避開圖形安裝器 banner 破圖),讓下面的案例能一併驗證這個關鍵參數真的被
+# 注入到每一種開機項目(build 覆核 #6:原本沒有任何測試斷言 newt 有被注入)。
+APPEND_EXTRA="auto=true priority=high DEBIAN_FRONTEND=newt preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 APPEND_MARKER="gonas/preseed.cfg"
 
 FAIL=0
@@ -234,6 +237,16 @@ if grep -q 'initrd=/install.amd/initrd.gz' "$CASE9" \
 else
     echo "FAIL: gtk->text initrd/vmlinuz rewrite missed, left a gtk/ path, or broke preseed injection. Actual content:" >&2
     sed 's/^/    | /' "$CASE9" >&2
+    FAIL=1
+fi
+
+# --- 案例 10: DEBIAN_FRONTEND=newt 必須被注入到 isolinux 的 append 行與
+# grub 的 linux 行(第五十八輪的關鍵改動——確保安裝跑 newt 文字前端、不出現
+# gtk banner 破圖)。重用案例 1(isolinux)與案例 2(grub)已 patch 過的檔案。---
+if grep -q 'DEBIAN_FRONTEND=newt' "$CASE1" && grep -q 'DEBIAN_FRONTEND=newt' "$CASE2"; then
+    echo "PASS: DEBIAN_FRONTEND=newt injected into both isolinux append and grub linux lines"
+else
+    echo "FAIL: DEBIAN_FRONTEND=newt was not injected into one or both boot-entry styles" >&2
     FAIL=1
 fi
 

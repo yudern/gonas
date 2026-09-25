@@ -1194,7 +1194,7 @@ function wireFilesToolbar(root) {
       await api.filesMkdir(joinPath(filesState.path, name));
       await loadFilesList(root);
     } catch (err) {
-      showFilesMsg(root, "error", err.message);
+      showFilesMsg(root, "error", translateError(err.message));
     }
   });
 
@@ -1213,7 +1213,7 @@ function wireFilesToolbar(root) {
       const result = await api.filesSearch(filesState.path, q);
       renderFileRows(root, result.entries, { flatPaths: true, truncated: result.truncated });
     } catch (err) {
-      showFilesMsg(root, "error", err.message);
+      showFilesMsg(root, "error", translateError(err.message));
     }
   });
   toolbar.querySelector("#files-search-clear").addEventListener("click", async () => {
@@ -1257,7 +1257,7 @@ async function loadFilesList(root) {
     entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
     renderFileRows(root, entries, { flatPaths: false });
   } catch (err) {
-    showFilesMsg(root, "error", err.message);
+    showFilesMsg(root, "error", translateError(err.message));
     root.querySelector("#files-tbody").innerHTML = "";
   }
 }
@@ -1381,7 +1381,7 @@ async function renameItem(root, path) {
     await api.filesMove(path, joinPath(dirname(path), newName));
     await loadFilesList(root);
   } catch (err) {
-    showFilesMsg(root, "error", err.message);
+    showFilesMsg(root, "error", translateError(err.message));
   }
 }
 
@@ -1398,7 +1398,7 @@ async function moveOrCopySelected(root, kind) {
     try {
       await op(path, joinPath(dest, basename(path)));
     } catch (err) {
-      errors.push(`${basename(path)}: ${err.message}`);
+      errors.push(`${basename(path)}: ${translateError(err.message)}`);
     }
   }
   if (errors.length) showFilesMsg(root, "error", errors.join("；"));
@@ -1440,7 +1440,7 @@ async function deleteSelected(root) {
     try {
       await api.filesDelete(path, false);
     } catch (err) {
-      errors.push(`${basename(path)}: ${err.message}`);
+      errors.push(`${basename(path)}: ${translateError(err.message)}`);
     }
   }
   if (errors.length) showFilesMsg(root, "error", errors.join("；"));
@@ -2176,6 +2176,7 @@ async function renderMonitor(el) {
 
   el.querySelectorAll("[data-del-rule]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      if (!confirm(t("monitor.deleteRuleConfirm"))) return;
       try {
         await api.deleteAlertRule(btn.dataset.delRule);
         await renderMonitor(el);
@@ -2206,6 +2207,7 @@ async function renderMonitor(el) {
 
   el.querySelectorAll("[data-del-notifier]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      if (!confirm(t("monitor.deleteNotifierConfirm"))) return;
       try {
         await api.deleteNotifier(btn.dataset.delNotifier);
         await renderMonitor(el);
@@ -2231,6 +2233,7 @@ async function renderMonitor(el) {
 
   el.querySelectorAll("[data-del-email-notifier]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      if (!confirm(t("monitor.deleteEmailConfirm"))) return;
       try {
         await api.deleteEmailNotifier(btn.dataset.delEmailNotifier);
         await renderMonitor(el);

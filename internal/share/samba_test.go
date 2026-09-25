@@ -137,3 +137,87 @@ func TestWriteConfigAtomically(t *testing.T) {
 		t.Errorf("expected overwritten content %q, got %q", "world", data)
 	}
 }
+
+// 第五十八輪全鏈路覆核(產品 P2)的回歸測試:EnsureSambaInclude 必須真的把
+// GoNAS 的共享檔用 `include =` 接進 smb.conf,否則 smbd 永遠讀不到、共享看不到。
+func TestEnsureSambaInclude(t *testing.T) {
+	const inc = "/etc/samba/gonas-shares.conf"
+
+	t.Run("appends include when missing, preserves existing content", func(t *testing.T) {
+		dir := t.TempDir()
+		p := dir + "/smb.conf"
+		orig := "[global]\n\tworkgroup = WORKGROUP\n\n[printers]\n\tpath = /var/spool/samba\n"
+		if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := EnsureSambaInclude(p, inc); err != nil {
+			t.Fatalf("EnsureSambaInclude: %v", err)
+		}
+		got, _ := readFile(p)
+		if !strings.Contains(got, "workgroup = WORKGROUP") || !strings.Contains(got, "[printers]") {
+			t.Error("original smb.conf content was not preserved")
+		}
+		if !strings.Contains(got, "include = "+inc) {
+			t.Errorf("include line not added; got:\n%s", got)
+		}
+	})
+
+	t.Run("idempotent when include already present", func(t *testing.T) {
+		dir := t.TempDir()
+		p := dir + "/smb.conf"
+		orig := "[global]\n\tinclude = " + inc + "\n"
+		if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := EnsureSambaInclude(p, inc); err != nil {
+			t.Fatalf("EnsureSambaInclude: %v", err)
+		}
+		got, _ := readFile(p)
+		if strings.Count(got, "include = "+inc) != 1 {
+			t.Errorf("include line should appear exactly once, got:\n%s", got)
+		}
+	})
+
+	t.Run("a commented-out include does not count", func(t *testing.T) {
+		dir := t.TempDir()
+		p := dir + "/smb.conf"
+		orig := "[global]\n\t# include = " + inc + "\n"
+		if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := EnsureSambaInclude(p, inc); err != nil {
+			t.Fatalf("EnsureSambaInclude: %v", err)
+		}
+		got, _ := readFile(p)
+		// 應該補上一行「未註解」的 include(現在含註解那行 + 新加的實際那行）。
+		lines := strings.Split(got, "\n")
+		active := 0
+		for _, l := range lines {
+			tl := strings.TrimSpace(l)
+			if strings.HasPrefix(tl, "#") || strings.HasPrefix(tl, ";") {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(tl), "include") && strings.Contains(tl, inc) {
+				active++
+			}
+		}
+		if active != 1 {
+			t.Errorf("expected exactly one active include line, got %d; content:\n%s", active, got)
+		}
+	})
+
+	t.Run("creates a minimal smb.conf when absent", func(t *testing.T) {
+		dir := t.TempDir()
+		p := dir + "/smb.conf" // 不建立,模擬檔案不存在
+		if err := EnsureSambaInclude(p, inc); err != nil {
+			t.Fatalf("EnsureSambaInclude: %v", err)
+		}
+		got, err := readFile(p)
+		if err != nil {
+			t.Fatalf("smb.conf was not created: %v", err)
+		}
+		if !strings.Contains(got, "[global]") || !strings.Contains(got, "include = "+inc) {
+			t.Errorf("minimal smb.conf missing [global] or include; got:\n%s", got)
+		}
+	})
+}

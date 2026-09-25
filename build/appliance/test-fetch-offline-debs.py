@@ -168,6 +168,25 @@ needed, missing = m.compute_closure(pkgs, provides, ["mergerfs", "does-not-exist
 check("missing target reported", "does-not-exist" in missing)
 check("existing target still resolved alongside a missing one", "mergerfs" in needed)
 
+# --- prune_unsatisfiable:某個相依沒下載成功時,依賴它的套件要被剔除 ---
+# mergerfs 依賴 libfuse3-3;若 libfuse3-3 不在「已下載」集合裡,mergerfs 必須
+# 被剔除(否則離線 apt install 會因缺相依而失敗),但 libfuse3-3 自己在的話
+# mergerfs 要保留。
+full = {"mergerfs", "libfuse3-3"}
+kept = m.prune_unsatisfiable(pkgs, provides, full)
+check("prune keeps mergerfs when libfuse3-3 present", "mergerfs" in kept and "libfuse3-3" in kept)
+
+missing_dep = {"mergerfs"}  # libfuse3-3 下載失敗,不在集合
+kept2 = m.prune_unsatisfiable(pkgs, provides, missing_dep)
+check("prune drops mergerfs when its dep libfuse3-3 is missing", "mergerfs" not in kept2)
+
+# docker.io -> containerd -> runc:runc 下載失敗時,containerd 跟 docker.io 都要被剔除
+chain = {"docker.io", "containerd", "exim4"}  # runc 缺席
+kept3 = m.prune_unsatisfiable(pkgs, provides, chain)
+check("prune cascades: missing runc drops containerd and docker.io",
+      "containerd" not in kept3 and "docker.io" not in kept3)
+check("prune keeps unrelated satisfiable package (exim4)", "exim4" in kept3)
+
 # --- Filename 改寫檢查(模擬 main() 產生 stanza 的那段)---
 st = pkgs["mergerfs"]
 base = os.path.basename(st["Filename"])

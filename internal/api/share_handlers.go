@@ -14,6 +14,10 @@ import (
 const (
 	sambaConfigPath   = "/etc/samba/gonas-shares.conf"
 	exportsConfigPath = "/etc/exports.d/gonas.exports"
+	// smbConfPath 是系統原生的 Samba 主設定檔——我們不覆寫它,只確保它有一行
+	// `include = <sambaConfigPath>` 把 GoNAS 管理的共享檔引入(見
+	// share.EnsureSambaInclude 與第五十八輪產品覆核 P2)。
+	smbConfPath = "/etc/samba/smb.conf"
 )
 
 // applyResult 讓 Web UI 能區分「設定已經存好了」跟「而且也已經套用到正在
@@ -113,6 +117,11 @@ func (s *Server) applySambaConfig(r *http.Request, shares []share.Share) (applie
 	}
 	if err := share.WriteConfigAtomically(sambaConfigPath, content); err != nil {
 		return false, err.Error()
+	}
+	// 第五十八輪(產品 P2):確保 smb.conf 真的 include 了我們的共享檔,否則
+	// smbd 永遠讀不到、共享在網路上看不到。best-effort:補不了也只回警告。
+	if err := share.EnsureSambaInclude(smbConfPath, sambaConfigPath); err != nil {
+		return false, "config saved, but wiring it into smb.conf failed (is samba installed?): " + err.Error()
 	}
 	if err := share.ReloadSamba(r.Context(), s.runner); err != nil {
 		return false, "config saved, but reloading smbd failed (is samba installed and running?): " + err.Error()

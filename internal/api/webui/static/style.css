@@ -276,7 +276,10 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
-.btn-row { display: flex; gap: 8px; margin-top: 4px; }
+/* flex-wrap:第五十八輪 UI 覆核——工具列(例如檔案頁一排 7 顆按鈕)在手機
+   寬度(~360px)會被擠爆/溢出橫向捲動,加上換行就能在窄螢幕自動折行,
+   一次修好所有 .btn-row 工具列,維持「簡約乾淨」。 */
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
 .msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
 .msg.error { background: var(--danger-soft); color: var(--danger); }
