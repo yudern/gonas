@@ -513,46 +513,13 @@ echo "==> patching boot menu configs to auto-load the GoNAS preseed"
 # 寫在開機這一行,跳過「先讀 preseed.cfg 才知道答案」這個時序問題。
 # preseed.cfg 裡原本那行 `debian-installer/locale` 保留不動,兩邊寫的
 # 值一致,互相印證、不衝突。
-# DEBIAN_FRONTEND=text —— 這是「安裝全程都看不到 Debian 標誌、也絕不
-# 出現破圖」這個硬需求最後、也最可靠的解法,理由值得完整記錄下來:
-#
-# 第二十九輪一度加過 `DEBIAN_FRONTEND=text`,第三十一輪使用者否決,說要
-# 「圖形安裝界面 + 把裡面的 Debian logo 換成 GoNAS」。於是第 5c 步改成
-# 去 gtk initrd 裡把那張 logo PNG 換掉(先換成 GoNAS 圖、再換成透明圖、
-# 再改成同長度就地覆寫)——但連續三次實機(第 53/55/57 輪)都是同一個
-# 結果:圖形安裝器那個位置顯示成「找不到圖片」的破圖。安裝器本身是好的
-# (照常在讀 udeb、能安裝),純粹是那張被我們改寫過的 PNG 在真實 d-i 的
-# gtk 前端裡讀不出來(不是 cpio 壞掉,就是它內建的 gdk-pixbuf 讀不了我們
-# 產生的 PNG 變體)。這個沙盒沒辦法燒 ISO/開機重現,無法盲改到對。
-#
-# 使用者第五十八輪的選項是「換成 GoNAS 圖,或者乾脆什麼都不顯示」。既然
-# 「換圖」這條路實機三次都破圖,這裡改走「什麼都不顯示」這條保證有效的
-# 路:用 `DEBIAN_FRONTEND=newt` 讓安裝程式跑「newt 前端」(就是經典的
-# 藍底全螢幕文字安裝界面)而不是圖形(gtk)前端。newt 前端從頭到尾沒有
-# 任何 banner 圖片這個東西——沒有圖片,就不可能有破圖,也不可能顯示
-# Debian logo 圖。使用者第一張照片抱怨的「Load installer components / 設定
-# 網路那幾步上方的破圖」正是 gtk 前端的 banner,切成 newt 前端之後那塊
-# 區域根本不存在。
-#
-# 為什麼用 newt 而不是最陽春的 `text`:使用者這條安裝流程需要「手動選
-# 系統碟 + 確認分割」(preseed 刻意留白的那兩步,見 preseed.cfg),newt
-# 的全螢幕選單對「選硬碟」這種操作比 text 那種一行一行問答好用得多,而
-# 兩者都一樣「沒有 banner 圖片」。就算某個開機項目漏改、載入了 gtk 版
-# initrd(gtk initrd 是超集,裡面也有 newt),DEBIAN_FRONTEND=newt 也會
-# 強制走 newt、不啟動 gtk,banner 不會出現——這是雙保險的第一層。
-#
-# 搭配下面 lib/patch-boot-menu.sh 會再把選單項目裡指向 gtk/initrd.gz 的
-# 路徑改寫成文字版 initrd.gz(見 xorriso 實測:同一片 ISO 裡
-# /install.amd/gtk/initrd.gz 是圖形版、/install.amd/initrd.gz 是文字版)
-# ——雙保險:就算使用者手動選「Graphical install」,載入的也是文字版
-# initrd,gtk 前端的元件根本不會被載入。安裝流程(preseed 自動化、選硬碟、
-# 分割確認)在文字前端下完全一樣,只是畫面變成藍底文字選單。
-#
-# 誠實邊界:文字前端裡某些畫面標題的「文字」仍可能出現 "Debian" 字樣
-# (那是編譯進 d-i udeb 模板的字串,不重建整個安裝程式改不掉,見
-# README.md)——但那是「文字」不是「標誌(logo 圖)」,而且不會再有任何
-# 破圖。開機選單(splash)、裝完重開機後的系統,全都是 GoNAS 品牌。
-APPEND_EXTRA="auto=true priority=high DEBIAN_FRONTEND=newt language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# 安裝前端:保留 Debian 官方的「圖形(gtk)安裝界面」——這是使用者明確要
+# 的(第五十九輪:使用者一直都是用圖形界面安裝,要求維持圖形、並把裡面的
+# Debian logo 換成 GoNAS logo,不要改成文字模式)。第五十八輪一度加過
+# DEBIAN_FRONTEND=newt 想用文字前端閃避 logo 破圖,已於第五十九輪移除。
+# 圖形界面裡那張 Debian logo 由下面第 5c 步(lib/rebrand-installer-initrd.py)
+# 在 gtk initrd 裡換成 GoNAS logo。
+APPEND_EXTRA="auto=true priority=high language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 # 拿來事後驗證「真的注入成功了嗎」的一小段獨特字串——不會跟 ISO 裡
 # 其他既有內容重複，之後可以直接 grep 這個字串確認注入是否生效。
 APPEND_MARKER="gonas/preseed.cfg"
@@ -788,30 +755,22 @@ fi
 # 依賴:python3(裝了 Xcode CLT 的 Mac 一定有)。沒有 python3 就跳過、
 # 印 warning、不中斷建置——寧可少換這張圖,也不要讓整個 ISO 建不出來。
 #
-# 第五十三輪(使用者實機測試):把 gtk 安裝器裡那張 logo 換成 GoNAS logo 之後,
-# 實機上那個位置顯示成「找不到圖片」的破圖(initrd 本身沒壞——安裝器有正常
-# 開起來、在讀 udeb——是那張 logo 在真實 d-i 環境裡讀不出來)。我們無法在
-# 沙盒/CI 裡燒 ISO 開機驗證,所以依使用者決定:那個位置「乾脆留空」——換成
-# 一張有效的「全透明」PNG,讓那個位置什麼都不顯示(不會是破圖、也不會是
-# Debian logo)。要改回顯示 GoNAS logo 的話,把下面這行指回 logo_installer.png
-# 即可(那張圖仍保留在 branding/ 底下),但要記得再實機驗證一次能不能顯示。
-GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/installer-logo-blank.png"
-# 第五十七輪(使用者第三次實機):即使改成「同長度就地覆寫」透明圖,真實
-# d-i 環境裡那張 logo 還是顯示成破圖。連續兩種內容(GoNAS 圖、透明圖)、
-# 兩種改法(換長度、同長度)都在真機上破圖,而我無法在沙盒燒 ISO/開機重現
-# 或 debug——所以把這個 initrd 改圖預設「關掉」:不動 initrd,圖形安裝器顯示
-# Debian 自己的(有效)logo,絕不會再是破圖。開機選單仍是 GoNAS(splash),
-# 裝完重開機後整個系統也都是 GoNAS,只有安裝那幾分鐘的圖形畫面會短暫看到
-# Debian 標誌。要重新嘗試改圖(需自備 initrd 驗證),用
-# `GONAS_REBRAND_INSTALLER_LOGO=1 make iso-amd64` 開回來。
-if [ "${GONAS_REBRAND_INSTALLER_LOGO:-0}" != "1" ]; then
-    echo "==> not touching the installer initrd logo (default). Since round 58 the installer runs in the newt frontend (DEBIAN_FRONTEND=newt + boot menu points at the non-gtk initrd), so the graphical banner — where the logo/broken-image appeared — is never shown at all. This initrd-logo rebranding is now moot; set GONAS_REBRAND_INSTALLER_LOGO=1 only if you deliberately switch back to the graphical installer." >&2
+# 第五十九輪(使用者要維持圖形安裝界面、把 Debian logo 換成 GoNAS logo):
+# 這一步預設「開啟」,把 gtk initrd 裡的 Debian logo 換成 branding/logo_installer.png
+# (GoNAS logo)。先前第 53/55/57 輪實機都破圖,原因是我們在沒有原始 logo 檔可
+# 對照的情況下盲改尺寸/格式;第五十九輪的做法是先拿到使用者真機 ISO 裡的原始
+# gtk initrd,對照原始 logo 的「確切尺寸與 PNG 格式」產生相符的 GoNAS 版本,
+# 才不會再破圖(見 README.md 與 rebrand-installer-initrd.py)。要臨時關掉這一步、
+# 讓圖形安裝器顯示 Debian 自己的 logo,用 `GONAS_REBRAND_INSTALLER_LOGO=0 make ...`。
+GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/logo_installer.png"
+if [ "${GONAS_REBRAND_INSTALLER_LOGO:-1}" = "0" ]; then
+    echo "==> installer logo rebranding disabled (GONAS_REBRAND_INSTALLER_LOGO=0) — the graphical installer will show Debian's own logo" >&2
 elif [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
     echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "warning: python3 not found on this build machine — skipping graphical-installer logo rebranding (the boot menu is still GoNAS-branded; install python3 to also rebrand the graphical installer logo)" >&2
 else
-    echo "==> blanking the graphical installer logo (replacing it with a transparent image) inside gtk initrd(s)"
+    echo "==> replacing the graphical installer Debian logo with the GoNAS logo inside gtk initrd(s)"
     # 找出所有 initrd 檔(不同版本/架構路徑不同:install.amd/gtk/initrd.gz、
     # install.a64/gtk/initrd.gz 等)。對每個都跑一次 rebrander——沒有 logo
     # 的 initrd(例如純文字安裝的那個)會回傳 2、原檔不動,無害;有 logo
@@ -827,22 +786,22 @@ else
         # rebrander 回傳:0=換到、2=這個 initrd 沒 logo(略過)、1=出錯。
         if python3 "$SCRIPT_DIR/lib/rebrand-installer-initrd.py" "$initrd" "$GONAS_INSTALLER_LOGO"; then
             GTK_LOGO_REPLACED=$((GTK_LOGO_REPLACED + 1))
-            echo "    - blanked logo in ${initrd#"$EXTRACT_DIR"/}"
+            echo "    - replaced logo in ${initrd#"$EXTRACT_DIR"/}"
         else
             _rc=$?
             # 2 是「這個 initrd 裡沒有 logo」,是正常情況(文字安裝的 initrd),
             # 不當錯誤。只有 1(真的出錯)才印出來提醒——但仍不中斷建置,
             # 因為開機選單品牌化已經生效,少換這張圖不至於毀掉整份 ISO。
             if [ "$_rc" != "2" ]; then
-                echo "warning: logo-blanking failed on ${initrd#"$EXTRACT_DIR"/} (rc=$_rc) — leaving it unchanged; the graphical installer for that image may still show the stock Debian logo" >&2
+                echo "warning: logo replacement failed on ${initrd#"$EXTRACT_DIR"/} (rc=$_rc) — leaving it unchanged; the graphical installer for that image may still show the stock Debian logo" >&2
             fi
         fi
     done < "$WORK_DIR/initrd-files.list"
-    echo "==> graphical installer logo: blanked in $GTK_LOGO_REPLACED of $INITRD_FOUND initrd file(s) (initrds without an installer logo are skipped, which is normal)"
+    echo "==> graphical installer logo: replaced with GoNAS in $GTK_LOGO_REPLACED of $INITRD_FOUND initrd file(s) (initrds without an installer logo are skipped, which is normal)"
     if [ "$INITRD_FOUND" = "0" ]; then
-        echo "warning: found no initrd files under the ISO tree — the graphical installer logo could not be blanked; verify the ISO layout" >&2
+        echo "warning: found no initrd files under the ISO tree — the graphical installer logo could not be replaced; verify the ISO layout" >&2
     elif [ "$GTK_LOGO_REPLACED" = "0" ]; then
-        echo "warning: found initrd files but none contained an installer logo to blank — the graphical installer may still show the Debian logo; this Debian build may store the logo elsewhere (verify on a real boot and report back)" >&2
+        echo "warning: found initrd files but none contained an installer logo to replace — the graphical installer may still show the Debian logo; this Debian build may store the logo elsewhere (verify on a real boot and report back)" >&2
     fi
 fi
 

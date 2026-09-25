@@ -40,10 +40,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_WORK_DIR="$(mktemp -d /tmp/gonas-boot-menu-test.XXXXXX)"
 trap 'rm -rf "$TEST_WORK_DIR"' EXIT
 
-# 第五十八輪:APPEND_EXTRA 帶上 DEBIAN_FRONTEND=newt(改走 newt 文字前端、
-# 避開圖形安裝器 banner 破圖),讓下面的案例能一併驗證這個關鍵參數真的被
-# 注入到每一種開機項目(build 覆核 #6:原本沒有任何測試斷言 newt 有被注入)。
-APPEND_EXTRA="auto=true priority=high DEBIAN_FRONTEND=newt preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+APPEND_EXTRA="auto=true priority=high preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 APPEND_MARKER="gonas/preseed.cfg"
 
 FAIL=0
@@ -212,41 +209,23 @@ else
     FAIL=1
 fi
 
-# --- 案例 9: 第五十八輪(改走文字安裝前端避開 gtk banner 破圖)——選單
-# 項目裡指向圖形版 initrd 的路徑,必須被改寫成文字版 initrd(去掉中間的
-# gtk/ 那一層),而 preseed 參數照樣要注入得進去。amd64(install.amd)跟
-# arm64(install.a64)兩種架構路徑都要涵蓋。---
-CASE9="$TEST_WORK_DIR/case9-gtk-to-text-initrd.cfg"
+# --- 案例 9: 第五十九輪(改回圖形安裝界面)——gtk initrd 路徑「不」應被改寫,
+# 維持指向 gtk 版 initrd(圖形安裝),而 preseed 參數照樣注入得進去。---
+CASE9="$TEST_WORK_DIR/case9-keep-gtk-initrd.cfg"
 cat > "$CASE9" <<'EOF'
 label gtkinstall
 	menu label ^Graphical install
 	kernel /install.amd/gtk/vmlinuz
 	append vga=788 initrd=/install.amd/gtk/initrd.gz ---
-menuentry "Graphical install (a64)" {
-	linux	/install.a64/gtk/vmlinuz vga=788 ---
-	initrd	/install.a64/gtk/initrd.gz
-}
 EOF
 gonas_patch_boot_menu_file "$CASE9" "$APPEND_EXTRA"
-if grep -q 'initrd=/install.amd/initrd.gz' "$CASE9" \
-   && grep -q '/install.a64/initrd.gz' "$CASE9" \
-   && ! grep -q '/gtk/initrd' "$CASE9" \
-   && ! grep -q '/gtk/vmlinuz' "$CASE9" \
+if grep -q '/install.amd/gtk/initrd.gz' "$CASE9" \
+   && grep -q '/install.amd/gtk/vmlinuz' "$CASE9" \
    && grep -q "$APPEND_MARKER" "$CASE9"; then
-    echo "PASS: gtk initrd/vmlinuz rewritten to the text-frontend paths (amd64 + a64), preseed still injected"
+    echo "PASS: gtk initrd/vmlinuz paths left intact (graphical install kept), preseed still injected"
 else
-    echo "FAIL: gtk->text initrd/vmlinuz rewrite missed, left a gtk/ path, or broke preseed injection. Actual content:" >&2
+    echo "FAIL: gtk paths were altered or preseed injection broke. Actual content:" >&2
     sed 's/^/    | /' "$CASE9" >&2
-    FAIL=1
-fi
-
-# --- 案例 10: DEBIAN_FRONTEND=newt 必須被注入到 isolinux 的 append 行與
-# grub 的 linux 行(第五十八輪的關鍵改動——確保安裝跑 newt 文字前端、不出現
-# gtk banner 破圖)。重用案例 1(isolinux)與案例 2(grub)已 patch 過的檔案。---
-if grep -q 'DEBIAN_FRONTEND=newt' "$CASE1" && grep -q 'DEBIAN_FRONTEND=newt' "$CASE2"; then
-    echo "PASS: DEBIAN_FRONTEND=newt injected into both isolinux append and grub linux lines"
-else
-    echo "FAIL: DEBIAN_FRONTEND=newt was not injected into one or both boot-entry styles" >&2
     FAIL=1
 fi
 

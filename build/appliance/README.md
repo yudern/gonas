@@ -166,30 +166,23 @@ gpg 版本差異而壞掉的邏輯還是好的。
    立刻開始、或倒數結束自動開始(無人值守也裝得完)。第二十九輪一度
    把選單設成 `timeout 1`/`hidden` 想「一開機直接裝」,被使用者以產品
    設計角度否決——他要的是「有一個開始鈕可以按」,不是自動衝進安裝。
-   (b) **安裝器裡不再出現 Debian logo 圖、也不會破圖**(第五十八輪)。
-   演進過程值得記下來:第三十一~五十七輪試過「保留圖形(gtk)安裝界面,
-   把裡面那張 Debian 螺旋 logo 換成 GoNAS」——build-iso.sh 第 5c 步用
+   (b) **圖形(gtk)安裝界面裡的 Debian logo 換成 GoNAS logo**(第三十一輪起,
+   第五十九輪回到此路線)。使用者要的是「保留圖形安裝界面,把裡面那張 Debian
+   螺旋 logo 換成 GoNAS」,不要改成文字安裝。build-iso.sh 第 5c 步用
    `lib/rebrand-installer-initrd.py` 拆開 gtk initrd、換掉
-   `usr/share/graphics/logo_installer.png`、再打包回去。但**連續三次實機
-   (第 53/55/57 輪)都破圖**:不管換成 GoNAS 圖還是透明圖、不管換長度
-   還是同長度就地覆寫,那個位置在真實 d-i 的 gtk 前端裡都顯示成「找不到
-   圖片」。安裝器本身是好的,純粹是那張被改寫過的 PNG 在 gtk 前端的
-   gdk-pixbuf 讀不出來,而這個沙盒無法燒 ISO/開機重現、沒辦法盲改到對。
-   使用者第五十八輪的選項是「換成 GoNAS 圖,或者乾脆什麼都不顯示」;
-   既然「換圖」實機三次都失敗,改走「什麼都不顯示」這條**保證有效**的路:
-   讓安裝程式跑 **newt 前端**(經典藍底全螢幕文字安裝界面),而不是 gtk
-   圖形前端。做法是 build-iso.sh 的 APPEND_EXTRA 加 `DEBIAN_FRONTEND=newt`,
-   `lib/patch-boot-menu.sh` 再把選單項目裡指向 gtk initrd 的路徑改寫成
-   非 gtk 的 initrd(依實機 `xorriso -find` 證實:圖形版在
-   `/install.amd/gtk/initrd.gz`、文字版在 `/install.amd/initrd.gz`)——
-   雙保險。**newt 前端從頭到尾沒有任何 banner 圖片**,所以既不可能出現
-   Debian logo 圖,也不可能破圖;使用者原本抱怨的「Load installer
-   components/設定網路那幾步上方的破圖」正是 gtk 前端的 banner,切成 newt
-   之後那塊區域根本不存在。安裝流程(preseed 自動化、選硬碟、分割確認)
-   完全一樣,只是畫面變藍底全螢幕文字選單。第 5c 步的 initrd 改圖預設
-   關閉、已無作用(newt 不載 gtk banner),保留是為了萬一將來要改回圖形
-   安裝器時可用(`GONAS_REBRAND_INSTALLER_LOGO=1`);它的離線單元測試
-   `test-rebrand-installer-initrd.py` 仍在。
+   `usr/share/graphics/logo_installer.png`、再打包回去(這條拆-換-打包邏輯有
+   離線單元測試 `test-rebrand-installer-initrd.py`)。
+   >
+   > **第 53/55/57 輪實機都破圖的教訓,以及第五十九輪的正解**:先前在「沒有
+   > 原始 logo 檔可對照」的情況下,盲目產生一張 360x96 的 GoNAS PNG 去換,
+   > 真機上那個位置一直顯示成「找不到圖片」。第五十八輪一度改走 newt 文字
+   > 前端閃避,但使用者要的是圖形界面,已回退。第五十九輪的做法:**先取得
+   > 使用者真機 ISO 裡的原始 gtk initrd,對照原始 logo 的「確切尺寸與 PNG
+   > 格式(bit depth / color type / interlace)」,產生一張格式完全相符的
+   > GoNAS 版本**,並在沙盒裡對真的 initrd 跑一次 rebrander、把換好的檔案抽
+   > 回來確認是有效可解碼的 PNG,才收版。branding/logo_installer.png 就是這樣
+   > 對齊出來的。要臨時關掉這一步、讓圖形安裝器顯示 Debian 自己的 logo,用
+   > `GONAS_REBRAND_INSTALLER_LOGO=0 make iso-amd64`。
    (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`＋`branding/`,跟 web
    介面同一個圓角方塊＋橫槓構圖),潑濺圖與安裝器 logo 都是用它構出來的。
 
