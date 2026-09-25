@@ -97,6 +97,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 # 第十八輪覆閱(使用者實測 arm64 建置)抓到的問題:找開機選單設定檔的
 # `find` 呼叫,理由/實作見 lib/find-boot-menu-cfgs.sh 開頭的說明。
 . "$SCRIPT_DIR/lib/find-boot-menu-cfgs.sh"
+. "$SCRIPT_DIR/lib/scan-pool-packages.sh"
 # 第二十八輪:換成 DVD-1 之後,原本第十九輪為了在 netinst 上硬做離線
 # SSH 而寫的 lib/deb-closure.sh(算 openssh-server 相依封閉集、決定要
 # 打包哪些 .deb)已經整個用不到了——openssh-server/sudo 直接由
@@ -361,17 +362,49 @@ mkdir -p "$GONAS_ON_ISO/release-$ARCH" "$GONAS_ON_ISO/overlay"
 echo "==> embedding gonasd release tarball and appliance overlay"
 tar -xzf "$RELEASE_TARBALL" -C "$GONAS_ON_ISO/release-$ARCH" --strip-components=1
 cp "$SCRIPT_DIR/late-command.sh" "$GONAS_ON_ISO/late-command.sh"
-# 第五十五輪:離線把選用套件從 DVD 裝進目標系統的腳本,由 preseed 的
-# late_command 在安裝程式環境呼叫(見 preseed.cfg 與該腳本開頭)。
-cp "$SCRIPT_DIR/install-offline-packages.sh" "$GONAS_ON_ISO/install-offline-packages.sh"
 # 這裡設執行位元純粹是「如果 xorriso/Rock Ridge 真的保留得住,那就順便
 # 帶著」的防禦性做法——實際的安裝路徑完全不依賴它(late-command.sh 用
 # `sh` 呼叫、install.sh 用 `-f` 找 gonasd,見各自檔案的說明),第十九輪
 # 覆閱把 gonasd 也一起加進來,理由同上:多帶一層保險,少一個「萬一哪天
 # 又改回依賴執行位元」的隱患。
-chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/install-offline-packages.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh" "$GONAS_ON_ISO/release-$ARCH/gonasd" 2>/dev/null || true
+chmod +x "$GONAS_ON_ISO/late-command.sh" "$GONAS_ON_ISO/release-$ARCH/install.sh" "$GONAS_ON_ISO/release-$ARCH/gonasd" 2>/dev/null || true
 cp -a "$SCRIPT_DIR/overlay/." "$GONAS_ON_ISO/overlay/"
 cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
+
+# --- 4.7 第五十七輪:把「這片 DVD 上真的有的」選用套件加進 pkgsel/include ---
+# 使用者第三次實機:先前用 late_command 自己掛 DVD 當 apt 來源去裝 samba/
+# mergerfs 等,結果一個都沒裝進去——因為 preseed 關掉了 cdrom apt 來源
+# (apt-setup/cdrom/set-first=false),late_command 階段根本沒有可用的 apt
+# 來源。真正會動的離線機制是 d-i 官方的 pkgsel/include:它在「安裝基礎系統」
+# 階段執行,那時 d-i 自己把 DVD 當套件來源(openssh-server/sudo 就是這樣離線
+# 裝好的,實機已證實)。所以這裡改成:掃描剛解開的 DVD 的 pool/,把「確實
+# 存在」的選用套件補進 pkgsel/include。只加 DVD 上真的有的,絕不會因為某個
+# 套件不在這片 DVD 上就讓整個 pkgsel 步驟失敗(all-or-nothing 的雷)。DVD-1
+# 對它收錄的套件是相依封閉的,所以只要主套件在,相依也在,離線裝得起來。
+# 不在這片 DVD 上的(建置時會印出來),仍需開機後有網路用系統診斷補裝。
+OPTIONAL_PKGS="mergerfs snapraid samba nfs-kernel-server smartmontools wireguard-tools rsync docker.io"
+echo "==> scanning the DVD pool for optional packages to bake in via pkgsel/include"
+# gonas_scan_pool_packages 印出「pool 底下真的有 .deb」的候選(見
+# lib/scan-pool-packages.sh,有離線測試)。剩下的就是這片 DVD 沒有的。
+# shellcheck disable=SC2086
+PRESENT_PKGS="$(gonas_scan_pool_packages "$EXTRACT_DIR/pool" $OPTIONAL_PKGS)"
+MISSING_PKGS=""
+for _pkg in $OPTIONAL_PKGS; do
+    case " $PRESENT_PKGS " in
+        *" $_pkg "*) : ;;
+        *) MISSING_PKGS="$MISSING_PKGS $_pkg" ;;
+    esac
+done
+MISSING_PKGS="$(echo "$MISSING_PKGS" | sed 's/^ *//;s/ *$//')"
+if [ -n "$PRESENT_PKGS" ]; then
+    # 把找到的套件接在 pkgsel/include 既有的 openssh-server sudo 後面。用
+    # gonas_sed_inplace(BSD/GNU sed 相容,見 lib/portable-sed.sh)。
+    gonas_sed_inplace "s#^d-i pkgsel/include string \(.*\)#d-i pkgsel/include string \\1 $PRESENT_PKGS#" "$GONAS_ON_ISO/preseed.cfg"
+    echo "==> baking these optional packages into the image (found on the DVD): $PRESENT_PKGS"
+fi
+if [ -n "$MISSING_PKGS" ]; then
+    echo "==> NOT on this DVD (install later from System Doctor with network): $MISSING_PKGS" >&2
+fi
 # late-command.sh 第十三輪覆閱之後會 `. `一份 lib/detect-arch.sh 來源
 # 檔案(理由見 late-command.sh 開頭的說明)——這裡務必把整個
 # build/appliance/lib/ 目錄也一起塞進 ISO,放在跟 late-command.sh
@@ -655,11 +688,16 @@ fi
 # Debian logo)。要改回顯示 GoNAS logo 的話,把下面這行指回 logo_installer.png
 # 即可(那張圖仍保留在 branding/ 底下),但要記得再實機驗證一次能不能顯示。
 GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/installer-logo-blank.png"
-if [ "${GONAS_SKIP_INSTALLER_LOGO:-0}" = "1" ]; then
-    # 逃生開關(第五十五輪):萬一改 initrd 的 logo 又在你的映像上出問題,
-    # 用 `GONAS_SKIP_INSTALLER_LOGO=1 make iso-amd64` 就完全不動 initrd,
-    # 安裝時顯示 Debian 原本的(有效)logo、絕不會是破圖,馬上有一份能用的 ISO。
-    echo "==> GONAS_SKIP_INSTALLER_LOGO=1 set — leaving the installer initrd untouched (the graphical installer will show Debian's own valid logo)" >&2
+# 第五十七輪(使用者第三次實機):即使改成「同長度就地覆寫」透明圖,真實
+# d-i 環境裡那張 logo 還是顯示成破圖。連續兩種內容(GoNAS 圖、透明圖)、
+# 兩種改法(換長度、同長度)都在真機上破圖,而我無法在沙盒燒 ISO/開機重現
+# 或 debug——所以把這個 initrd 改圖預設「關掉」:不動 initrd,圖形安裝器顯示
+# Debian 自己的(有效)logo,絕不會再是破圖。開機選單仍是 GoNAS(splash),
+# 裝完重開機後整個系統也都是 GoNAS,只有安裝那幾分鐘的圖形畫面會短暫看到
+# Debian 標誌。要重新嘗試改圖(需自備 initrd 驗證),用
+# `GONAS_REBRAND_INSTALLER_LOGO=1 make iso-amd64` 開回來。
+if [ "${GONAS_REBRAND_INSTALLER_LOGO:-0}" != "1" ]; then
+    echo "==> not touching the installer initrd logo (default; avoids the broken-image seen on real hardware). The graphical installer shows Debian's own valid logo; the boot menu and the installed system are GoNAS. Set GONAS_REBRAND_INSTALLER_LOGO=1 to attempt blanking it again." >&2
 elif [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
     echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
 elif ! command -v python3 >/dev/null 2>&1; then
