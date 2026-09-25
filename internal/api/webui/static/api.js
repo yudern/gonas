@@ -87,6 +87,7 @@ export const api = {
 
   exports: () => request("GET", "/api/v1/share/exports"),
   createExport: (exp) => request("POST", "/api/v1/share/exports", exp),
+  deleteExport: (path) => request("DELETE", "/api/v1/share/exports?path=" + encodeURIComponent(path)),
 
   users: () => request("GET", "/api/v1/share/users"),
   createUser: (user) => request("POST", "/api/v1/share/users", user),

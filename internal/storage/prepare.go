@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -182,5 +183,42 @@ func appendFstabEntry(fstabPath, uuid, mountpoint string) error {
 	}
 	body += "# added by GoNAS prepare-disk\n"
 	body += fmt.Sprintf("UUID=%s %s ext4 defaults 0 2\n", uuid, mountpoint)
-	return os.WriteFile(fstabPath, []byte(body), 0o644)
+	return writeFileAtomic(fstabPath, []byte(body), 0o644)
+}
+
+// writeFileAtomic 把 data 寫進 path:先寫同目錄暫存檔、fsync、再 rename。
+// 第五十六輪覆核(QA2):/etc/fstab 原本用 os.WriteFile 直接就地覆寫,斷電時
+// (正是這台 NAS 的 UPS 要處理的事件)可能留下截斷/空的 fstab,下次開機資料碟
+// (甚至系統掛載)掛不起來。改成 temp+fsync+rename,跟 state/samba 的原子寫入
+// 一致。刻意不 import internal/share(避免 storage→share 相依),就地寫一份。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".gonas-fstab-tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", tmpPath, err)
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", tmpPath, path, err)
+	}
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }

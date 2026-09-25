@@ -450,6 +450,12 @@ func (s *Store) writeLocked(data State) error {
 		tmp.Close()
 		return fmt.Errorf("writing temp state file: %w", err)
 	}
+	// 第五十六輪覆核(QA3):rename 前先 fsync,確保 state.json(管理帳號、TOTP
+	// 密鑰、pool 設定)的內容真的落碟,而不是斷電後 rename 生效但檔案是空的。
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing temp state file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing temp state file: %w", err)
 	}
@@ -458,6 +464,11 @@ func (s *Store) writeLocked(data State) error {
 	}
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		return fmt.Errorf("renaming temp state file to %s: %w", s.path, err)
+	}
+	// rename 之後再盡力 fsync 目錄,讓新 inode 對應也落碟(best-effort)。
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

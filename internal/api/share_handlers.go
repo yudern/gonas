@@ -151,6 +151,44 @@ func (s *Server) handleExportsCreate(w http.ResponseWriter, r *http.Request) {
 	}{exp, applyResult{Applied: applied, Warning: warn}})
 }
 
+// handleExportsDelete 刪掉一筆 NFS export。export 用 Path 當識別(路徑含斜線,
+// 不方便放進 URL path 段),所以從 query 參數 ?path=/mnt/tank/media 取。
+// 第五十六輪覆核(產品 P3):原本 NFS export 只能新增不能刪,是個死路——加了
+// 這支端點與前端的刪除按鈕,跟 SMB 共享對稱。
+func (s *Server) handleExportsDelete(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, errExportPathRequired)
+		return
+	}
+
+	var allExports []share.Export
+	found := false
+	if err := s.store.Update(func(st *state.State) error {
+		kept := st.Exports[:0]
+		for _, e := range st.Exports {
+			if e.Path == path {
+				found = true
+				continue
+			}
+			kept = append(kept, e)
+		}
+		st.Exports = kept
+		allExports = append([]share.Export{}, st.Exports...)
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errExportNotFound)
+		return
+	}
+
+	applied, warn := s.applyExportsConfig(r, allExports)
+	writeJSON(w, http.StatusOK, applyResult{Applied: applied, Warning: warn})
+}
+
 func (s *Server) applyExportsConfig(r *http.Request, exports []share.Export) (applied bool, warning string) {
 	content, err := share.GenerateExportsConfig(exports)
 	if err != nil {
@@ -235,12 +273,32 @@ func (s *Server) handleUsersCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 
-	found := false
+	// 先確認這個使用者存在(回正確的 404),但先不動 state。
+	exists := false
+	for _, u := range s.store.Snapshot().Users {
+		if u.Username == username {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, errUserNotFound)
+		return
+	}
+
+	// 第五十六輪覆核(QA4):先刪系統/Samba 帳號,成功了才從 state 移除。原本
+	// 順序相反:state 先移除、若 userdel 失敗,GoNAS 清單上看不到這個使用者了,
+	// 但 Linux/Samba 帳號還在、還能登入(孤兒帳號、看不見卻可認證)。反過來做,
+	// 最壞情況只是「清單還在、可重試」,不會留下隱形的可登入帳號。
+	if err := share.DeleteUser(r.Context(), s.runner, username); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	if err := s.store.Update(func(st *state.State) error {
 		kept := st.Users[:0]
 		for _, u := range st.Users {
 			if u.Username == username {
-				found = true
 				continue
 			}
 			kept = append(kept, u)
@@ -248,15 +306,6 @@ func (s *Server) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		st.Users = kept
 		return nil
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if !found {
-		writeError(w, http.StatusNotFound, errUserNotFound)
-		return
-	}
-
-	if err := share.DeleteUser(r.Context(), s.runner, username); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

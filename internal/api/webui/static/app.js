@@ -299,7 +299,7 @@ async function renderDashboard(el) {
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
-    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) : ""}
+    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor"><button type="button" class="secondary">${esc(t("doctor.dashButton"))}</button></a></div>` : ""}
     ${missingDeps.length ? `
     <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
       ${h2i("stethoscope", esc(t("doctor.dashTitle")))}
@@ -1526,7 +1526,7 @@ async function renderApps(el) {
   el.innerHTML = `
     <h1>${esc(t("apps.title"))}</h1>
     <p class="page-subtitle">${esc(t("apps.subtitle"))}</p>
-    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) : ""}
+    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor"><button type="button" class="secondary">${esc(t("doctor.dashButton"))}</button></a></div>` : ""}
 
     <div class="card">
       ${h2i("box", esc(t("apps.installed", { n: installed.length })))}
@@ -1843,11 +1843,12 @@ async function renderShares(el) {
       ${h2i("share", esc(t("shares.nfsExports")))}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colClientRules"))}</th></tr></thead>
+          <thead><tr><th>${esc(t("shares.colPath"))}</th><th>${esc(t("shares.colClientRules"))}</th><th></th></tr></thead>
           <tbody>
             ${exportsList.length ? exportsList.map((e) => `
-              <tr><td><code>${esc(e.path)}</code></td><td>${(e.clients || []).map((c) => `${esc(c.cidr || "*")}(${esc((c.options || []).join(","))})`).join(", ")}</td></tr>
-            `).join("") : `<tr><td colspan="2" class="empty-state">${esc(t("shares.noExports"))}</td></tr>`}
+              <tr><td><code>${esc(e.path)}</code></td><td>${(e.clients || []).map((c) => `${esc(c.cidr || "*")}(${esc((c.options || []).join(","))})`).join(", ")}</td>
+              <td><button class="secondary" data-del-export="${esc(e.path)}">${esc(t("common.delete"))}</button></td></tr>
+            `).join("") : `<tr><td colspan="3" class="empty-state">${esc(t("shares.noExports"))}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1863,7 +1864,17 @@ async function renderShares(el) {
 
   el.querySelectorAll("[data-del-share]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      // 第五十六輪覆核(產品 P5):刪共享前先確認(跟刪使用者/工作/App 一致)。
+      if (!confirm(t("shares.deleteShareConfirm", { name: btn.dataset.delShare }))) return;
       try { await api.deleteShare(btn.dataset.delShare); await renderShares(el); }
+      catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message))); }
+    });
+  });
+
+  el.querySelectorAll("[data-del-export]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(t("shares.deleteExportConfirm", { path: btn.dataset.delExport }))) return;
+      try { await api.deleteExport(btn.dataset.delExport); await renderShares(el); }
       catch (err) { el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message))); }
     });
   });

@@ -60,9 +60,11 @@ func (s Share) Validate() error {
 	}
 	for _, u := range s.ValidUsers {
 		// 換行/控制字元會破壞格式;逗號是 "valid users = a, b" 的分隔符,
-		// 一個含逗號的「使用者名稱」會被 smbd 當成多個使用者(注入)。
-		if hasControlChars(u) || strings.Contains(u, ",") {
-			return fmt.Errorf("share %q: valid-user entry %q cannot contain a comma, line break, or control character", s.Name, u)
+		// 一個含逗號的「使用者名稱」會被 smbd 當成多個使用者(注入)。第五十六輪
+		// 覆核(QA6):空白也一樣——"valid users = alice bob" 會被當成兩個使用者,
+		// 一個含空白的名字會被靜默拆成兩個,所以空白也擋掉。
+		if hasControlChars(u) || strings.ContainsAny(u, ", \t") {
+			return fmt.Errorf("share %q: valid-user entry %q cannot contain a comma, space, line break, or control character", s.Name, u)
 		}
 	}
 	return nil
@@ -136,6 +138,14 @@ func WriteConfigAtomically(path, content string) error {
 		tmp.Close()
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
+	// 第五十六輪覆核(QA3):rename 保證的是「換名字」這件事的原子性,不保證暫存
+	// 檔的資料真的落到磁碟——斷電時可能 rename 已生效、但檔案內容還是空的/半份。
+	// 在 rename 之前先 fsync 暫存檔,把資料真的刷到碟上,對一台會處理斷電事件
+	// (UPS)的 NAS 尤其重要。
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing %s: %w", tmpPath, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", tmpPath, err)
 	}
@@ -145,7 +155,21 @@ func WriteConfigAtomically(path, content string) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", tmpPath, path, err)
 	}
+	// rename 之後再 fsync 目錄,讓「這個檔名現在指向新 inode」這件事也落碟。
+	syncDir(dir)
 	return nil
+}
+
+// syncDir 盡力 fsync 一個目錄(讓其中的 rename/create 落碟)。失敗不視為致命
+// ——不是每個檔案系統都支援對目錄 fsync,而且這是「多一層保險」,不該因此
+// 讓一個已經成功的設定寫入回報失敗。
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // ValidateSambaConfig 用 testparm 檢查設定檔語法是否正確。刻意在 ReloadSamba

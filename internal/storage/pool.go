@@ -96,5 +96,20 @@ func (c PoolConfig) Validate() error {
 		seen[p] = true
 	}
 
+	// 第五十六輪覆核(QA5):補上先前漏掉的幾項一致性檢查,避免產生一份「語法
+	// 合法但邏輯錯誤」的 snapraid.conf。
+	// 1) content 檔位置不能是空字串(空字串會 render 成 `content /snapraid.content`
+	//    這種指向根目錄的怪路徑)。
+	for _, cf := range c.ContentFiles {
+		if cf == "" {
+			return errors.New("a snapraid content file location cannot be empty")
+		}
+	}
+	// 2) 聯合掛載點不能剛好等於某一顆資料碟/同位碟的掛載點——那會把 mergerfs
+	//    union 掛到某顆分支自己身上,語意錯誤。
+	if seen[c.MountPoint] {
+		return errors.New("the pool mount point cannot be the same as one of the data or parity disks")
+	}
+
 	return nil
 }

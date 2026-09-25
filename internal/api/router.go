@@ -442,6 +442,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/share/shares/{name}", s.requireAdmin(s.handleSharesDelete))
 	mux.HandleFunc("GET /api/v1/share/exports", s.requireAuth(s.handleExportsList))
 	mux.HandleFunc("POST /api/v1/share/exports", s.requireAdmin(s.handleExportsCreate))
+	mux.HandleFunc("DELETE /api/v1/share/exports", s.requireAdmin(s.handleExportsDelete))
 	mux.HandleFunc("GET /api/v1/share/users", s.requireAuth(s.handleUsersList))
 	mux.HandleFunc("POST /api/v1/share/users", s.requireAdmin(s.handleUsersCreate))
 	mux.HandleFunc("DELETE /api/v1/share/users/{username}", s.requireAdmin(s.handleUsersDelete))

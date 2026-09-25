@@ -60,6 +60,21 @@ func TestGenerateSambaConfig_RejectsUnsafeName(t *testing.T) {
 	}
 }
 
+// TestShareValidate_RejectsBadValidUser 固化第五十六輪覆核(QA6):valid-user
+// 名字含逗號/空白/控制字元都要被擋(否則 "valid users = a, b" 會被拆錯)。
+func TestShareValidate_RejectsBadValidUser(t *testing.T) {
+	for _, bad := range []string{"alice bob", "alice,bob", "alice\tbob", "alice\nbob"} {
+		sh := Share{Name: "media", Path: "/mnt/tank/media", ValidUsers: []string{bad}}
+		if err := sh.Validate(); err == nil {
+			t.Errorf("expected valid-user %q to be rejected", bad)
+		}
+	}
+	// 正常名字要能過。
+	if err := (Share{Name: "media", Path: "/mnt/tank/media", ValidUsers: []string{"alice", "bob"}}).Validate(); err != nil {
+		t.Fatalf("expected a normal share to pass, got: %v", err)
+	}
+}
+
 func TestValidateSambaConfig_PropagatesFailure(t *testing.T) {
 	r := &fakeRunner{err: map[string]error{"testparm": errBoom}}
 	if err := ValidateSambaConfig(context.Background(), r, "/etc/samba/gonas-shares.conf"); err == nil {
