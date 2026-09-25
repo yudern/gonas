@@ -209,6 +209,34 @@ else
     FAIL=1
 fi
 
+# --- 案例 9: 第五十八輪(改走文字安裝前端避開 gtk banner 破圖)——選單
+# 項目裡指向圖形版 initrd 的路徑,必須被改寫成文字版 initrd(去掉中間的
+# gtk/ 那一層),而 preseed 參數照樣要注入得進去。amd64(install.amd)跟
+# arm64(install.a64)兩種架構路徑都要涵蓋。---
+CASE9="$TEST_WORK_DIR/case9-gtk-to-text-initrd.cfg"
+cat > "$CASE9" <<'EOF'
+label gtkinstall
+	menu label ^Graphical install
+	kernel /install.amd/gtk/vmlinuz
+	append vga=788 initrd=/install.amd/gtk/initrd.gz ---
+menuentry "Graphical install (a64)" {
+	linux	/install.a64/gtk/vmlinuz vga=788 ---
+	initrd	/install.a64/gtk/initrd.gz
+}
+EOF
+gonas_patch_boot_menu_file "$CASE9" "$APPEND_EXTRA"
+if grep -q 'initrd=/install.amd/initrd.gz' "$CASE9" \
+   && grep -q '/install.a64/initrd.gz' "$CASE9" \
+   && ! grep -q '/gtk/initrd' "$CASE9" \
+   && ! grep -q '/gtk/vmlinuz' "$CASE9" \
+   && grep -q "$APPEND_MARKER" "$CASE9"; then
+    echo "PASS: gtk initrd/vmlinuz rewritten to the text-frontend paths (amd64 + a64), preseed still injected"
+else
+    echo "FAIL: gtk->text initrd/vmlinuz rewrite missed, left a gtk/ path, or broke preseed injection. Actual content:" >&2
+    sed 's/^/    | /' "$CASE9" >&2
+    FAIL=1
+fi
+
 echo
 if [ "$FAIL" = "0" ]; then
     echo "==> all boot-menu-patch test cases passed"

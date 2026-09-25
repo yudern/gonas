@@ -97,4 +97,27 @@ gonas_patch_boot_menu_file() {
     # 不受標題行有無影響。grub(UEFI)沒有 `menu title` 這種會疊在 splash 上的
     # 標題,不受影響。
     gonas_sed_inplace '/^[[:space:]]*menu title[[:space:]]/d' "$_pbm_file" || true
+
+    # 第五十八輪(使用者第 N 次實機:圖形安裝器 banner 一直破圖,連換成
+    # GoNAS 圖都破)——改走「文字安裝前端」這條保證不會有 banner 破圖的路。
+    # build-iso.sh 的 APPEND_EXTRA 已經加了 DEBIAN_FRONTEND=text 強制文字前端;
+    # 這裡再把選單項目裡「指向圖形版 initrd」的路徑改寫成「文字版 initrd」,
+    # 當作雙保險——這樣就算使用者手動選了「Graphical install」,實際載入的
+    # 也是文字版 initrd,gtk 前端的元件(含那張會破圖的 banner)根本不會被
+    # 載進來。
+    #
+    # 依據使用者實機跑的 `xorriso -indev ... -find / -name 'initrd*'`:同一片
+    # 官方 ISO 裡,圖形版在 `/install.amd/gtk/initrd.gz`、文字版在
+    # `/install.amd/initrd.gz`(arm64 則是 install.a64)。所以只要把路徑裡的
+    # `<archdir>/gtk/initrd` 改成 `<archdir>/initrd`(去掉中間那層 gtk/),
+    # 就從圖形版切成文字版。用 `install\.[a-z0-9]*` 同時涵蓋 install.amd /
+    # install.a64,不寫死架構。vmlinuz 一併處理:多數 Debian 版本圖形/文字
+    # 共用同一個 vmlinuz,但少數版本 gtk 有自己的 vmlinuz 路徑,一起改寫
+    # 才不會出現「文字版 initrd 配 gtk 版 kernel」的錯配。純路徑改寫,不影響
+    # preseed 參數注入(那是針對 append/linux 那一行,跟 initrd= 的值無關)。
+    #
+    # 這個改寫是冪等的:設定檔裡本來就沒有 gtk/ 路徑的話(例如只有文字版
+    # 項目),sed 找不到就什麼都不做,無害。
+    gonas_sed_inplace 's#\(install\.[a-z0-9]*\)/gtk/initrd#\1/initrd#g' "$_pbm_file" || true
+    gonas_sed_inplace 's#\(install\.[a-z0-9]*\)/gtk/vmlinuz#\1/vmlinuz#g' "$_pbm_file" || true
 }

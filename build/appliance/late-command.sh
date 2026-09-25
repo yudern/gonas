@@ -426,6 +426,49 @@ else
     log "WARNING: could not detect VERSION_CODENAME from /etc/os-release — left apt sources as-is; 'apt install' may not work until you configure a network mirror manually"
 fi
 
+# --- 3.6. 把內建的離線 .deb 設成本機 apt 來源(離線裝 mergerfs/samba 等)---
+# 第五十八輪(使用者:「這幾個軟件你為什麼還需要聯網你不做成離線安裝的?」)。
+# build-iso.sh 第 4.8 節會在建置期(Mac 有網路)把 DVD 上沒有的選用套件
+# (mergerfs/samba/snapraid/nfs-kernel-server/wireguard-tools/docker.io)連同
+# 相依封閉集抓下來,攤平成一個 flat repo 放在安裝媒體的 gonas/debs/(含一份
+# Packages 索引)。這裡把它複製到目標系統的 /var/lib/gonas/debs/,並加一條
+# 本機 `file://` apt 來源——這樣使用者開機後(不管有沒有網路)在 Web 介面
+# Doctor 點「安裝 mergerfs/samba/…」時,apt 就能從這份本機來源離線裝好。
+#
+# 關鍵設計:
+#   - `[trusted=yes]`:本機 flat repo 沒有 GPG 簽章,明確標記為信任,apt 才
+#     不會因為「來源未簽章」而拒裝。這只影響這一個本機來源,不動 Debian 官方
+#     來源的簽章驗證。
+#   - flat repo 寫法 `... /var/lib/gonas/debs ./`(結尾的 `./`)——Packages
+#     索引就放在該目錄根部,不是 dists/ 那種階層式結構。
+#   - 跟第 3.5 節寫的「網路鏡像來源」並存:離線時走這份本機來源,有網路時
+#     apt 也能照樣走網路(對齊使用者要的「兩者都要」)。
+#   - 這裡「不」主動跑 apt-get update:Web Doctor 的一鍵安裝在 apt-get install
+#     之前本來就會先跑一次 apt-get update(見 internal/api/doctor_handlers.go),
+#     那一次就會把這份本機來源的索引讀進 apt(file:// 來源不需要網路,就算
+#     同時設定的網路來源因離線而更新失敗,也不影響本機來源被正確索引)。
+#     在這個 in-target chroot 階段不主動連網,安裝流程維持完全離線、不會卡在
+#     等網路。
+# 整段 best-effort:沒有 debs/ 目錄(建置期沒抓成/被跳過)就什麼都不做;
+# 任何一步失敗只記警告,不影響安裝結果。
+OFFLINE_DEBS_SRC="$GONAS_DIR/debs"
+OFFLINE_DEBS_DEST=/var/lib/gonas/debs
+if [ -d "$OFFLINE_DEBS_SRC" ] && [ -f "$OFFLINE_DEBS_SRC/Packages" ]; then
+    if mkdir -p "$OFFLINE_DEBS_DEST" && cp -a "$OFFLINE_DEBS_SRC/." "$OFFLINE_DEBS_DEST/"; then
+        _deb_n="$(find "$OFFLINE_DEBS_DEST" -name '*.deb' 2>/dev/null | grep -c . || echo 0)"
+        log "copied $_deb_n bundled offline .deb(s) to $OFFLINE_DEBS_DEST"
+        if printf 'deb [trusted=yes] file://%s ./\n' "$OFFLINE_DEBS_DEST" > /etc/apt/sources.list.d/gonas-offline.list 2>/dev/null; then
+            log "registered local offline apt source (/etc/apt/sources.list.d/gonas-offline.list) — mergerfs/samba/etc. can be installed with NO network via the web Doctor"
+        else
+            log "WARNING: could not write /etc/apt/sources.list.d/gonas-offline.list — the bundled .debs are in $OFFLINE_DEBS_DEST but apt won't see them until you add that source or run 'dpkg -i $OFFLINE_DEBS_DEST/*.deb' manually"
+        fi
+    else
+        log "WARNING: could not copy bundled offline .debs to $OFFLINE_DEBS_DEST — optional packages will need network to install"
+    fi
+else
+    log "no bundled offline .deb repo on the install media (gonas/debs/ absent) — optional packages (mergerfs/samba/etc.) will need network to install; this is expected if the ISO was built with GONAS_SKIP_OFFLINE_DEBS=1 or the build machine had no network"
+fi
+
 # --- 4. 強制第一次登入就要換掉 gonas 的預設密碼 -----------------
 # preseed.cfg 裡 `gonas` 帳號的密碼是寫死的明文預設值(也是 `gonas`),
 # 原本只在文件裡提醒「正式使用前務必自己

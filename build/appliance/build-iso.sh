@@ -403,7 +403,60 @@ if [ -n "$PRESENT_PKGS" ]; then
     echo "==> baking these optional packages into the image (found on the DVD): $PRESENT_PKGS"
 fi
 if [ -n "$MISSING_PKGS" ]; then
-    echo "==> NOT on this DVD (install later from System Doctor with network): $MISSING_PKGS" >&2
+    echo "==> NOT on this DVD: $MISSING_PKGS" >&2
+fi
+
+# --- 4.8 第五十八輪:把「DVD 上沒有」的選用套件做成「離線可裝」---------------
+# 使用者:「這幾個軟件你為什麼還需要聯網你不做成離線安裝的?」——DVD-1 確實
+# 不含 mergerfs/samba/snapraid/nfs-kernel-server/wireguard-tools/docker.io
+# (上面 4.7 掃出來的 MISSING_PKGS 已證實)。要讓它們「安裝/使用時完全不
+# 連網」,唯一的辦法就是在「建置期(Mac 有網路)」先把這些 .deb 連同相依
+# 封閉集抓下來塞進 ISO;裝好開機後,late-command.sh 會把它們設成一個本機
+# `file://` apt 來源,使用者在 Web Doctor 點「安裝」時 apt 就從本機裝、不
+# 連網(見 lib/fetch-offline-debs.py 與 late-command.sh 的說明)。這同時
+# 滿足使用者要的「兩者都要」:內建離線可裝,開機後有網路時 apt 也照樣能
+# 走網路補裝/更新。
+#
+# 刻意設計成「best-effort、絕不中斷建置」:抓不到(沒網路、鏡像擋掉、沒
+# python3)就印警告、跳過,ISO 照樣建得出來——那幾個套件退回「開機後有
+# 網路再裝」,跟這一輪之前的行為一樣,不會更糟。也刻意「不」動 DVD 自己的
+# 套件庫/索引,只在 gonas/debs/ 產生一份獨立的 flat repo,弄壞了最多是這
+# 幾個選用套件離線裝不起來,絕不會影響「基礎系統安裝」本身。
+#
+# 鏡像可用 GONAS_DEB_MIRROR 覆寫(中國大陸使用者可指到 tuna/ustc 等),
+# 預設 deb.debian.org。可用 GONAS_SKIP_OFFLINE_DEBS=1 整段跳過(除錯/趕時間)。
+OFFLINE_DEB_DIR="$GONAS_ON_ISO/debs"
+GONAS_DEB_MIRROR="${GONAS_DEB_MIRROR:-http://deb.debian.org/debian}"
+if [ "${GONAS_SKIP_OFFLINE_DEBS:-0}" = "1" ]; then
+    echo "==> GONAS_SKIP_OFFLINE_DEBS=1 — skipping offline .deb bundling (optional packages will need network at install time)" >&2
+elif [ -z "$MISSING_PKGS" ]; then
+    echo "==> every optional package is already on the DVD — no offline .deb bundling needed" >&2
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: python3 not found — cannot bundle offline .debs for [$MISSING_PKGS]; they will need network at install time. Install python3 (Xcode CLT) to enable offline install." >&2
+else
+    # 從解開的 ISO 讀真正的 codename(trixie 等),不寫死——鏡像的套件版本
+    # 要跟這片 DVD 的 suite 對得起來。任何一個 dists/*/Release 的 Codename
+    # 欄位都一樣,取第一個。
+    ISO_CODENAME="$(awk -F': ' '/^Codename:/{print $2; exit}' "$EXTRACT_DIR"/dists/*/Release 2>/dev/null | tr -d ' \r')"
+    if [ -z "$ISO_CODENAME" ]; then
+        echo "warning: could not detect the Debian codename from the ISO's dists/*/Release — skipping offline .deb bundling for [$MISSING_PKGS]" >&2
+    else
+        echo "==> bundling offline .debs for [$MISSING_PKGS] from $GONAS_DEB_MIRROR ($ISO_CODENAME/$ARCH) — this downloads a dependency closure, may take a few minutes"
+        # shellcheck disable=SC2086
+        if python3 "$SCRIPT_DIR/lib/fetch-offline-debs.py" \
+                --mirror "$GONAS_DEB_MIRROR" \
+                --codename "$ISO_CODENAME" \
+                --arch "$ARCH" \
+                --out "$OFFLINE_DEB_DIR" \
+                $MISSING_PKGS; then
+            _deb_count="$(find "$OFFLINE_DEB_DIR" -name '*.deb' 2>/dev/null | grep -c . || true)"
+            echo "==> offline .deb bundle ready: $_deb_count package file(s) in gonas/debs/ (installable with NO network after boot via Web Doctor)"
+        else
+            echo "warning: offline .deb bundling did not complete (network/mirror/closure issue) — [$MISSING_PKGS] will need network at install time. The rest of the ISO is unaffected." >&2
+            # 沒抓成別留半套目錄,免得 late-command.sh 誤以為有一份可用的 repo。
+            rm -rf "$OFFLINE_DEB_DIR"
+        fi
+    fi
 fi
 # late-command.sh 第十三輪覆閱之後會 `. `一份 lib/detect-arch.sh 來源
 # 檔案(理由見 late-command.sh 開頭的說明)——這裡務必把整個
@@ -460,15 +513,46 @@ echo "==> patching boot menu configs to auto-load the GoNAS preseed"
 # 寫在開機這一行,跳過「先讀 preseed.cfg 才知道答案」這個時序問題。
 # preseed.cfg 裡原本那行 `debian-installer/locale` 保留不動,兩邊寫的
 # 值一致,互相印證、不衝突。
-# 第二十九輪一度加了 `DEBIAN_FRONTEND=text`,想用「切成文字前端、根本
-# 不載入 gtk 的 Debian logo」來閃避圖形安裝器的 Debian 標誌。第三十一輪
-# 使用者明確否決:他要的就是「圖形安裝界面」,而且要把那個圖形界面裡的
-# Debian logo 換成 GoNAS,不是改成陽春的文字安裝。所以這裡把
-# `DEBIAN_FRONTEND=text` 拿掉——讓圖形安裝器照常跑(使用者在開機選單選
-# 「Graphical install」,或預設就是它),而它畫面上那張 Debian logo 由
-# 下面第 5c 步(lib/rebrand-installer-initrd.py)在 gtk initrd 裡直接
-# 換成 GoNAS logo。
-APPEND_EXTRA="auto=true priority=high language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
+# DEBIAN_FRONTEND=text —— 這是「安裝全程都看不到 Debian 標誌、也絕不
+# 出現破圖」這個硬需求最後、也最可靠的解法,理由值得完整記錄下來:
+#
+# 第二十九輪一度加過 `DEBIAN_FRONTEND=text`,第三十一輪使用者否決,說要
+# 「圖形安裝界面 + 把裡面的 Debian logo 換成 GoNAS」。於是第 5c 步改成
+# 去 gtk initrd 裡把那張 logo PNG 換掉(先換成 GoNAS 圖、再換成透明圖、
+# 再改成同長度就地覆寫)——但連續三次實機(第 53/55/57 輪)都是同一個
+# 結果:圖形安裝器那個位置顯示成「找不到圖片」的破圖。安裝器本身是好的
+# (照常在讀 udeb、能安裝),純粹是那張被我們改寫過的 PNG 在真實 d-i 的
+# gtk 前端裡讀不出來(不是 cpio 壞掉,就是它內建的 gdk-pixbuf 讀不了我們
+# 產生的 PNG 變體)。這個沙盒沒辦法燒 ISO/開機重現,無法盲改到對。
+#
+# 使用者第五十八輪的選項是「換成 GoNAS 圖,或者乾脆什麼都不顯示」。既然
+# 「換圖」這條路實機三次都破圖,這裡改走「什麼都不顯示」這條保證有效的
+# 路:用 `DEBIAN_FRONTEND=newt` 讓安裝程式跑「newt 前端」(就是經典的
+# 藍底全螢幕文字安裝界面)而不是圖形(gtk)前端。newt 前端從頭到尾沒有
+# 任何 banner 圖片這個東西——沒有圖片,就不可能有破圖,也不可能顯示
+# Debian logo 圖。使用者第一張照片抱怨的「Load installer components / 設定
+# 網路那幾步上方的破圖」正是 gtk 前端的 banner,切成 newt 前端之後那塊
+# 區域根本不存在。
+#
+# 為什麼用 newt 而不是最陽春的 `text`:使用者這條安裝流程需要「手動選
+# 系統碟 + 確認分割」(preseed 刻意留白的那兩步,見 preseed.cfg),newt
+# 的全螢幕選單對「選硬碟」這種操作比 text 那種一行一行問答好用得多,而
+# 兩者都一樣「沒有 banner 圖片」。就算某個開機項目漏改、載入了 gtk 版
+# initrd(gtk initrd 是超集,裡面也有 newt),DEBIAN_FRONTEND=newt 也會
+# 強制走 newt、不啟動 gtk,banner 不會出現——這是雙保險的第一層。
+#
+# 搭配下面 lib/patch-boot-menu.sh 會再把選單項目裡指向 gtk/initrd.gz 的
+# 路徑改寫成文字版 initrd.gz(見 xorriso 實測:同一片 ISO 裡
+# /install.amd/gtk/initrd.gz 是圖形版、/install.amd/initrd.gz 是文字版)
+# ——雙保險:就算使用者手動選「Graphical install」,載入的也是文字版
+# initrd,gtk 前端的元件根本不會被載入。安裝流程(preseed 自動化、選硬碟、
+# 分割確認)在文字前端下完全一樣,只是畫面變成藍底文字選單。
+#
+# 誠實邊界:文字前端裡某些畫面標題的「文字」仍可能出現 "Debian" 字樣
+# (那是編譯進 d-i udeb 模板的字串,不重建整個安裝程式改不掉,見
+# README.md)——但那是「文字」不是「標誌(logo 圖)」,而且不會再有任何
+# 破圖。開機選單(splash)、裝完重開機後的系統,全都是 GoNAS 品牌。
+APPEND_EXTRA="auto=true priority=high DEBIAN_FRONTEND=newt language=en country=US locale=en_US.UTF-8 keymap=us preseed/file=/cdrom/gonas/preseed.cfg hostname=gonas domain="
 # 拿來事後驗證「真的注入成功了嗎」的一小段獨特字串——不會跟 ISO 裡
 # 其他既有內容重複，之後可以直接 grep 這個字串確認注入是否生效。
 APPEND_MARKER="gonas/preseed.cfg"
@@ -697,7 +781,7 @@ GONAS_INSTALLER_LOGO="$SCRIPT_DIR/branding/installer-logo-blank.png"
 # Debian 標誌。要重新嘗試改圖(需自備 initrd 驗證),用
 # `GONAS_REBRAND_INSTALLER_LOGO=1 make iso-amd64` 開回來。
 if [ "${GONAS_REBRAND_INSTALLER_LOGO:-0}" != "1" ]; then
-    echo "==> not touching the installer initrd logo (default; avoids the broken-image seen on real hardware). The graphical installer shows Debian's own valid logo; the boot menu and the installed system are GoNAS. Set GONAS_REBRAND_INSTALLER_LOGO=1 to attempt blanking it again." >&2
+    echo "==> not touching the installer initrd logo (default). Since round 58 the installer runs in the newt frontend (DEBIAN_FRONTEND=newt + boot menu points at the non-gtk initrd), so the graphical banner — where the logo/broken-image appeared — is never shown at all. This initrd-logo rebranding is now moot; set GONAS_REBRAND_INSTALLER_LOGO=1 only if you deliberately switch back to the graphical installer." >&2
 elif [ ! -f "$GONAS_INSTALLER_LOGO" ]; then
     echo "warning: $GONAS_INSTALLER_LOGO not found — skipping graphical-installer logo rebranding" >&2
 elif ! command -v python3 >/dev/null 2>&1; then

@@ -16,7 +16,7 @@ release tarball,見專案根目錄 README.md 的安裝說明)——兩條路徑�
 | 使用者已經有一台 Debian/相容發行版 | 直接下載 release tarball 執行 `./install.sh` | 不適用 |
 | 使用者是一台全新/空機器 | 得自己先裝好 Debian,再跑 `install.sh` | 燒錄映像檔開機,自動裝好 Debian + gonasd |
 | gonasd 本體的安裝方式 | `build/install.sh` | 同一份 `build/install.sh`,由 `late-command.sh` 呼叫 |
-| 選用相依套件(mergerfs/snapraid/samba/docker.io/…) | 使用者自行安裝,Doctor 頁面會提示 | 同左,映像檔**不會**在安裝過程自動裝這些 |
+| 選用相依套件(mergerfs/snapraid/samba/docker.io/…) | 使用者在 Doctor 頁面自行安裝(走網路) | 使用者在 Doctor 頁面自行安裝;映像檔**內建這些套件的離線 .deb**,**不需網路**即可裝(第五十八輪),有網路時也能走網路 |
 
 兩條路徑最終裝出來的 gonasd 是完全一樣的東西,用的是同一份
 `install.sh`,只是「誰、什麼時候執行它」不同。
@@ -166,15 +166,30 @@ gpg 版本差異而壞掉的邏輯還是好的。
    立刻開始、或倒數結束自動開始(無人值守也裝得完)。第二十九輪一度
    把選單設成 `timeout 1`/`hidden` 想「一開機直接裝」,被使用者以產品
    設計角度否決——他要的是「有一個開始鈕可以按」,不是自動衝進安裝。
-   (b) **圖形安裝器裡的 Debian logo 換成 GoNAS**(第三十一輪)。使用者
-   要的是「保留圖形安裝界面,但把裡面那張 Debian 螺旋 logo 換成 GoNAS」
-   ——不是改成陽春文字安裝。所以第二十九輪那個 `DEBIAN_FRONTEND=text`
-   (用切文字前端來閃避 logo)被拿掉了;改成 build-iso.sh 第 5c 步用
-   `lib/rebrand-installer-initrd.py` 把 gtk installer initrd 拆開、把
-   `usr/share/graphics/logo_installer.png` 換成 `branding/logo_installer.png`
-   (GoNAS logo)、再原封不動打包回去。這段邏輯有離線單元測試
-   `test-rebrand-installer-initrd.py`(驗無修改時 byte-identical、換圖後
-   其他檔不動、gzip/xz 都能來回、找不到 logo 時安全略過)。
+   (b) **安裝器裡不再出現 Debian logo 圖、也不會破圖**(第五十八輪)。
+   演進過程值得記下來:第三十一~五十七輪試過「保留圖形(gtk)安裝界面,
+   把裡面那張 Debian 螺旋 logo 換成 GoNAS」——build-iso.sh 第 5c 步用
+   `lib/rebrand-installer-initrd.py` 拆開 gtk initrd、換掉
+   `usr/share/graphics/logo_installer.png`、再打包回去。但**連續三次實機
+   (第 53/55/57 輪)都破圖**:不管換成 GoNAS 圖還是透明圖、不管換長度
+   還是同長度就地覆寫,那個位置在真實 d-i 的 gtk 前端裡都顯示成「找不到
+   圖片」。安裝器本身是好的,純粹是那張被改寫過的 PNG 在 gtk 前端的
+   gdk-pixbuf 讀不出來,而這個沙盒無法燒 ISO/開機重現、沒辦法盲改到對。
+   使用者第五十八輪的選項是「換成 GoNAS 圖,或者乾脆什麼都不顯示」;
+   既然「換圖」實機三次都失敗,改走「什麼都不顯示」這條**保證有效**的路:
+   讓安裝程式跑 **newt 前端**(經典藍底全螢幕文字安裝界面),而不是 gtk
+   圖形前端。做法是 build-iso.sh 的 APPEND_EXTRA 加 `DEBIAN_FRONTEND=newt`,
+   `lib/patch-boot-menu.sh` 再把選單項目裡指向 gtk initrd 的路徑改寫成
+   非 gtk 的 initrd(依實機 `xorriso -find` 證實:圖形版在
+   `/install.amd/gtk/initrd.gz`、文字版在 `/install.amd/initrd.gz`)——
+   雙保險。**newt 前端從頭到尾沒有任何 banner 圖片**,所以既不可能出現
+   Debian logo 圖,也不可能破圖;使用者原本抱怨的「Load installer
+   components/設定網路那幾步上方的破圖」正是 gtk 前端的 banner,切成 newt
+   之後那塊區域根本不存在。安裝流程(preseed 自動化、選硬碟、分割確認)
+   完全一樣,只是畫面變藍底全螢幕文字選單。第 5c 步的 initrd 改圖預設
+   關閉、已無作用(newt 不載 gtk banner),保留是為了萬一將來要改回圖形
+   安裝器時可用(`GONAS_REBRAND_INSTALLER_LOGO=1`);它的離線單元測試
+   `test-rebrand-installer-initrd.py` 仍在。
    (c) 設計了一個簡約的 GoNAS 標誌(`docs/brand/`＋`branding/`,跟 web
    介面同一個圓角方塊＋橫槓構圖),潑濺圖與安裝器 logo 都是用它構出來的。
 
@@ -200,11 +215,13 @@ gpg 版本差異而壞掉的邏輯還是好的。
    > logo、`/etc/os-release`、GRUB 開機選單標題等,全部由
    > `late-command.sh` 第 3 節在裝好的系統上換掉)。
    >
-   > **重要:第 5c 步的 initrd 重打包無法在開發沙盒驗證能不能開機**
-   > (沙盒沒有真的 gtk initrd、也開不了機)。拆-換-打包這條邏輯本身有
-   > 單元測試(合成 initrd,byte-level 驗過),但「換好的 initrd 在真機/
-   > VM 上還能不能正常開起圖形安裝器」只能靠實機測——這是目前風險最高
-   > 的一步,務必先在 QEMU/VM 開機測過再燒真機。
+   > **第五十八輪更新**:上面關於「圖形安裝器 logo 圖」的天花板,自從
+   > 改走 newt 前端後大多已不適用——newt 沒有 banner 圖片,所以整個安裝
+   > 過程「看不到任何 Debian logo 圖、也不會破圖」。唯一還在的天花板是
+   > 上面 (1):**newt 畫面裡某些標題的「文字」**(例如視窗標題出現的
+   > "Debian" 字樣)仍是編譯進 cdebconf 模板的字串,不重建整個
+   > debian-installer 改不掉——但那是「文字」不是「logo 圖」,且不會再有
+   > 任何破圖。真正要「連每個字都是 GoNAS」仍得走 Calamares 那條大工程。
 6. 重新計算 `md5sum.txt`,用 `xorriso -indev ... -outdev ... -map ...
    -boot_image any replay` 重新包裝成一份新的、一樣可開機的 ISO
    (沿用原始 ISO 的 El Torito/isohybrid 開機目錄結構,這是 Debian
@@ -352,12 +369,33 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   在光碟裡,改用 Debian 官方的 `pkgsel/include` 就能在離線情況下從
   光碟裝好,那一整段脆弱的自訂打包邏輯(build-iso.sh 4.5 節、
   late-command.sh 1.7 節的 dpkg -i、`lib/deb-closure.sh`、
-  `test-deb-closure.sh`)因此全部刪掉。**誠實邊界**:DVD-1 只含「最
-  熱門的一部分套件」,GoNAS 的冷門相依(mergerfs/snapraid/docker.io
-  等)不保證在 DVD-1 上;而且安裝媒體裝完會退出,開機後 apt 一律走
-  網路(見 late-command.sh 3.5 節),所以 DVD-1 的好處集中在「安裝
-  當下把 SSH/sudo 這類一定會用到的套件可靠地離線裝好」,不是讓日後
-  所有 `apt install` 都免網路。
+  `test-deb-closure.sh`)因此全部刪掉。DVD-1 只含「最熱門的一部分
+  套件」,GoNAS 的冷門相依(mergerfs/snapraid/samba/nfs-kernel-server/
+  wireguard-tools/docker.io)不保證在 DVD-1 上(建置時掃 pool/ 證實
+  DVD-1 只有 smartmontools 跟 rsync)。
+- **選用套件的「離線安裝」(第五十八輪,使用者:「這幾個軟件你為什麼
+  還需要聯網你不做成離線安裝的?」)**:上一條說的冷門相依,改成在
+  「建置期」(Mac 有網路)就打包進 ISO。`build-iso.sh` 第 4.8 步用
+  `lib/fetch-offline-debs.py` 從 Debian 鏡像把「這片 DVD 上沒有」的選用
+  套件連同**相依封閉集**下載下來,攤平成一個 flat repo 放進 `gonas/debs/`
+  (含 `Packages` 索引);`late-command.sh` 第 3.6 步再把它複製到目標系統
+  `/var/lib/gonas/debs/`、加一條 `deb [trusted=yes] file://…` 的本機 apt
+  來源。這樣使用者開機後在 Web Doctor 點「安裝 mergerfs/samba/…」時,
+  apt 就從這份本機來源**完全離線**裝好;有網路時也照樣能走網路(使用者
+  要的「兩者都要」)。相依封閉集的計算有離線單元測試
+  `test-fetch-offline-debs.py`(用手寫假索引驗證:optional 相依要打包、
+  required/base 相依排除、虛擬套件由 Provides 解析、alternatives 取捨)。
+  設計上刻意**不動 Debian 自己的套件庫/索引**,只新增一個獨立的
+  `[trusted=yes]` 本機 flat repo——就算它有問題,最多是這幾個選用套件
+  離線裝不起來、退回走網路,絕不會弄壞基礎系統安裝本身。best-effort:
+  建置機沒網路/沒 python3 就跳過(印警告),那幾個套件退回開機後連網再
+  裝。鏡像可用 `GONAS_DEB_MIRROR` 覆寫(中國大陸可指 tuna/ustc),整段
+  可用 `GONAS_SKIP_OFFLINE_DEBS=1` 跳過。**誠實邊界/待實機驗證**:這個
+  沙盒連不到 deb.debian.org,「下載 + 封閉集」那段沒辦法在這裡端到端測
+  (只測得到封閉集計算邏輯);版本上,base 來自 DVD(某個 point release)
+  而打包的選用套件來自鏡像「當前」suite,極少數情況若某個選用套件需要
+  比 DVD 更新的 base 函式庫,離線會裝不起來、退回走網路——務必先在 VM
+  裡點一次「安裝」驗證。
 - **`build-iso.sh` 原本假設 Debian netinst ISO 的檔名是用版本代號組
   出來的(`debian-bookworm-<arch>-netinst.iso`),這個假設從一開始
   就是錯的,而且是第十八輪覆閱——使用者第一次真的在自己的機器上執行
