@@ -250,6 +250,24 @@ button {
 button:hover { filter: brightness(1.05); }
 button.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 button.danger { background: var(--danger); }
+
+/* 第五十八輪 UI 覆核(#5/#6):檔案列表/預覽的「下載」是 <a class="secondary">,
+   原本只有 <button> 有按鈕外觀,下載連結變成一條光禿禿的 teal 文字連結,跟
+   旁邊灰色的「重新命名/儲存」按鈕並排很不一致。讓帶 .secondary/.danger 的
+   連結也套用同一套按鈕外觀(同樣的內距/圓角/邊框,去掉底線)。 */
+a.secondary, a.danger {
+  display: inline-block;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  text-decoration: none;
+  cursor: pointer;
+}
+a.secondary { background: var(--surface-2); color: var(--text); }
+a.danger { background: var(--danger); color: #fff; border-color: transparent; }
+a.secondary:hover, a.danger:hover { filter: brightness(1.05); }
 /* 第五十六輪覆核(UI-5):停用狀態一律用同一種「灰掉」的樣式,不分主要/次要。
    原本只設 opacity,停用的主要按鈕還是一片可點的 teal,跟旁邊灰掉的次要按鈕
    放一起看起來像「一個能點、一個不能點」。統一成中性灰,兩個都明顯不可點。 */

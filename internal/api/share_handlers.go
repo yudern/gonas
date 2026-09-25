@@ -145,11 +145,23 @@ func (s *Server) handleExportsCreate(w http.ResponseWriter, r *http.Request) {
 
 	var allExports []share.Export
 	if err := s.store.Update(func(st *state.State) error {
+		// 第五十八輪 QA 覆核(#5):跟 SMB 共享用 Name 擋重複一樣,NFS export
+		// 用 Path 擋重複——否則同一路徑會產生重複的 export 行,而刪除是依 Path
+		// 過濾、會一次把重複的全刪掉,行為不一致。
+		for _, e := range st.Exports {
+			if e.Path == exp.Path {
+				return errExportAlreadyExists
+			}
+		}
 		st.Exports = append(st.Exports, exp)
 		allExports = append([]share.Export{}, st.Exports...)
 		return nil
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		if err == errExportAlreadyExists {
+			writeError(w, http.StatusConflict, err)
+		} else {
+			writeError(w, http.StatusInternalServerError, err)
+		}
 		return
 	}
 

@@ -116,6 +116,21 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAppstoreUninstall(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
+	// 第五十八輪 QA 覆核(#6):先確認這個 app 真的裝過,不然回 404——跟
+	// shares/users/backup jobs/peers 的刪除行為一致(原本對不存在的 id 也
+	// 回 204,會讓前端以為「本來就有、已刪掉」)。
+	found := false
+	for _, app := range s.store.Snapshot().InstalledApps {
+		if app.Template.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errAppNotFound)
+		return
+	}
+
 	if err := appstore.Uninstall(r.Context(), s.docker, id); err != nil {
 		s.logger.Error("uninstalling app failed", "app", id, "err", err)
 		writeError(w, http.StatusInternalServerError, err)

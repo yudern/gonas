@@ -382,7 +382,7 @@ cp "$SCRIPT_DIR/preseed.cfg" "$GONAS_ON_ISO/preseed.cfg"
 # 套件不在這片 DVD 上就讓整個 pkgsel 步驟失敗(all-or-nothing 的雷)。DVD-1
 # 對它收錄的套件是相依封閉的,所以只要主套件在,相依也在,離線裝得起來。
 # 不在這片 DVD 上的(建置時會印出來),仍需開機後有網路用系統診斷補裝。
-OPTIONAL_PKGS="mergerfs snapraid samba nfs-kernel-server smartmontools wireguard-tools rsync docker.io"
+OPTIONAL_PKGS="mergerfs snapraid samba nfs-kernel-server smartmontools wireguard-tools rsync docker.io nut"
 echo "==> scanning the DVD pool for optional packages to bake in via pkgsel/include"
 # gonas_scan_pool_packages 印出「pool 底下真的有 .deb」的候選(見
 # lib/scan-pool-packages.sh,有離線測試)。剩下的就是這片 DVD 沒有的。

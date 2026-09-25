@@ -112,6 +112,9 @@ function wireNavToggle() {
 }
 
 async function boot() {
+  // 第五十八輪 UI 覆核(#7):讓 <html lang> 跟著實際語言走,否則不管切到
+  // 英文/簡中,輔助技術與瀏覽器都以為整頁是繁中(index.html 寫死 zh-Hant)。
+  document.documentElement.lang = getLocale();
   applyStaticI18n();
   wireLangSwitcher();
   wireNavToggle();
@@ -1129,10 +1132,12 @@ async function renderFiles(el) {
       <div id="files-breadcrumb" class="breadcrumb"></div>
       <div id="files-msg"></div>
       <div id="files-drop-zone" class="files-drop-zone">
-        <table class="file-table">
-          <thead><tr><th></th><th>${esc(t("files.colName"))}</th><th>${esc(t("files.colSize"))}</th><th>${esc(t("files.colModified"))}</th><th></th></tr></thead>
-          <tbody id="files-tbody"></tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="file-table">
+            <thead><tr><th></th><th>${esc(t("files.colName"))}</th><th>${esc(t("files.colSize"))}</th><th>${esc(t("files.colModified"))}</th><th></th></tr></thead>
+            <tbody id="files-tbody"></tbody>
+          </table>
+        </div>
       </div>
       <div id="files-panel"></div>
     </div>
@@ -3107,10 +3112,10 @@ function renderBackupJobRow(j) {
   if (j.lastRun) {
     if (j.lastRun.success) {
       statusPill = `<span class="pill ok">${esc(t("backup.lastSuccess", { time: formatDateTime(j.lastRun.finishedAt) }))}</span>`;
-      if (j.lastRun.error) errorMsg = msg("warn", j.lastRun.error);
+      if (j.lastRun.error) errorMsg = msg("warn", translateError(j.lastRun.error));
     } else {
       statusPill = `<span class="pill danger">${esc(t("backup.lastFailed", { time: formatDateTime(j.lastRun.finishedAt) }))}</span>`;
-      errorMsg = msg("error", j.lastRun.error || t("backup.unknownError"));
+      errorMsg = msg("error", translateError(j.lastRun.error) || t("backup.unknownError"));
     }
   }
   return `

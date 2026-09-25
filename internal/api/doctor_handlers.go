@@ -94,5 +94,31 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"apt": req.Apt, "status": "installed"})
+	// 第五十八輪產品覆核(#3):裝好服務後,把先前「設定已存、但當時服務還沒
+	// 裝、所以套用失敗」的共享/匯出重新套用一次——否則使用者的自然流程
+	// (先建共享→發現沒生效→來 Doctor 裝 samba/nfs→裝好)會卡在「state 裡有
+	// 設定,但從沒推到剛裝好的服務」。best-effort:重套失敗只記 log,不影響
+	// 「安裝成功」本身。
+	// 已知限制:使用者帳號的 Samba 密碼無法在這裡重新同步(我們只存雜湊、不存
+	// 明文密碼),裝好 samba 後既有使用者需各自重設一次密碼才能用 SMB 登入。
+	reapplied := ""
+	switch req.Apt {
+	case "samba":
+		if applied, warn := s.applySambaConfig(r, s.store.Snapshot().Shares); applied {
+			reapplied = "samba shares re-applied"
+		} else if warn != "" {
+			s.logger.Warn("re-applying samba shares after install did not fully succeed", "warn", warn)
+		}
+	case "nfs-kernel-server":
+		if applied, warn := s.applyExportsConfig(r, s.store.Snapshot().Exports); applied {
+			reapplied = "nfs exports re-applied"
+		} else if warn != "" {
+			s.logger.Warn("re-applying nfs exports after install did not fully succeed", "warn", warn)
+		}
+	}
+	resp := map[string]string{"apt": req.Apt, "status": "installed"}
+	if reapplied != "" {
+		resp["reapplied"] = reapplied
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

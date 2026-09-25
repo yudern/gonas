@@ -47,6 +47,12 @@ func (u User) Validate() error {
 	if !usernameRe.MatchString(u.Username) {
 		return fmt.Errorf("invalid username %q: must match %s", u.Username, usernameRe.String())
 	}
+	// 第五十八輪資安覆核(#7):Comment 會傳給 useradd -c。雖然它是參數值(無
+	// 殼層注入)、useradd 也會擋換行/冒號,但套件裡其他所有欄位都過了控制字元
+	// 檢查,唯獨這裡漏了——一致地擋掉才不會留下不同路徑不同防護的破口。
+	if textcheck.HasControl(u.Comment) {
+		return fmt.Errorf("user comment cannot contain control characters or line breaks")
+	}
 	return nil
 }
 

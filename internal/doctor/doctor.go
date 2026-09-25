@@ -84,6 +84,11 @@ var OptionalPackages = []OptionalPackage{
 	{Key: "wireguard", Apt: "wireguard-tools", Commands: []string{"wg", "wg-quick"}},
 	{Key: "rsync", Apt: "rsync", Commands: []string{"rsync"}},
 	{Key: "docker", Apt: "docker.io", Commands: []string{"docker"}},
+	// 第五十八輪產品覆核(#7):UPS 功能(internal/ups,用 upsc 查 NUT)在 UI
+	// 裡是一等公民,但 nut 之前不在可一鍵安裝清單、也不在離線 bundle,使用者
+	// 只能自己 drop 到 shell 裝——死路。把 nut 加進來讓它能一鍵/離線安裝
+	// (裝好後仍需設定 NUT 本身連到實體 UPS,UI 的 UPS 卡片有提示)。
+	{Key: "nut", Apt: "nut", Commands: []string{"upsc"}},
 }
 
 // PackageStatus 是一個 OptionalPackage 檢查後的狀態。
