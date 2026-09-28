@@ -147,6 +147,13 @@ func (s *Server) handleStorageArraySync(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, errParitySyncInProgress)
 		return
 	}
+	// 第六十輪(使用者實機):清掉上一次同步留下的錯誤。原本開新的一次
+	// 同步時沒有重置 paritySyncErr,導致「上次失敗過→這次重試」的自然流程
+	// 裡,使用者切到別頁再回到儲存頁,arrayStatus 仍回報那個舊的錯誤字串,
+	// 畫面就一直掛著紅字「同步失敗」,即使這次其實正在成功地重跑。開跑的
+	// 當下就把錯誤清成乾淨狀態:同步中只顯示「同步中…」,真的又失敗才會
+	// 再寫入新的錯誤。
+	s.paritySyncErr.Store(nil)
 	pool := *snap.Pool
 	go func() {
 		defer s.paritySyncing.Store(false)

@@ -51,6 +51,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -400,6 +401,72 @@ func DownloadAndVerify(ctx context.Context, client *http.Client, asset Asset, de
 
 	succeeded = true
 	return createdPath, nil
+}
+
+// elfMachineForGoarch 把 Go 的 GOARCH 對應到 ELF 檔頭 e_machine 欄位的值
+// (ELF spec 的 EM_* 常數)。只列 GoNAS 實際會出的三種 Linux 架構——這是
+// 用來擋「離線上傳更新」時傳錯架構的執行檔(例如拿 arm64 的檔案上傳到 amd64
+// 的機器),不是要支援任意平台。找不到對應(理論上不會發生,因為
+// runtime.GOARCH 一定是編這份 gonasd 時的其中一種)時回 (0,false),呼叫端
+// 會退成「只檢查是不是 ELF」而不強制比對架構,不會誤擋。
+func elfMachineForGoarch(goarch string) (uint16, bool) {
+	switch goarch {
+	case "amd64":
+		return 0x3E, true // EM_X86_64
+	case "arm64":
+		return 0xB7, true // EM_AARCH64
+	case "arm":
+		return 0x28, true // EM_ARM
+	default:
+		return 0, false
+	}
+}
+
+// VerifyExecutableForHost 檢查 path 指到的檔案「看起來是不是這台機器平台的
+// 可執行檔」——目前只支援 Linux ELF(GoNAS 的部署平台)。這是「離線上傳
+// 更新」的第一道便宜關卡:在真的把它換成正在執行的 daemon 之前,先用檔頭
+// 擋掉最常見的兩種災難——傳錯架構(arm64 的檔案傳到 amd64 機器)、傳到一個
+// 根本不是執行檔的東西(整個 tar.gz、文字檔、半個檔案)。這一步只讀檔頭
+// 幾個 byte、不執行任何東西,所以很安全也很快;真正「能不能跑起來」的確認
+// 由呼叫端再跑一次 `--version` 把關(見 internal/api.handleSystemUpdateUpload)。
+//
+// 非 Linux(理論上 GoNAS 不會部署在別的 OS 上)時只做「檔案存在且非空」的
+// 最低限度檢查,不去猜別的可執行檔格式。
+func VerifyExecutableForHost(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("selfupdate: opening uploaded file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("selfupdate: reading uploaded file info: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("selfupdate: uploaded file is empty")
+	}
+
+	if runtime.GOOS != "linux" {
+		return nil // 非 Linux:不猜格式,交給後續 --version 把關
+	}
+
+	// 讀 ELF 檔頭前 20 個 byte 就夠拿到 magic + e_machine。
+	var hdr [20]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return fmt.Errorf("selfupdate: uploaded file is too small to be a valid executable")
+	}
+	// ELF magic: 0x7F 'E' 'L' 'F'
+	if hdr[0] != 0x7F || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F' {
+		return fmt.Errorf("selfupdate: uploaded file is not a Linux executable (bad ELF magic) — make sure you uploaded the gonasd binary itself, not a .tar.gz or a text file")
+	}
+	// e_machine 在 offset 18(2 bytes)。EI_DATA(offset 5)=1 表示小端序,
+	// GoNAS 的三種目標架構(x86_64/aarch64/arm)在 Linux 上都是小端序。
+	machine := uint16(hdr[18]) | uint16(hdr[19])<<8
+	if want, ok := elfMachineForGoarch(runtime.GOARCH); ok && machine != want {
+		return fmt.Errorf("selfupdate: uploaded binary is for a different CPU architecture (this machine is %s) — upload the gonasd build that matches this machine", runtime.GOARCH)
+	}
+	return nil
 }
 
 // ApplyUpdate 用 verifiedBinaryPath(已經通過 DownloadAndVerify 驗證過

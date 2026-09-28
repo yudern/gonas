@@ -82,4 +82,10 @@ var (
 	// Phase 18a：自我更新一鍵復原(handleSystemUpdateRollback)專用的
 	// sentinel 錯誤。
 	errUpdateNoBackupAvailable = errors.New("no previous version backup is available to roll back to")
+
+	// 第六十輪:離線上傳更新(handleSystemUpdateUpload)專用的 sentinel。
+	// 上傳的檔案通過了 ELF/架構檢查,但實際跑 `--version` 起不來(或印出來的
+	// 不是 gonasd)——這是替換前最重要的安全網,擋掉「換上去之後 gonasd 根本
+	// 起不來、整個管理介面打不開」的 brick 風險。
+	errUploadNotRunnableGonasd = errors.New("the uploaded file does not appear to be a working gonasd binary (it failed to run --version) — refusing to replace the running daemon with it")
 )

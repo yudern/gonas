@@ -86,6 +86,12 @@ const dict = {
       rollback: "復原到上一個版本", rollingBack: "復原中…",
       rollbackConfirm: "即將把 gonasd 復原成套用這次更新之前的版本並重新啟動,過程中管理介面會短暫無法連線(通常只有幾秒鐘)。確定要繼續嗎?",
       rollbackFailed: "復原失敗:{reason}",
+      offlineTitle: "離線上傳更新(不需更新伺服器)",
+      offlineHint: "直接選擇一份新版 gonasd 執行檔上傳,系統會先驗證(架構相符、能正常啟動)再替換並自動重啟。適合離線、沒有架設更新伺服器的機器。舊版本會自動備份,可用上面的「復原」退回。",
+      offlineUpload: "上傳並更新",
+      offlineUploading: "上傳中… {pct}%",
+      offlineNoFile: "請先選擇一個 gonasd 執行檔。",
+      offlineConfirm: "即將用上傳的執行檔取代目前的 gonasd 並重新啟動,過程中管理介面會短暫無法連線(通常只有幾秒鐘)。確定要繼續嗎?",
     },
     array: {
       unconfigured: "尚未設定", stopped: "已停止", starting: "啟動中",
@@ -510,6 +516,12 @@ const dict = {
       rollback: "回滚到上一个版本", rollingBack: "回滚中…",
       rollbackConfirm: "即将把 gonasd 回滚成应用这次更新之前的版本并重启,过程中管理界面会短暂无法连接(通常只有几秒钟)。确定要继续吗?",
       rollbackFailed: "回滚失败:{reason}",
+      offlineTitle: "离线上传更新(无需更新服务器)",
+      offlineHint: "直接选择一份新版 gonasd 执行档上传,系统会先验证(架构匹配、能正常启动)再替换并自动重启。适合离线、没有搭建更新服务器的机器。旧版本会自动备份,可用上面的「回滚」退回。",
+      offlineUpload: "上传并更新",
+      offlineUploading: "上传中… {pct}%",
+      offlineNoFile: "请先选择一个 gonasd 执行档。",
+      offlineConfirm: "即将用上传的执行档取代当前的 gonasd 并重启,过程中管理界面会短暂无法连接(通常只有几秒钟)。确定要继续吗?",
     },
     array: {
       unconfigured: "尚未设置", stopped: "已停止", starting: "启动中",
@@ -934,6 +946,12 @@ const dict = {
       rollback: "Roll back to previous version", rollingBack: "Rolling back…",
       rollbackConfirm: "This restores gonasd to the version it was running before this update and restarts it. The admin interface will be briefly unreachable (usually just a few seconds). Continue?",
       rollbackFailed: "Rolling back failed: {reason}",
+      offlineTitle: "Offline update by upload (no update server needed)",
+      offlineHint: "Pick a new gonasd binary and upload it directly. It's verified (matching architecture, starts cleanly) before it replaces the running one and restarts automatically. Ideal for offline machines with no update server. The old version is backed up automatically — use Roll back above to revert.",
+      offlineUpload: "Upload & update",
+      offlineUploading: "Uploading… {pct}%",
+      offlineNoFile: "Please choose a gonasd binary first.",
+      offlineConfirm: "This replaces the running gonasd with the uploaded binary and restarts it. The admin interface will be briefly unreachable (usually just a few seconds). Continue?",
     },
     array: {
       unconfigured: "Not configured", stopped: "Stopped", starting: "Starting",
@@ -1637,6 +1655,33 @@ export function t(key, vars) {
 // 訊息會夾帶 socket 路徑、dial 失敗細節,每次內容都不同,沒辦法用 errorMap
 // 精確比對。這裡用少數幾條 pattern 把「這一類」錯誤收斂成一句在地化說明。
 const errorPatterns = [
+  {
+    // 離線上傳更新:傳錯 CPU 架構的執行檔。
+    re: /different CPU architecture/i,
+    msg: {
+      "zh-Hant": "上傳的執行檔 CPU 架構跟這台機器不符,請上傳與本機相符的 gonasd 版本。",
+      "zh-Hans": "上传的执行档 CPU 架构跟这台机器不符,请上传与本机匹配的 gonasd 版本。",
+      "en": "The uploaded binary is for a different CPU architecture than this machine.",
+    },
+  },
+  {
+    // 離線上傳更新:傳到的根本不是執行檔(ELF magic 不對)。
+    re: /not a Linux executable|bad ELF magic/i,
+    msg: {
+      "zh-Hant": "上傳的檔案不是 Linux 執行檔,請確認你上傳的是 gonasd 執行檔本身,而不是 .tar.gz 或其他檔案。",
+      "zh-Hans": "上传的文件不是 Linux 执行档,请确认你上传的是 gonasd 执行档本身,而不是 .tar.gz 或其他文件。",
+      "en": "The uploaded file is not a Linux executable — upload the gonasd binary itself, not a .tar.gz.",
+    },
+  },
+  {
+    // 離線上傳更新:檔案能通過檔頭檢查、但跑 --version 起不來,不是可用的 gonasd。
+    re: /does not appear to be a working gonasd/i,
+    msg: {
+      "zh-Hant": "上傳的檔案無法作為 gonasd 正常啟動(--version 執行失敗),已拒絕替換,以免更新後管理介面打不開。",
+      "zh-Hans": "上传的文件无法作为 gonasd 正常启动(--version 执行失败),已拒绝替换,以免更新后管理界面打不开。",
+      "en": "The uploaded file failed to run as gonasd (--version failed); refusing to replace the running daemon.",
+    },
+  },
   {
     re: /docker daemon|dockerd|docker\.sock/i,
     // 刻意不帶結尾標點:這句常被嵌進 dashboard/apps 的 dockerWarn 模板句子裡

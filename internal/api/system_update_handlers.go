@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,31 @@ import (
 	"github.com/bng147/gonas/internal/state"
 	"github.com/bng147/gonas/internal/version"
 )
+
+// maxUploadBinaryBytes 是「離線上傳更新」願意收的執行檔大小上限,跟
+// selfupdate.maxDownloadBytes 同一個思路(gonasd 本身十幾 MB,200 MiB 給了
+// 很寬裕的成長空間,又擋得住有人不小心上傳一個超大檔案把磁碟塞爆)。
+const maxUploadBinaryBytes = 200 << 20 // 200 MiB
+
+// verifyUploadedGonasdRuns 把上傳、且已通過檔頭檢查的執行檔實際跑一次
+// `--version`,確認它「真的是一個能在這台機器上跑起來的 gonasd」。gonasd 的
+// -version 是「印完就結束、不啟動 daemon、不綁 port」的一次性指令(見
+// cmd/gonasd/main.go),所以這一步安全、不會去搶正在跑的這個 daemon 的 port。
+// 給 15 秒逾時保護,避免上傳的東西卡住不結束。
+func (s *Server) verifyUploadedGonasdRuns(ctx context.Context, path string) error {
+	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := s.runner.Run(runCtx, path, "--version")
+	if err != nil {
+		s.logger.Warn("uploaded update binary failed its --version smoke test", "err", err, "out", string(out))
+		return errUploadNotRunnableGonasd
+	}
+	if !strings.Contains(strings.ToLower(string(out)), "gonasd") {
+		s.logger.Warn("uploaded update binary ran but did not identify itself as gonasd", "out", string(out))
+		return errUploadNotRunnableGonasd
+	}
+	return nil
+}
 
 // applyUpdateStage 描述 self-update「套用」動作目前所在的階段,純粹是
 // 給 GET /api/v1/system/update 顯示進度用的資訊,不影響實際行為。
@@ -226,6 +252,153 @@ func (s *Server) handleSystemUpdateApply(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusAccepted, systemUpdateApplyResponse{
 		Message: "更新已開始在背景下載與套用,完成後 gonasd 會自動重新啟動,請稍後重新整理頁面。",
 	})
+}
+
+// handleSystemUpdateUpload 是「離線上傳更新」:管理者直接把一份 gonasd 執行檔
+// 從瀏覽器上傳上來,daemon 驗證它是「這台機器平台、而且真的跑得起來的
+// gonasd」之後,原子替換自己並重啟。第六十輪(使用者需求):使用者的 NAS 是
+// 離線用的,沒有、也架不了對外的更新伺服器(那需要 https + manifest),既有的
+// 「系統更新」只能對著 manifest URL 更新,對離線機器等於沒用;於是唯一的
+// 更新方式是 SSH 進機器手動 cp 執行檔。這支端點把那件事搬到網頁上:選檔、
+// 上傳、自動替換重啟,不用命令列。
+//
+// 安全/穩健性設計(這是會用上傳的內容取代「以 root 執行的自己」的高風險
+// 動作,所以特別保守):
+//   - requireAdmin(見 router.go);跟 apply/rollback 共用同一個 single-flight
+//     狀態機(applyMu/applyStatus),不會兩個更新同時動執行檔。
+//   - 兩道驗證,都在「原子替換」之前:①VerifyExecutableForHost 用 ELF 檔頭
+//     擋掉傳錯架構/根本不是執行檔的檔案(只讀幾個 byte、不執行);②實際跑一次
+//     `--version` 確認它真的是跑得起來的 gonasd(擋 brick)。兩關都過才替換。
+//   - ApplyUpdate 會先把現在的執行檔備份成 .previous,萬一新版本有問題,使用者
+//     可以用既有的「復原到上一個版本」一鍵退回。
+func (s *Server) handleSystemUpdateUpload(w http.ResponseWriter, r *http.Request) {
+	// 執行檔十幾 MB,慢速上傳不該被 main.go 為「小型 JSON 請求」設的全站
+	// ReadTimeout 腰斬——跟 handleFilesUpload 一樣,對這一支關掉讀寫逾時。
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetReadDeadline(time.Time{})
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
+
+	// single-flight:搶到才繼續,搶不到代表已經有一個 apply/rollback/upload
+	// 在跑,回 409,不要兩個一起動執行檔。
+	s.applyMu.Lock()
+	if s.applyStatus.Stage != applyStageIdle && s.applyStatus.Stage != applyStageFailed {
+		s.applyMu.Unlock()
+		writeError(w, http.StatusConflict, errUpdateAlreadyInProgress)
+		return
+	}
+	s.applyStatus = applyUpdateStatus{Stage: applyStageDownloading, StartedAt: time.Now()}
+	s.applyMu.Unlock()
+
+	execPath, err := s.resolveExecPath()
+	if err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// 串流讀出上傳的檔案 part,寫到「執行檔同目錄」下的暫存檔——同一個檔案
+	// 系統,後面 ApplyUpdate 的 rename 才會是原子操作(理由見
+	// selfupdate.DownloadAndVerify 的說明)。
+	reader, err := r.MultipartReader()
+	if err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusBadRequest, fmt.Errorf("parsing upload request: %w", err))
+		return
+	}
+	tempPath := ""
+	// 任何提早返回都清掉暫存檔;成功替換後會把 tempPath 設成 ""(已被 rename
+	// 走),這個 defer 就變成 os.Remove("") 的無害 no-op。
+	defer func() {
+		if tempPath != "" {
+			os.Remove(tempPath)
+		}
+	}()
+	for {
+		part, perr := reader.NextPart()
+		if perr != nil {
+			break // io.EOF 或其他:沒有更多 part 了
+		}
+		if part.FileName() == "" {
+			part.Close()
+			continue // 不是檔案欄位,略過
+		}
+		tmp, cerr := os.CreateTemp(filepath.Dir(execPath), ".gonasd-upload-*")
+		if cerr != nil {
+			part.Close()
+			s.failApply(cerr)
+			writeError(w, http.StatusInternalServerError, cerr)
+			return
+		}
+		written, werr := io.Copy(tmp, io.LimitReader(part, maxUploadBinaryBytes+1))
+		tmp.Close()
+		part.Close()
+		if werr != nil {
+			os.Remove(tmp.Name())
+			s.failApply(werr)
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("saving uploaded update: %w", werr))
+			return
+		}
+		if written > maxUploadBinaryBytes {
+			os.Remove(tmp.Name())
+			e := fmt.Errorf("uploaded file exceeds %d bytes", maxUploadBinaryBytes)
+			s.failApply(e)
+			writeError(w, http.StatusBadRequest, e)
+			return
+		}
+		tempPath = tmp.Name()
+		break // 只取第一個檔案欄位
+	}
+	if tempPath == "" {
+		s.failApply(errNoUploadedFile)
+		writeError(w, http.StatusBadRequest, errNoUploadedFile)
+		return
+	}
+
+	// 驗證①:ELF 檔頭 + 架構(便宜、不執行)。
+	if err := selfupdate.VerifyExecutableForHost(tempPath); err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// 驗證②:實際跑 `--version` 確認是跑得起來的 gonasd(brick 防護)。
+	if err := os.Chmod(tempPath, 0o755); err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("making uploaded update executable: %w", err))
+		return
+	}
+	if err := s.verifyUploadedGonasdRuns(r.Context(), tempPath); err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// 兩關都過:原子替換(含備份成 .previous)。
+	s.setApplyStage(applyStageApplying)
+	backupPath, err := selfupdate.ApplyUpdate(execPath, tempPath)
+	if err != nil {
+		s.failApply(err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	tempPath = "" // 已被 rename 成正式執行檔,取消上面 defer 的清除
+	s.logger.Info("offline self-update applied via upload, requesting restart", "backupPath", backupPath)
+
+	// 先把 202 回應寫回去並 flush——要趕在下面送出重啟請求、main.go 用
+	// syscall.Exec 把整個 process 換掉之前,讓使用者的瀏覽器確實收到「已收到、
+	// 即將重啟」,不然連線會在收到回應前就被重啟切斷,前端只看到一個突兀的
+	// 連線錯誤。
+	s.setApplyStage(applyStageRestarting)
+	writeJSON(w, http.StatusAccepted, systemUpdateApplyResponse{
+		Message: "已收到上傳的更新檔並套用,gonasd 即將自動重新啟動,請稍後重新整理頁面。",
+	})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	select {
+	case s.restartRequested <- execPath:
+	default:
+	}
 }
 
 // setApplyStage 只更新階段欄位,保留原本的 StartedAt——單純是給

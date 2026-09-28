@@ -165,6 +165,10 @@ export const api = {
   checkSystemUpdate: () => request("POST", "/api/v1/system/update/check"),
   applySystemUpdate: () => request("POST", "/api/v1/system/update/apply"),
   rollbackSystemUpdate: () => request("POST", "/api/v1/system/update/rollback"),
+  // 離線上傳更新:直接把一份 gonasd 執行檔 POST 上去(multipart),後端驗證
+  // 後替換自己並重啟。沿用 uploadWithProgress(XHR + 進度),執行檔十幾 MB,
+  // 讓使用者看得到上傳進度。
+  uploadSystemUpdate: (formData, onProgress) => uploadWithProgress("/api/v1/system/update/upload", formData, onProgress),
 };
 
 // uploadWithProgress 用 XMLHttpRequest 而不是 fetch 送出上傳請求——這是

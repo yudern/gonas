@@ -421,6 +421,9 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("PUT /api/v1/ups/config", s.requireAdmin(s.handleUPSConfigSet))
 	mux.HandleFunc("POST /api/v1/system/update/apply", s.requireAdmin(s.handleSystemUpdateApply))
 	mux.HandleFunc("POST /api/v1/system/update/rollback", s.requireAdmin(s.handleSystemUpdateRollback))
+	// 第六十輪:離線上傳更新——直接上傳一份 gonasd 執行檔替換自己並重啟,
+	// 給沒有(也架不了)更新伺服器的離線 NAS 用。高風險動作,requireAdmin。
+	mux.HandleFunc("POST /api/v1/system/update/upload", s.requireAdmin(s.handleSystemUpdateUpload))
 
 	mux.HandleFunc("GET /api/v1/vpn/status", s.requireAuth(s.handleVPNStatus))
 	mux.HandleFunc("PUT /api/v1/vpn/interface", s.requireAdmin(s.handleVPNInterfaceSet))

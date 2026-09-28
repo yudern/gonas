@@ -463,6 +463,22 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
     settingsForm = !update.configured ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0">${esc(t("update.adminOnlyHint"))}</p>` : "";
   }
 
+  // 第六十輪:離線上傳更新。對「離線 NAS、沒有更新伺服器」的使用者來說,
+  // 這才是主要的更新方式——直接把新的 gonasd 執行檔上傳上來替換,不用架
+  // manifest 伺服器、也不用 SSH 進機器。所以不藏在折疊區,isAdmin 就直接顯示。
+  const uploadBlock = isAdmin ? `
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <p style="margin:0 0 4px;font-weight:600;font-size:13.5px">${esc(t("update.offlineTitle"))}</p>
+      <p class="hint" style="margin:0 0 10px">${esc(t("update.offlineHint"))}</p>
+      <form id="update-upload-form">
+        <input type="file" id="update-upload-file" accept="" style="font-size:13px">
+        <div class="btn-row" style="margin-top:10px">
+          <button type="submit" id="update-upload-btn" ${update.applyInProgress ? "disabled" : ""}>${esc(t("update.offlineUpload"))}</button>
+        </div>
+      </form>
+      <div id="update-upload-progress" style="margin-top:8px"></div>
+    </div>` : "";
+
   return `
     <div class="card">
       ${h2i("download", esc(t("update.title")))}
@@ -475,6 +491,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
       ${applyErrorMsg}
       ${actions}
       ${rollbackAction}
+      ${uploadBlock}
       ${settingsForm}
     </div>
   `;
@@ -538,6 +555,38 @@ function attachSystemUpdateHandlers(el, isAdmin) {
         if (checkBtn2) checkBtn2.disabled = false;
         const box = el.querySelector("#update-msg");
         if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  }
+
+  const uploadForm = el.querySelector("#update-upload-form");
+  if (uploadForm) {
+    uploadForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fileInput = el.querySelector("#update-upload-file");
+      const progressBox = el.querySelector("#update-upload-progress");
+      const uploadBtn = el.querySelector("#update-upload-btn");
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if (!file) {
+        if (progressBox) progressBox.innerHTML = msg("error", t("update.offlineNoFile"));
+        return;
+      }
+      // 跟「套用更新」同等級的高風險確認:上傳的執行檔會取代正在跑的
+      // gonasd 並重啟整個程序,管理介面會短暫連不上。
+      if (!confirm(t("update.offlineConfirm"))) return;
+      if (uploadBtn) uploadBtn.disabled = true;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        if (progressBox) progressBox.innerHTML = msg("warn", t("update.offlineUploading", { pct: 0 }));
+        const res = await api.uploadSystemUpdate(fd, (frac) => {
+          if (progressBox) progressBox.innerHTML = msg("warn", t("update.offlineUploading", { pct: Math.round(frac * 100) }));
+        });
+        if (progressBox) progressBox.innerHTML = msg("ok", translateNotice(res.message));
+        pollForRestartThenReload();
+      } catch (err) {
+        if (uploadBtn) uploadBtn.disabled = false;
+        if (progressBox) progressBox.innerHTML = msg("error", translateError(err.message));
       }
     });
   }
