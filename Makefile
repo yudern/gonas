@@ -9,6 +9,17 @@ LDFLAGS := -s -w \
 	-X '$(MODULE)/internal/version.Commit=$(COMMIT)' \
 	-X '$(MODULE)/internal/version.BuildDate=$(BUILD_DATE)'
 
+## MANIFEST_PUBKEY:(選用)自我更新的 ed25519 公鑰(hex,64 字元)。設了它,
+## 編出來的 gonasd 就會「強制驗證更新 manifest 的簽章」——沒有對應私鑰簽的
+## manifest 一律拒絕(fail-closed),見 internal/selfupdate 的 ManifestPublicKeyHex。
+## 用 cmd/gonas-sign keygen 產生金鑰,再:
+##   make build-amd64 MANIFEST_PUBKEY=<公鑰hex>
+## 不設就維持原本行為(只驗 SHA256 + 強制 HTTPS,不驗簽,向後相容)。
+MANIFEST_PUBKEY ?=
+ifneq ($(strip $(MANIFEST_PUBKEY)),)
+LDFLAGS += -X '$(MODULE)/internal/selfupdate.ManifestPublicKeyHex=$(MANIFEST_PUBKEY)'
+endif
+
 DIST := dist
 RELEASE_DIR := $(DIST)/release
 
