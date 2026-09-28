@@ -202,6 +202,7 @@ const dict = {
         wireguard: { name: "WireGuard VPN", desc: "在外面也能安全連回這台 NAS" },
         rsync: { name: "備份(rsync)", desc: "硬連結輪替快照備份" },
         docker: { name: "Docker 應用", desc: "應用商店與容器功能" },
+        nut: { name: "UPS 不斷電系統(NUT)", desc: "讀取 UPS 狀態、停電時自動安全關機" },
       },
     },
     files: {
@@ -625,6 +626,7 @@ const dict = {
         wireguard: { name: "WireGuard VPN", desc: "在外面也能安全连回这台 NAS" },
         rsync: { name: "备份(rsync)", desc: "硬链接轮替快照备份" },
         docker: { name: "Docker 应用", desc: "应用商店与容器功能" },
+        nut: { name: "UPS 不间断电源(NUT)", desc: "读取 UPS 状态、停电时自动安全关机" },
       },
     },
     files: {
@@ -1048,6 +1050,7 @@ const dict = {
         wireguard: { name: "WireGuard VPN", desc: "Securely reach this NAS from outside" },
         rsync: { name: "Backups (rsync)", desc: "Hard-link rotating snapshot backups" },
         docker: { name: "Docker apps", desc: "App store and container features" },
+        nut: { name: "UPS / battery backup (NUT)", desc: "Read UPS status and shut down safely on power loss" },
       },
     },
     files: {

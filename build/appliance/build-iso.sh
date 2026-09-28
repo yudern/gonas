@@ -423,10 +423,12 @@ fi
 # 套件庫/索引,只在 gonas/debs/ 產生一份獨立的 flat repo,弄壞了最多是這
 # 幾個選用套件離線裝不起來,絕不會影響「基礎系統安裝」本身。
 #
-# 鏡像可用 GONAS_DEB_MIRROR 覆寫(中國大陸使用者可指到 tuna/ustc 等),
-# 預設 deb.debian.org。可用 GONAS_SKIP_OFFLINE_DEBS=1 整段跳過(除錯/趕時間)。
+# 鏡像:預設「一串」候選,依序嘗試,第一個連得到的就用(見 fetch-offline-debs.py)。
+# 第五十九輪:中國大陸常連不到 deb.debian.org,預設就把 tuna/ustc 排在後面自動
+# 退避,使用者不必知道要設環境變數。仍可用 GONAS_DEB_MIRROR 覆寫成單一或自訂清單。
+# 可用 GONAS_SKIP_OFFLINE_DEBS=1 整段跳過(除錯/趕時間)。
 OFFLINE_DEB_DIR="$GONAS_ON_ISO/debs"
-GONAS_DEB_MIRROR="${GONAS_DEB_MIRROR:-http://deb.debian.org/debian}"
+GONAS_DEB_MIRROR="${GONAS_DEB_MIRROR:-http://deb.debian.org/debian,https://mirrors.tuna.tsinghua.edu.cn/debian,https://mirrors.ustc.edu.cn/debian}"
 if [ "${GONAS_SKIP_OFFLINE_DEBS:-0}" = "1" ]; then
     echo "==> GONAS_SKIP_OFFLINE_DEBS=1 — skipping offline .deb bundling (optional packages will need network at install time)" >&2
 elif [ -z "$MISSING_PKGS" ]; then
@@ -450,9 +452,23 @@ else
                 --out "$OFFLINE_DEB_DIR" \
                 $MISSING_PKGS; then
             _deb_count="$(find "$OFFLINE_DEB_DIR" -name '*.deb' 2>/dev/null | grep -c . || true)"
-            echo "==> offline .deb bundle ready: $_deb_count package file(s) in gonas/debs/ (installable with NO network after boot via Web Doctor)"
+            echo ""
+            echo "================================================================"
+            echo "  ✅ 離線套件已打包:$_deb_count 個 .deb 進 gonas/debs/"
+            echo "     開機後不需要網路,就能在系統診斷頁一鍵安裝這些套件。"
+            echo "================================================================"
+            echo ""
         else
-            echo "warning: offline .deb bundling did not complete (network/mirror/closure issue) — [$MISSING_PKGS] will need network at install time. The rest of the ISO is unaffected." >&2
+            echo ""
+            echo "================================================================" >&2
+            echo "  ⚠️  離線套件「沒有」打包成功(連不到任何 Debian 鏡像)。" >&2
+            echo "     這幾個套件開機後仍然需要「有網路」才裝得起來:" >&2
+            echo "       $MISSING_PKGS" >&2
+            echo "     若要離線可裝,請確認建置這台 Mac 能連到 Debian 鏡像," >&2
+            echo "     或指定一個連得到的鏡像後重建,例如:" >&2
+            echo "       GONAS_DEB_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian make iso-amd64" >&2
+            echo "================================================================" >&2
+            echo ""
             # 沒抓成別留半套目錄,免得 late-command.sh 誤以為有一份可用的 repo。
             rm -rf "$OFFLINE_DEB_DIR"
         fi

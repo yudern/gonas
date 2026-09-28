@@ -291,33 +291,48 @@ def main(argv):
     ap.add_argument("packages", nargs="+")
     args = ap.parse_args(argv)
 
-    mirror = args.mirror.rstrip("/")
+    # --mirror 可以是「逗號分隔的多個鏡像」,依序嘗試,第一個「連得到、抓得到
+    # 索引」的就用它做後續所有 .deb 下載(確保版本一致)。第五十九輪加:中國大陸
+    # 常常連不到 deb.debian.org,自動退到 tuna/ustc,使用者不必自己知道要設環境
+    # 變數。(仍可用 GONAS_DEB_MIRROR 覆寫。)
+    mirrors = [m.strip().rstrip("/") for m in args.mirror.split(",") if m.strip()]
     components = [c for c in args.components.split(",") if c]
     targets = list(dict.fromkeys(args.packages))  # 去重、保序
 
-    # 1) 下載並合併各 component 的 Packages.gz。
+    # 1) 依序試每個鏡像,抓各 component 的 Packages.gz;第一個成功的鏡像就定案。
     all_stanzas = []
-    got_any = False
-    for comp in components:
-        url = "%s/dists/%s/%s/binary-%s/Packages.gz" % (mirror, args.codename, comp, args.arch)
-        try:
-            raw = _http_get(url)
-        except Exception as e:
-            log("could not fetch %s (%s) — skipping this component" % (url, e))
-            continue
-        try:
-            text = gzip.decompress(raw).decode("utf-8", "replace")
-        except Exception as e:
-            log("could not gunzip %s: %s — skipping" % (url, e))
-            continue
-        st = parse_packages(text)
-        log("component %s: %d package stanzas" % (comp, len(st)))
-        all_stanzas.extend(st)
-        got_any = True
+    mirror = None
+    for cand in mirrors:
+        stanzas_this = []
+        got = False
+        for comp in components:
+            url = "%s/dists/%s/%s/binary-%s/Packages.gz" % (cand, args.codename, comp, args.arch)
+            try:
+                raw = _http_get(url, timeout=30, retries=2)
+            except Exception as e:
+                log("  [%s] component %s unreachable (%s)" % (cand, comp, e))
+                continue
+            try:
+                text = gzip.decompress(raw).decode("utf-8", "replace")
+            except Exception as e:
+                log("  [%s] could not gunzip %s: %s" % (cand, comp, e))
+                continue
+            st = parse_packages(text)
+            log("  [%s] component %s: %d package stanzas" % (cand, comp, len(st)))
+            stanzas_this.extend(st)
+            got = True
+        if got:
+            mirror = cand
+            all_stanzas = stanzas_this
+            log("using mirror for offline .debs: %s" % mirror)
+            break
+        log("mirror %s did not work, trying the next one…" % cand)
 
-    if not got_any:
-        log("ERROR: could not fetch ANY package index from the mirror (%s, %s). "
-            "Offline packages will NOT be bundled; they will need network at install time." % (mirror, args.codename))
+    if mirror is None:
+        log("ERROR: could not fetch a package index from ANY mirror tried (%s) for %s/%s. "
+            "Offline packages will NOT be bundled; they will need network at install time. "
+            "If you are behind a filtered network, pass a reachable mirror with "
+            "GONAS_DEB_MIRROR=<url> make iso-amd64." % (", ".join(mirrors), args.codename, args.arch))
         return 3
 
     pkgs, provides = build_index(all_stanzas)
