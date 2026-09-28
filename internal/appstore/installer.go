@@ -3,6 +3,8 @@ package appstore
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/bng147/gonas/internal/docker"
 )
@@ -30,6 +32,14 @@ type InstallRequest struct {
 	// 失敗、回滾又沒清乾淨」時完全無跡可尋;呼叫端(internal/api)接上
 	// 自己的 logger 就能記下來。
 	OnRollbackError func(serviceName string, err error)
+	// EnsureHostDir 在建立容器前,確保每個 bind 掛載的「宿主端目錄」存在。
+	// 第六十輪(使用者需求:路徑不存在時直接自動建立再安裝)——原本若使用者
+	// 填的 appdata 路徑還不存在,就只能靠 docker daemon 自動建(建出來是
+	// root:root、有時還會出權限問題),而且對「先建目錄再掛」的期待不明確。
+	// 這裡在掛載前明確 MkdirAll,冪等(已存在不報錯),讓「填一個還沒建的
+	// 路徑」也能一鍵裝起來。可為 nil,呼叫端不設就用 os.MkdirAll(0o755)。
+	// 抽成 hook 是為了讓 installer 測試不必真的去動檔案系統。
+	EnsureHostDir func(path string) error
 }
 
 // InstallResult 記錄安裝完成後每個服務對應到的容器 ID，方便呼叫端記錄下來
@@ -97,6 +107,23 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		if err != nil {
 			rollback()
 			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+
+		// 第六十輪:掛載前確保每個宿主端 bind 目錄存在(路徑不存在就自動建),
+		// 讓使用者填一個還沒建的 appdata 路徑也能直接裝起來。冪等。
+		ensureDir := req.EnsureHostDir
+		if ensureDir == nil {
+			ensureDir = func(p string) error { return os.MkdirAll(p, 0o755) }
+		}
+		for _, m := range mounts {
+			// 只處理絕對路徑的 bind 掛載(named volume 之類不是本機路徑,跳過)。
+			if !filepath.IsAbs(m.HostPath) {
+				continue
+			}
+			if err := ensureDir(m.HostPath); err != nil {
+				rollback()
+				return InstallResult{}, fmt.Errorf("service %q: creating host directory %q: %w", svc.Name, m.HostPath, err)
+			}
 		}
 
 		ports := resolvePorts(svc, override.PortHostOverrides)

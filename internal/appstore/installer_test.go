@@ -284,6 +284,70 @@ func TestInstall_MissingRequiredVolumeHostPath(t *testing.T) {
 	}
 }
 
+// 第六十輪:安裝時要先確保每個 bind 掛載的宿主端目錄存在(路徑不存在自動建),
+// 且要在建立容器之前做。用 EnsureHostDir hook 記錄被建了哪些路徑,不動真檔案系統。
+func TestInstall_EnsuresHostDirsBeforeCreate(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	client := newFakeClient(t, daemon)
+
+	var ensured []string
+	_, err := Install(context.Background(), client, InstallRequest{
+		Template: AppTemplate{
+			ID:   "portainer",
+			Name: "Portainer",
+			Services: []ServiceTemplate{
+				{Name: "app", Image: "portainer/portainer-ce:latest", Volumes: []VolumeMapping{{ContainerPath: "/data"}}},
+			},
+		},
+		Overrides: map[string]ServiceOverride{
+			"app": {VolumeHostPaths: map[string]string{"/data": "/mnt/tank/appdata/portainer"}},
+		},
+		EnsureHostDir: func(p string) error { ensured = append(ensured, p); return nil },
+	})
+	if err != nil {
+		t.Fatalf("Install returned error: %v", err)
+	}
+	found := false
+	for _, p := range ensured {
+		if p == "/mnt/tank/appdata/portainer" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the host mount dir to be ensured before container create; ensured=%v", ensured)
+	}
+}
+
+// EnsureHostDir 失敗(例如唯讀 / 權限不足)時,整個安裝要失敗並回滾,不留下
+// 半裝的容器。
+func TestInstall_EnsureHostDirFailureRollsBack(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	client := newFakeClient(t, daemon)
+
+	_, err := Install(context.Background(), client, InstallRequest{
+		Template: AppTemplate{
+			ID:   "portainer",
+			Name: "Portainer",
+			Services: []ServiceTemplate{
+				{Name: "app", Image: "portainer/portainer-ce:latest", Volumes: []VolumeMapping{{ContainerPath: "/data"}}},
+			},
+		},
+		Overrides: map[string]ServiceOverride{
+			"app": {VolumeHostPaths: map[string]string{"/data": "/mnt/tank/appdata/portainer"}},
+		},
+		EnsureHostDir: func(p string) error { return fmt.Errorf("mkdir denied") },
+	})
+	if err == nil {
+		t.Fatal("expected install to fail when the host dir cannot be created")
+	}
+	daemon.mu.Lock()
+	n := len(daemon.containers)
+	daemon.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected no containers left after rollback, got %d", n)
+	}
+}
+
 func TestUninstall_SingleServiceApp_NoNetworkToRemove_DoesNotError(t *testing.T) {
 	// 回歸測試：早期版本會在單服務 App(從未建立過專屬網路)解除安裝時,
 	// 因為「找不到網路」而誤判成錯誤。這裡確認修正後不會再發生。

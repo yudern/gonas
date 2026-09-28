@@ -1661,10 +1661,19 @@ async function loadTrash(root) {
 // ---------- 應用程式 ----------
 
 async function renderApps(el) {
-  const [installed, catalog, dockerStatus] = await Promise.all([
+  const [installed, catalog, dockerStatus, containers, arrayStatus] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
     api.dockerPing().catch((e) => ({ available: false, error: e.message })),
+    api.containers().catch(() => []),
+    api.arrayStatus().catch(() => ({})),
   ]);
+  // 容器目前狀態(id -> "running"/"exited"/…),給每個服務顯示狀態燈與決定
+  // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
+  // 存下的 containerIds 一致,直接對得起來。
+  const stateById = {};
+  (containers || []).forEach((c) => { stateById[c.id] = c.state; });
+  // 預填 appdata 路徑用的基準:優先用陣列掛載點,沒有就退回 /mnt/tank。
+  const appdataBase = (arrayStatus && arrayStatus.mountPoint) || "/mnt/tank";
 
   el.innerHTML = `
     <h1>${esc(t("apps.title"))}</h1>
@@ -1683,14 +1692,24 @@ async function renderApps(el) {
             <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
           </div>
           <div class="services">
-            ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => `
+            ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => {
+              const st = stateById[id];
+              const running = st === "running";
+              const statePill = st
+                ? `<span class="pill ${running ? "ok" : "danger"}">${esc(running ? t("apps.stateRunning") : t("apps.stateStopped"))}</span>`
+                : `<span class="pill neutral">${esc(t("apps.stateUnknown"))}</span>`;
+              return `
               <div class="service-row">
-                <span>${esc(svc)}: ${esc(id.slice(0, 12))}</span>
+                <span>${esc(svc)}: ${esc(id.slice(0, 12))} ${statePill}</span>
+                ${running
+                  ? `<button type="button" data-ctr-stop="${esc(id)}">${esc(t("apps.stop"))}</button>
+                     <button type="button" data-ctr-restart="${esc(id)}">${esc(t("apps.restart"))}</button>`
+                  : `<button type="button" data-ctr-start="${esc(id)}">${esc(t("apps.start"))}</button>`}
                 <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
                 <button type="button" data-exec-toggle="${esc(id)}">${esc(t("apps.execCmd"))}</button>
               </div>
               <div class="service-panel" id="panel-${esc(id)}" hidden></div>
-            `).join("")}
+            `;}).join("")}
           </div>
         </div>
       `).join("") : `<p class="empty-state">${esc(t("apps.noneInstalled"))}</p>`}
@@ -1698,7 +1717,7 @@ async function renderApps(el) {
 
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
-      ${catalog.map((tmpl) => renderCatalogEntry(tmpl)).join("")}
+      ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase)).join("")}
     </div>
 
     <div class="card">
@@ -1745,6 +1764,26 @@ async function renderApps(el) {
   el.querySelectorAll("[data-exec-toggle]").forEach((btn) => {
     btn.addEventListener("click", () => showContainerExecPanel(el, btn.dataset.execToggle));
   });
+
+  // 第六十輪:容器啟動/停止/重啟。按完重畫整頁,狀態燈與按鈕跟著更新。
+  const wireCtrAction = (attr, call, busyKey) => {
+    el.querySelectorAll(`[${attr}]`).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = t(busyKey);
+        try {
+          await call(btn.getAttribute(attr));
+          await renderApps(el);
+        } catch (err) {
+          btn.disabled = false;
+          el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+        }
+      });
+    });
+  };
+  wireCtrAction("data-ctr-start", (id) => api.containerStart(id), "apps.starting");
+  wireCtrAction("data-ctr-stop", (id) => api.containerStop(id), "apps.stopping");
+  wireCtrAction("data-ctr-restart", (id) => api.containerRestart(id), "apps.restarting");
 
   el.querySelectorAll("[data-toggle-install]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1913,7 +1952,8 @@ function parseEnvLines(text) {
   });
 }
 
-function renderCatalogEntry(tmpl) {
+function renderCatalogEntry(tmpl, appdataBase) {
+  const base = appdataBase || "/mnt/tank";
   const fields = tmpl.services.flatMap((svc) => {
     const env = (svc.env || []).map((e) => `
       <div class="field">
@@ -1921,10 +1961,16 @@ function renderCatalogEntry(tmpl) {
         <input type="${/pass/i.test(e.key) ? "password" : "text"}" name="${esc(svc.name)}.env.${esc(e.key)}" placeholder="${esc(e.default || "")}" ${e.required ? "required" : ""}>
         ${e.description ? `<div class="hint">${esc(translateNotice(e.description))}</div>` : ""}
       </div>`);
+    // 第六十輪:掛載路徑改成「預填實際值」(不是 placeholder),使用者直接
+    // 按確認即可裝,不用自己想路徑。多服務 App 每個服務各給一個子目錄,避免
+    // 兩個服務的資料互相覆蓋(例如 wordpress 的 db 與 app)。後端安裝時若這個
+    // 路徑還不存在會自動建立。
+    const subdir = tmpl.services.length > 1 ? tmpl.id + "/" + svc.name : tmpl.id;
     const vol = (svc.volumes || []).map((v) => `
       <div class="field">
         <label>${t("apps.volumeLabel", { svc: esc(svc.name), path: esc(v.containerPath) })}</label>
-        <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" placeholder="/mnt/tank/appdata/${esc(tmpl.id)}" required>
+        <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" value="${esc(base + "/appdata/" + subdir)}" required>
+        <div class="hint">${esc(t("apps.volumeAutocreateHint"))}</div>
       </div>`);
     return [...env, ...vol];
   });

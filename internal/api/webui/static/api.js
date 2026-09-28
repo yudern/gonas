@@ -75,6 +75,9 @@ export const api = {
   networks: () => request("GET", "/api/v1/docker/networks"),
   containerLogs: (id, tail) => request("GET", `/api/v1/docker/containers/${encodeURIComponent(id)}/logs${tail ? `?tail=${encodeURIComponent(tail)}` : ""}`),
   containerExec: (id, cmd) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/exec`, { cmd }),
+  containerStart: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/start`),
+  containerStop: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/stop`),
+  containerRestart: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/restart`),
 
   catalog: () => request("GET", "/api/v1/appstore/catalog"),
   installedApps: () => request("GET", "/api/v1/appstore/apps"),

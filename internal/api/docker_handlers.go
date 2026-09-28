@@ -75,6 +75,45 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, containerLogsResponse{Logs: logs})
 }
 
+// containerLifecycleStopTimeoutSec 是 stop/restart 給容器優雅關閉的秒數,
+// 超過就強制 kill。10 秒是 docker 的預設值,對絕大多數容器都夠。
+const containerLifecycleStopTimeoutSec = 10
+
+// handleContainerStart / handleContainerStop / handleContainerRestart 是
+// 「應用程式」頁面每個容器的啟動/停止/重啟按鈕(第六十輪使用者需求:原本
+// 只有解除安裝/看 log/執行指令,少了最基本的開關)。三支都是 requireAdmin
+// (見 router.go)——啟停容器是管理動作。刻意用「跟 HTTP 請求脫鉤」不做,
+// 這些操作很快(幾秒內),直接用 r.Context() 即可。
+func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.docker.StartContainer(r.Context(), id); err != nil {
+		s.logger.Error("starting container failed", "err", err, "containerId", id)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.docker.StopContainer(r.Context(), id, containerLifecycleStopTimeoutSec); err != nil {
+		s.logger.Error("stopping container failed", "err", err, "containerId", id)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.docker.RestartContainer(r.Context(), id, containerLifecycleStopTimeoutSec); err != nil {
+		s.logger.Error("restarting container failed", "err", err, "containerId", id)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
 // containerExecRequest 是 POST .../containers/{id}/exec 的請求 body:一個
 // 要在容器裡執行一次的指令,例如 {"cmd": ["sh", "-c", "cat /etc/os-release"]}。
 type containerExecRequest struct {
