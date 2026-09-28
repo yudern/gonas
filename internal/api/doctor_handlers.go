@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/bng147/gonas/internal/doctor"
 )
+
+// offlineSourceList 是 late-command.sh 3.6 節寫的「本機離線 .deb 來源」清單檔。
+// 存在就代表這台機器內建了一包可離線安裝的選用套件(見 build-iso.sh 4.8)。
+// 用 var 而非 const,方便測試指到暫存檔驗證離線優先的行為。
+var offlineSourceList = "/etc/apt/sources.list.d/gonas-offline.list"
 
 // handleDoctorStatus 回傳每個選用外部套件「裝了沒」,給 Web「系統診斷」頁
 // 顯示 + 判斷要不要在儀表板提示。唯讀,requireAuth 即可。
@@ -69,15 +75,7 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	s.logger.Info("installing optional package via web Doctor", "apt", req.Apt)
-	// 先更新套件列表(best-effort:更新單一來源失敗 apt 也會回非零,不能因此
-	// 就一律當成致命——真正裝不裝得起來由下面的 install 決定),再非互動安裝。
-	// 用 `env DEBIAN_FRONTEND=noninteractive ...` 避免 debconf 跳出互動式問題
-	// 把安裝卡住;全程 argv 傳參、不經過 shell,套件名又已經過白名單,沒有
-	// 指令注入風險。
-	if out, err := s.runner.Run(ctx, "apt-get", "update"); err != nil {
-		s.logger.Warn("apt-get update reported an error before doctor install (continuing)", "apt", req.Apt, "err", err, "out", string(out))
-	}
-	out, err := s.runner.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "--no-install-recommends", req.Apt)
+	out, err := s.installOptionalPackage(ctx, req.Apt)
 	if err != nil {
 		s.logger.Error("optional package install failed", "apt", req.Apt, "err", err, "out", string(out))
 		// 「找不到套件」的兩種 apt 常見講法(來自 stderr,cmdrunner 會把 stderr
@@ -130,4 +128,54 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 		resp["reapplied"] = reapplied
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// installOptionalPackage 安裝一個選用套件,策略是「離線優先、網路後援」:
+//
+// 第五十九輪(使用者實機 + 截圖定位的真正 bug):這台 NAS 是離線用的、沒有
+// 對外網路。原本的流程一律先跑「會連網路來源」的 `apt-get update`,在離線機器
+// 上會卡在「Connecting to deb.debian.org」很久,而且沒把本機離線來源乾淨地
+// 索引起來,接著 `apt-get install` 就報「Unable to locate package」——明明本機
+// 那包 .deb 全都在。這正是「離線安裝」不該發生的事。
+//
+// 修法:如果機器上有內建的本機離線來源(gonas-offline.list),就「只用這個
+// 來源」做 update + install(用 apt 的 Dir::Etc::sourcelist / sourceparts 覆寫,
+// 把網路來源整個排除在外)——file:// 來源不需要網路、瞬間完成,離線也絕不會
+// 卡。只有在「沒有離線來源」或「離線包裡沒有這個套件」時,才退回走完整
+// (含網路)來源,對應「機器剛好有網路、要裝離線包裡沒有的東西」的情況。
+// 這才真正做到使用者要的「離線也能裝、有網路也能裝」。
+func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte, error) {
+	installArgsNoninteractive := func(extra ...string) []string {
+		a := []string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}
+		a = append(a, extra...)
+		a = append(a, "install", "-y", "--no-install-recommends", apt)
+		return a
+	}
+
+	if _, statErr := os.Stat(offlineSourceList); statErr == nil {
+		// 只用本機離線來源:Dir::Etc::sourcelist 指到離線清單、sourceparts 指到
+		// /dev/null(等於「沒有其他來源檔」),apt 就完全看不到網路來源,不會連網。
+		localOnly := []string{
+			"-o", "Dir::Etc::sourcelist=" + offlineSourceList,
+			"-o", "Dir::Etc::sourceparts=/dev/null",
+		}
+		// 只索引本機來源(file://,不連網、很快)。best-effort。
+		updateArgs := append(append([]string{}, localOnly...), "update")
+		if out, err := s.runner.Run(ctx, "apt-get", updateArgs...); err != nil {
+			s.logger.Warn("local-only apt-get update failed (continuing to try install)", "apt", apt, "err", err, "out", string(out))
+		}
+		out, err := s.runner.Run(ctx, "env", installArgsNoninteractive(localOnly...)...)
+		if err == nil {
+			s.logger.Info("installed optional package from the local offline repo (no network used)", "apt", apt)
+			return out, nil
+		}
+		// 離線包裡沒有(或其他原因)→ 記一筆,往下退回走網路(有網路才可能成功)。
+		s.logger.Info("offline-only install did not succeed; falling back to network sources", "apt", apt, "out", string(out))
+	}
+
+	// 後援:走完整來源(含網路)。給「沒有離線包、但機器有網路」的情況。
+	if out, err := s.runner.Run(ctx, "apt-get", "update"); err != nil {
+		s.logger.Warn("apt-get update reported an error before doctor install (continuing)", "apt", apt, "err", err, "out", string(out))
+	}
+	return s.runner.Run(ctx, "env", installArgsNoninteractive()...)
 }
