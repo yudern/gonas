@@ -40,6 +40,58 @@ func TestGenerateSnapraidConfig(t *testing.T) {
 	}
 }
 
+// 第六十輪回歸(使用者實機根因):不管資料碟以什麼順序傳進來,產出的
+// snapraid.conf 的 data 行(dN↔掛載點對應)都必須一模一樣。這正是「重存
+// 設定時 lsblk 裝置節點順序變了 → d1/d2 顛倒 → snapraid 報 UUID 互換」的修法。
+func TestGenerateSnapraidConfig_DataDiskOrderIsStable(t *testing.T) {
+	base := PoolConfig{
+		Name:         "tank",
+		ParityDisks:  []string{"/mnt/parity1"},
+		MountPoint:   "/mnt/tank",
+		ContentFiles: []string{"/mnt/disk1", "/mnt/parity1"},
+	}
+	inOrder := base
+	inOrder.DataDisks = []string{"/mnt/disk1", "/mnt/disk2", "/mnt/disk3"}
+	reversed := base
+	reversed.DataDisks = []string{"/mnt/disk3", "/mnt/disk1", "/mnt/disk2"}
+
+	outA, err := GenerateSnapraidConfig(inOrder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outB, err := GenerateSnapraidConfig(reversed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outA != outB {
+		t.Errorf("expected identical snapraid.conf regardless of data-disk input order.\n--- in-order ---\n%s\n--- reversed ---\n%s", outA, outB)
+	}
+	// 而且穩定順序就是自然排序:d1=disk1, d2=disk2, d3=disk3。
+	for _, want := range []string{"data d1 /mnt/disk1", "data d2 /mnt/disk2", "data d3 /mnt/disk3"} {
+		if !strings.Contains(outA, want) {
+			t.Errorf("expected stable output to contain %q, got:\n%s", want, outA)
+		}
+	}
+}
+
+func TestNaturalLess(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"/mnt/disk2", "/mnt/disk10", true}, // 2 < 10(自然排序,不是字典序)
+		{"/mnt/disk10", "/mnt/disk2", false},
+		{"/mnt/disk1", "/mnt/disk2", true},
+		{"/mnt/a", "/mnt/b", true},
+		{"/mnt/disk2", "/mnt/disk2", false},
+	}
+	for _, c := range cases {
+		if got := naturalLess(c.a, c.b); got != c.want {
+			t.Errorf("naturalLess(%q,%q)=%v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestGenerateSnapraidConfig_RejectsInvalidPool(t *testing.T) {
 	bad := PoolConfig{Name: "broken"} // 沒有 data/parity disk
 	if _, err := GenerateSnapraidConfig(bad); err == nil {
