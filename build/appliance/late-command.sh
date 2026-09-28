@@ -455,6 +455,10 @@ OFFLINE_DEBS_SRC="$GONAS_DIR/debs"
 OFFLINE_DEBS_DEST=/var/lib/gonas/debs
 if [ -d "$OFFLINE_DEBS_SRC" ] && [ -f "$OFFLINE_DEBS_SRC/Packages" ]; then
     if mkdir -p "$OFFLINE_DEBS_DEST" && cp -a "$OFFLINE_DEBS_SRC/." "$OFFLINE_DEBS_DEST/"; then
+        # 讓 apt 的沙盒使用者 _apt 也讀得到(否則 apt 會印一行囉嗦的
+        # 「Download is performed unsandboxed as root … Permission denied」提示
+        # ——那只是 Notice、apt 會改用 root 讀、安裝照樣成功,但清掉比較乾淨)。
+        chmod -R a+rX "$OFFLINE_DEBS_DEST" 2>/dev/null || true
         _deb_n="$(find "$OFFLINE_DEBS_DEST" -name '*.deb' 2>/dev/null | grep -c . || echo 0)"
         log "copied $_deb_n bundled offline .deb(s) to $OFFLINE_DEBS_DEST"
         if printf 'deb [trusted=yes] file://%s ./\n' "$OFFLINE_DEBS_DEST" > /etc/apt/sources.list.d/gonas-offline.list 2>/dev/null; then
