@@ -160,3 +160,118 @@ func TestRunSnapraid_DiffNonExitErrorIsStillWrapped(t *testing.T) {
 		t.Errorf("expected wrapped error to satisfy errors.Is(err, errBoom), got: %v", err)
 	}
 }
+
+// argRecordingRunner 記錄每一次呼叫的完整參數,並可依「這次參數含不含
+// --force-uuid」回不同結果——用來驗證 RunSnapraidSync 的 UUID 自動重試。
+type argRecordingRunner struct {
+	calls    [][]string
+	plainOut []byte
+	plainErr error
+	forceOut []byte
+	forceErr error
+}
+
+func (r *argRecordingRunner) has(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *argRecordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, args)
+	if r.has(args, "--force-uuid") {
+		return r.forceOut, r.forceErr
+	}
+	return r.plainOut, r.plainErr
+}
+func (r *argRecordingRunner) RunWithStdin(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+	return r.Run(ctx, name, args...)
+}
+
+// 一般情況:sync 一次成功,不該用到 --force-uuid。
+func TestRunSnapraidSync_SucceedsWithoutForce(t *testing.T) {
+	r := &argRecordingRunner{plainOut: []byte("Everything OK\n")}
+	out, forced, err := RunSnapraidSync(context.Background(), r, "/tmp/snapraid.conf")
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if forced {
+		t.Error("did not expect --force-uuid on a clean sync")
+	}
+	if string(out) != "Everything OK\n" {
+		t.Errorf("unexpected output %q", out)
+	}
+	if len(r.calls) != 1 {
+		t.Errorf("expected exactly one snapraid call, got %v", r.calls)
+	}
+}
+
+// 核心回歸:sync 被「太多磁碟 UUID 變了」擋下時,要自動用 --force-uuid 重試
+// 一次並成功,forced 回 true。這正是使用者實機「立即同步校驗」失敗的場景。
+func TestRunSnapraidSync_RetriesWithForceUUIDOnUUIDChange(t *testing.T) {
+	r := &argRecordingRunner{
+		plainOut: []byte("UUID change for disk 'd1'\nToo many disks have changed UUIDs since the last sync\n"),
+		plainErr: errBoom,
+		forceOut: []byte("Everything OK\n"),
+	}
+	out, forced, err := RunSnapraidSync(context.Background(), r, "/tmp/snapraid.conf")
+	if err != nil {
+		t.Fatalf("expected the --force-uuid retry to succeed, got %v", err)
+	}
+	if !forced {
+		t.Error("expected forced=true after a UUID-change retry")
+	}
+	if string(out) != "Everything OK\n" {
+		t.Errorf("expected the retry's output, got %q", out)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("expected two calls (plain then --force-uuid), got %v", r.calls)
+	}
+	if r.has(r.calls[0], "--force-uuid") {
+		t.Error("first call must NOT include --force-uuid")
+	}
+	if !r.has(r.calls[1], "--force-uuid") {
+		t.Error("second (retry) call must include --force-uuid")
+	}
+}
+
+// 不是 UUID 問題的一般失敗:不要亂用 --force-uuid,直接把錯誤回傳。
+func TestRunSnapraidSync_NonUUIDFailureDoesNotForce(t *testing.T) {
+	r := &argRecordingRunner{
+		plainOut: []byte("Disk 'd1' is not empty\n"),
+		plainErr: errBoom,
+	}
+	_, forced, err := RunSnapraidSync(context.Background(), r, "/tmp/snapraid.conf")
+	if err == nil {
+		t.Fatal("expected a non-UUID failure to propagate")
+	}
+	if forced {
+		t.Error("must not use --force-uuid for an unrelated failure")
+	}
+	if len(r.calls) != 1 {
+		t.Errorf("expected exactly one call (no retry), got %v", r.calls)
+	}
+}
+
+// 連 --force-uuid 也失敗時:回報錯誤,但 forced 仍為 true(讓上層知道試過了)。
+func TestRunSnapraidSync_ForceRetryStillFails(t *testing.T) {
+	r := &argRecordingRunner{
+		plainOut: []byte("Too many disks have changed UUIDs\n"),
+		plainErr: errBoom,
+		forceOut: []byte("Data error on disk\n"),
+		forceErr: errBoom,
+	}
+	_, forced, err := RunSnapraidSync(context.Background(), r, "/tmp/snapraid.conf")
+	if err == nil {
+		t.Fatal("expected error when even the --force-uuid retry fails")
+	}
+	if !forced {
+		t.Error("expected forced=true since we did attempt --force-uuid")
+	}
+	if len(r.calls) != 2 {
+		t.Errorf("expected two calls, got %v", r.calls)
+	}
+}

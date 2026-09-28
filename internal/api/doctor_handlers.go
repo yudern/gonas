@@ -18,8 +18,30 @@ var offlineSourceList = "/etc/apt/sources.list.d/gonas-offline.list"
 
 // handleDoctorStatus 回傳每個選用外部套件「裝了沒」,給 Web「系統診斷」頁
 // 顯示 + 判斷要不要在儀表板提示。唯讀,requireAuth 即可。
+//
+// 第六十輪(使用者實機):Docker 這一項要跟儀表板/應用頁「講同一個故事」。
+// doctor.RunPackages() 用 exec.LookPath("docker") 找的是「docker 這個 CLI
+// 執行檔在不在 gonasd 的 PATH 上」;但儀表板跟應用頁判斷 Docker 能不能用,
+// 靠的是 s.docker.Ping()——直接連 /var/run/docker.sock 問 daemon 通不通,
+// 根本不需要 CLI。兩者測的是不同東西,實機上就出現了使用者回報的矛盾:
+// 「儀表板顯示 Docker 可用(daemon 在跑),診斷頁卻顯示未安裝(gonasd 的
+// PATH 上找不到 docker CLI,或 LookPath 當下沒找到)」。對使用者來說「Docker
+// 到底能不能用」才是重點,而 daemon 通得到就代表能用。所以這裡把 daemon ping
+// 的結果疊上去:只要 daemon 通得到,docker 這項一律標成已安裝,讓診斷頁、
+// 儀表板提示、應用頁三個地方對 Docker 的狀態完全一致。ping 只用來「補正成
+// 已安裝」,不會把 LookPath 已判定安裝的反寫成未安裝(daemon 剛好沒啟動、
+// 但 CLI 在,仍算裝了)。
 func (s *Server) handleDoctorStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, doctor.RunPackages())
+	pkgs := doctor.RunPackages()
+	if s.docker != nil && s.docker.Ping(r.Context()) == nil {
+		for i := range pkgs {
+			if pkgs[i].Apt == "docker.io" {
+				pkgs[i].Installed = true
+				pkgs[i].Missing = nil
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, pkgs)
 }
 
 type doctorInstallRequest struct {

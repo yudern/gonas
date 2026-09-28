@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/bng147/gonas/internal/docker"
+	"github.com/bng147/gonas/internal/doctor"
 )
 
 // muxFrame 組出一個 Docker Engine API 多工串流格式的 frame，格式細節見
@@ -58,6 +60,75 @@ func TestHandleContainerLogs(t *testing.T) {
 	}
 	if resp.Logs != "started ok\n" {
 		t.Errorf("unexpected logs: %q", resp.Logs)
+	}
+}
+
+// 第六十輪回歸:只要 docker daemon ping 得到,系統診斷頁的 docker 這項就要
+// 顯示「已安裝」,跟儀表板/應用頁的 Docker 狀態一致——即使測試環境裡
+// exec.LookPath("docker") 找不到 CLI 也一樣(這正是使用者實機「儀表板可用、
+// 診斷頁未安裝」矛盾的修法)。
+func TestHandleDoctorStatus_DockerReconciledWithDaemonPing(t *testing.T) {
+	s := newTestServerWithDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_ping" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor", nil)
+	rec := httptest.NewRecorder()
+	s.handleDoctorStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var pkgs []doctor.PackageStatus
+	if err := json.NewDecoder(rec.Body).Decode(&pkgs); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	found := false
+	for _, p := range pkgs {
+		if p.Apt == "docker.io" {
+			found = true
+			if !p.Installed {
+				t.Errorf("docker.io should be reported installed when the daemon pings OK; got %+v", p)
+			}
+			if len(p.Missing) != 0 {
+				t.Errorf("docker.io should have no missing commands when daemon pings OK; got %v", p.Missing)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a docker.io entry in the doctor status")
+	}
+}
+
+// daemon ping 失敗時不做補正:docker 這項照 exec.LookPath 的結果走(測試環境
+// 通常沒裝 docker CLI → 未安裝),不會被錯誤地標成已安裝。
+func TestHandleDoctorStatus_DockerNotReconciledWhenPingFails(t *testing.T) {
+	s := newTestServerWithDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/doctor", nil)
+	rec := httptest.NewRecorder()
+	s.handleDoctorStatus(rec, req)
+
+	var pkgs []doctor.PackageStatus
+	if err := json.NewDecoder(rec.Body).Decode(&pkgs); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	for _, p := range pkgs {
+		if p.Apt == "docker.io" && p.Installed {
+			// 只有在這台 CI 機器剛好真的裝了 docker CLI 時才可能為 true;
+			// 沙盒環境沒有,所以這裡預期是 false。若哪天 CI 裝了 docker,
+			// 這個斷言要放寬——但目前用來確認「ping 失敗不會亂補正」。
+			if _, err := exec.LookPath("docker"); err != nil {
+				t.Errorf("docker.io must not be marked installed when neither the CLI exists nor the daemon pings; got %+v", p)
+			}
+		}
 	}
 }
 

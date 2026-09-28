@@ -162,11 +162,17 @@ func (s *Server) handleStorageArraySync(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.logger.Info("parity sync starting", "pool", pool.Name)
-		if out, err := storage.RunSnapraid(ctx, s.runner, s.snapraidCfgPath, storage.SnapraidSync); err != nil {
+		// 用 RunSnapraidSync(而非通用的 RunSnapraid):它會在遇到「太多磁碟
+		// UUID 變了」時自動用 --force-uuid 重試一次。第六十輪使用者實機:磁碟
+		// 重掛/換裝置節點後 sync 被 snapraid 的 UUID 檢查擋下,UI 上又沒有強制的
+		// 出口,同位保護整個卡住;在 daemon 端自動處理(理由見 looksLikeUUIDChanged)。
+		if out, usedForce, err := storage.RunSnapraidSync(ctx, s.runner, s.snapraidCfgPath); err != nil {
 			msg := err.Error()
 			s.paritySyncErr.Store(&msg)
 			s.logger.Error("parity sync failed", "err", err, "out", string(out))
 			return
+		} else if usedForce {
+			s.logger.Warn("parity sync needed --force-uuid (disks were remounted / device nodes changed; this is expected on GoNAS-managed pools)", "pool", pool.Name)
 		}
 		now := time.Now()
 		if err := s.store.Update(func(st *state.State) error {
