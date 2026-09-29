@@ -62,13 +62,27 @@ func NewClient(socketPath string, opts ...Option) *Client {
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			d := net.Dialer{}
+			// 連線本身要快速失敗(socket 不在/dockerd 沒跑),但「連上之後
+			// 傳多久」不在這裡限制——見下面為何不設 http.Client.Timeout。
+			d := net.Dialer{Timeout: 10 * time.Second}
 			return d.DialContext(ctx, "unix", socketPath)
 		},
+		// 「送出請求後、拿到回應標頭前」的上限:dockerd 活著但卡住時能快速
+		// 報錯,又不會影響拿到標頭之後的長時間 body 串流(拉映像/看 log)。
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
 	c := &Client{
-		httpClient: &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		// 第六十輪(QA+產品覆核 P0):這裡原本設了 http.Client.Timeout=30s。
+		// 但 http.Client.Timeout 是「涵蓋整個請求,包含讀 response body」的總
+		// 上限——它會把 PullImage(串流下載整個映像,動輒數百 MB、要好幾分鐘)
+		// 跟 ContainerLogs(可能持續串流)在 30 秒後硬砍掉,導致「應用商店裝
+		// 稍大的映像(WordPress/mysql/code-server)必定失敗」這個最核心的 bug。
+		// 改成不設總上限,改由「每次呼叫傳進來的 context deadline」控制個別操作
+		// 該等多久(ping 用請求 context、pull 用很寬鬆的背景 context),再靠上面
+		// transport 的 DialTimeout / ResponseHeaderTimeout 擋住「socket 不通/
+		// daemon 卡死」這兩種真正該快速失敗的情況。
+		httpClient: &http.Client{Transport: transport},
 		baseURL:    "http://docker",
 	}
 	for _, opt := range opts {

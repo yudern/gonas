@@ -40,6 +40,8 @@ var (
 	errAppInstallNeedsExactlyOne = errors.New("provide exactly one of templateId or template")
 	errAppIDConflictsWithCatalog = errors.New("this id is already used by a built-in catalog template")
 	errAppIDAlreadyInstalled     = errors.New("an app with this id is already installed")
+	// 第六十輪 QA 覆核:同一時間只允許一個 App 安裝/解除安裝在跑。
+	errAppInstallInProgress = errors.New("an app install is already in progress, please wait for it to finish")
 
 	// Phase 9：登入節流、panic 復原共用的 sentinel 錯誤。
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")

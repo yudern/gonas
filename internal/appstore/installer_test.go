@@ -21,6 +21,7 @@ type fakeDockerDaemon struct {
 	networks   map[string]string // id -> name
 	nextID     int
 	failImage  string // 若某個 create 請求的 Image 等於這個值，故意回傳錯誤，用來測試 rollback
+	crashImage string // 若某容器的 Image 等於這個值,start 後它「立刻退出」,用來測試裝後存活檢查
 }
 
 type fakeContainer struct {
@@ -29,6 +30,7 @@ type fakeContainer struct {
 	image   string
 	labels  map[string]string
 	running bool
+	exited  bool // start 後「立刻退出」(crashImage)
 }
 
 func newFakeDockerDaemon() *fakeDockerDaemon {
@@ -126,10 +128,36 @@ func (f *fakeDockerDaemon) handler() http.Handler {
 	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		if c, ok := f.containers[r.PathValue("id")]; ok {
-			c.running = true
+			if f.crashImage != "" && c.image == f.crashImage {
+				c.running = false
+				c.exited = true // 模擬「開機即崩潰」
+			} else {
+				c.running = true
+			}
 		}
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		c, ok := f.containers[r.PathValue("id")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "no such container"})
+			return
+		}
+		status := "running"
+		exit := 0
+		if c.exited {
+			status = "exited"
+			exit = 1
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":    c.id,
+			"State": map[string]any{"Status": status, "Running": c.running, "ExitCode": exit},
+		})
 	})
 
 	mux.HandleFunc("POST /containers/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +373,34 @@ func TestInstall_EnsureHostDirFailureRollsBack(t *testing.T) {
 	daemon.mu.Unlock()
 	if n != 0 {
 		t.Errorf("expected no containers left after rollback, got %d", n)
+	}
+}
+
+// 第六十輪:裝好後若容器「開機即崩潰」,Install 要判定失敗並回滾,而不是
+// 無條件回報成功。
+func TestInstall_FailsAndRollsBackWhenContainerCrashesOnStart(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	daemon.crashImage = "portainer/portainer-ce:latest"
+	client := newFakeClient(t, daemon)
+
+	_, err := Install(context.Background(), client, InstallRequest{
+		Template: AppTemplate{
+			ID:   "portainer",
+			Name: "Portainer",
+			Services: []ServiceTemplate{
+				{Name: "app", Image: "portainer/portainer-ce:latest"},
+			},
+		},
+		// StartGracePeriod 0:不等待,直接 Inspect(fake 已把它標成 exited)。
+	})
+	if err == nil {
+		t.Fatal("expected install to fail when the container exits right after start")
+	}
+	daemon.mu.Lock()
+	n := len(daemon.containers)
+	daemon.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected the crashed container to be rolled back, got %d left", n)
 	}
 }
 

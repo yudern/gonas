@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bng147/gonas/internal/docker"
@@ -63,9 +64,20 @@ type containerLogsResponse struct {
 // SSH 進機器打 `docker logs`。tail 查詢參數留空預設抓全部,對長期執行的
 // 容器(例如資料庫)建議前端固定帶一個上限(例如 500 行),避免一次
 // 抓回過大的內容。
+// maxContainerLogTail 是 log 端點願意回傳的最大行數。第六十輪 QA 覆核:
+// tail 留空時 docker 會回「全部」,demuxStream 又把整段讀進記憶體,對一個
+// 話很多的長命容器直接呼叫(不帶 tail)可能把記憶體撐爆。前端一向帶
+// tail=200,但 API 不能只靠前端自律——這裡把 tail 夾在一個上限內,空值或
+// 超過上限都收斂成 maxContainerLogTail。
+const maxContainerLogTail = 2000
+
 func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	tail := strings.TrimSpace(r.URL.Query().Get("tail"))
+	// 夾住 tail:空值、非數字、超過上限,一律用上限,避免無界讀取。
+	if n, err := strconv.Atoi(tail); err != nil || n <= 0 || n > maxContainerLogTail {
+		tail = strconv.Itoa(maxContainerLogTail)
+	}
 	logs, err := s.docker.ContainerLogs(r.Context(), id, docker.ContainerLogsOptions{Tail: tail, Timestamps: true})
 	if err != nil {
 		s.logger.Error("fetching container logs failed", "err", err, "containerId", id)

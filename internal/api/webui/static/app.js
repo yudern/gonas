@@ -407,11 +407,11 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
   const checkedLine = update.checkedAt
     ? `<p style="color:var(--text-dim);font-size:12.5px;margin:6px 0 0">${esc(t("update.lastChecked", { date: formatDateTime(update.checkedAt) }))}</p>`
     : "";
-  const checkErrorMsg = update.checkError ? msg("error", update.checkError) : "";
+  const checkErrorMsg = update.checkError ? msg("error", translateError(update.checkError)) : "";
   const notesBlock = update.updateAvailable && update.notes
     ? `<p style="color:var(--text-dim);font-size:12.5px;margin:8px 0 0;white-space:pre-wrap">${esc(update.notes)}</p>`
     : "";
-  const applyErrorMsg = update.applyError ? msg("error", t("update.applyFailed", { reason: update.applyError })) : "";
+  const applyErrorMsg = update.applyError ? msg("error", t("update.applyFailed", { reason: translateError(update.applyError) })) : "";
   const applyInProgressMsg = update.applyInProgress ? msg("warn", t("update.applyInProgress")) : "";
 
   // 「立即檢查」「套用更新」都是 requireAdmin 的動作,RoleViewer 只看得
@@ -1050,7 +1050,12 @@ async function renderStorage(el) {
   `;
 
   el.querySelector("#start-array").addEventListener("click", () => runAction(api.startArray, renderStorage, el));
-  el.querySelector("#stop-array").addEventListener("click", () => runAction(api.stopArray, renderStorage, el));
+  el.querySelector("#stop-array").addEventListener("click", () => {
+    // 停止阵列会卸载存储池,所有共享和运行中的应用都会失去存储 —— 高风险,
+    // 跟其他破坏性操作一样先确认(第六十轮 UI 复审)。
+    if (!confirm(t("storage.stopArrayConfirm"))) return;
+    runAction(api.stopArray, renderStorage, el);
+  });
   const syncBtn = el.querySelector("#sync-parity");
   if (syncBtn) {
     syncBtn.addEventListener("click", async () => {
@@ -1671,7 +1676,13 @@ async function renderApps(el) {
   // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
   // 存下的 containerIds 一致,直接對得起來。
   const stateById = {};
-  (containers || []).forEach((c) => { stateById[c.id] = c.state; });
+  const portById = {};
+  (containers || []).forEach((c) => {
+    stateById[c.id] = c.state;
+    // 找出这个容器对外发布的第一个 TCP 端口,用来生成「打开」链接。
+    const pub = (c.ports || []).find((p) => p.publicPort && (p.type === "tcp" || !p.type));
+    if (pub) portById[c.id] = pub.publicPort;
+  });
   // 預填 appdata 路徑用的基準:優先用陣列掛載點,沒有就退回 /mnt/tank。
   const appdataBase = (arrayStatus && arrayStatus.mountPoint) || "/mnt/tank";
 
@@ -1698,9 +1709,14 @@ async function renderApps(el) {
               const statePill = st
                 ? `<span class="pill ${running ? "ok" : "danger"}">${esc(running ? t("apps.stateRunning") : t("apps.stateStopped"))}</span>`
                 : `<span class="pill neutral">${esc(t("apps.stateUnknown"))}</span>`;
+              const port = portById[id];
+              const openLink = running && port
+                ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>`
+                : "";
               return `
               <div class="service-row">
                 <span>${esc(svc)}: ${esc(id.slice(0, 12))} ${statePill}</span>
+                ${openLink}
                 ${running
                   ? `<button type="button" data-ctr-stop="${esc(id)}">${esc(t("apps.stop"))}</button>
                      <button type="button" data-ctr-restart="${esc(id)}">${esc(t("apps.restart"))}</button>`

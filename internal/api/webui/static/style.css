@@ -326,8 +326,13 @@ textarea:focus-visible {
 .app-card h3 { margin: 0 0 4px; font-size: 14px; }
 .app-card p { margin: 0; color: var(--text-dim); font-size: 12.5px; max-width: 60ch; }
 .app-card .services { margin-top: 10px; }
-.service-row { display: flex; align-items: center; gap: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-faint); padding: 4px 0; }
-.service-row button { font-size: 11px; padding: 3px 8px; }
+/* flex-wrap:一行现在可能有 状态灯 + 打开 + 停止 + 重启 + 日志 + 执行,
+   手机窄屏必须能换行,否则整页横向溢出(第六十轮 UI 复审 P0)。 */
+.service-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-faint); padding: 4px 0; }
+.service-row button, .service-row .btnlink-sm { font-size: 11px; padding: 5px 10px; min-height: 30px; box-sizing: border-box; }
+/* btnlink-sm:服务行里「打开」应用网页的连结型小按钮。 */
+a.btnlink-sm { display: inline-flex; align-items: center; text-decoration: none; border-radius: 6px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); font-weight: 600; }
+a.btnlink-sm:hover { filter: brightness(1.05); }
 .service-panel { margin: 6px 0 10px; padding: 10px; border-radius: 8px; background: var(--surface-2); }
 .service-panel .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12.5px; }
 .service-panel .hint { margin: 0 0 8px; }

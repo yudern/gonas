@@ -242,6 +242,11 @@ type Server struct {
 	// 讓同一時間只跑一個安裝,後到的請求直接回 409,而不是讓它去撞 dpkg 鎖。
 	doctorInstalling atomic.Bool
 
+	// appInstalling 是「應用商店安裝/解除安裝」的 single-flight 旗標(第六十輪
+	// QA 覆核):安裝要拉映像、建容器,可能跑好幾分鐘,同一時間只允許一個,
+	// 避免兩個安裝並發撞容器命名/網路、或雙重寫入 InstalledApps。
+	appInstalling atomic.Bool
+
 	// paritySyncing 是「SnapRAID 同位同步/校驗」的 single-flight 旗標(第五十八
 	// 輪全鏈路覆核 P1)。snapraid sync 在大陣列上可能跑很久,而且會寫同位碟,
 	// 同一時間只能有一個在跑;用一個 atomic 旗標讓同步在背景 goroutine 執行,

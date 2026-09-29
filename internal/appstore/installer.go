@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bng147/gonas/internal/docker"
 )
@@ -32,6 +33,12 @@ type InstallRequest struct {
 	// 失敗、回滾又沒清乾淨」時完全無跡可尋;呼叫端(internal/api)接上
 	// 自己的 logger 就能記下來。
 	OnRollbackError func(serviceName string, err error)
+	// StartGracePeriod 是「啟動容器後、回頭確認它還活著」之前等待的時間。
+	// 第六十輪(QA 覆核):原本 Install 呼叫 StartContainer 後就無條件回報成功,
+	// 一個因設定錯誤(env 缺、image entrypoint 掛)開機即崩潰的容器也會被當成
+	// 「安裝成功」,UI 顯示成功但東西根本沒起來。裝好後等一小段再 Inspect 一次
+	// 抓「馬上就崩掉」的情況。0 代表不等待、直接 Inspect(測試用)。
+	StartGracePeriod time.Duration
 	// EnsureHostDir 在建立容器前,確保每個 bind 掛載的「宿主端目錄」存在。
 	// 第六十輪(使用者需求:路徑不存在時直接自動建立再安裝)——原本若使用者
 	// 填的 appdata 路徑還不存在,就只能靠 docker daemon 自動建(建出來是
@@ -176,6 +183,23 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		if err := client.StartContainer(ctx, id); err != nil {
 			rollback()
 			return InstallResult{}, fmt.Errorf("service %q: starting container: %w", svc.Name, err)
+		}
+
+		// 第六十輪:裝好後確認容器沒有「開機即崩潰」。best-effort——Inspect 失敗
+		// (連不到/舊 daemon 不支援)不擋安裝(避免把「其實裝好了、只是查不到」
+		// 誤判成失敗);只有「Inspect 成功、而且明確看到它已經退出」才視為安裝
+		// 失敗並回滾,把 exit code 一併回報,讓使用者知道是這個容器起不來。
+		if req.StartGracePeriod > 0 {
+			select {
+			case <-time.After(req.StartGracePeriod):
+			case <-ctx.Done():
+			}
+		}
+		if insp, err := client.InspectContainer(ctx, id); err == nil {
+			if !insp.State.Running && insp.State.Status == "exited" {
+				rollback()
+				return InstallResult{}, fmt.Errorf("service %q: container exited right after starting (exit code %d) — check its configuration/logs", svc.Name, insp.State.ExitCode)
+			}
 		}
 	}
 

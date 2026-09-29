@@ -167,7 +167,7 @@ func normalizeRestartPolicy(p string) string {
 
 // StartContainer 啟動一個已建立的容器。
 func (c *Client) StartContainer(ctx context.Context, id string) error {
-	if err := c.doJSON(ctx, "POST", "/containers/"+id+"/start", nil, nil); err != nil {
+	if err := c.doJSON(ctx, "POST", "/containers/"+url.PathEscape(id)+"/start", nil, nil); err != nil {
 		return fmt.Errorf("starting container %s: %w", id, err)
 	}
 	return nil
@@ -176,7 +176,7 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 // StopContainer 停止一個執行中的容器，timeoutSec 是給容器優雅關閉的時間，
 // 超過就強制 kill(對應 `docker stop -t`)。
 func (c *Client) StopContainer(ctx context.Context, id string, timeoutSec int) error {
-	path := fmt.Sprintf("/containers/%s/stop?t=%d", id, timeoutSec)
+	path := fmt.Sprintf("/containers/%s/stop?t=%d", url.PathEscape(id), timeoutSec)
 	if err := c.doJSON(ctx, "POST", path, nil, nil); err != nil {
 		return fmt.Errorf("stopping container %s: %w", id, err)
 	}
@@ -188,7 +188,7 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSec int) e
 // 或容器卡住了想重來一次」很常用,所以 Web「應用程式」頁面每個服務都有這個
 // 按鈕。
 func (c *Client) RestartContainer(ctx context.Context, id string, timeoutSec int) error {
-	path := fmt.Sprintf("/containers/%s/restart?t=%d", id, timeoutSec)
+	path := fmt.Sprintf("/containers/%s/restart?t=%d", url.PathEscape(id), timeoutSec)
 	if err := c.doJSON(ctx, "POST", path, nil, nil); err != nil {
 		return fmt.Errorf("restarting container %s: %w", id, err)
 	}
@@ -198,7 +198,7 @@ func (c *Client) RestartContainer(ctx context.Context, id string, timeoutSec int
 // RemoveContainer 刪除一個容器。force=true 時即使還在跑也會被強制移除,
 // App 商店的「解除安裝」會需要，但 API 呼叫端要清楚知道自己要求的是強制移除。
 func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) error {
-	path := "/containers/" + id
+	path := "/containers/" + url.PathEscape(id)
 	if force {
 		path += "?force=1"
 	}
@@ -224,7 +224,7 @@ type ContainerInspect struct {
 // InspectContainer 查詢單一容器的詳細狀態。
 func (c *Client) InspectContainer(ctx context.Context, id string) (ContainerInspect, error) {
 	var out ContainerInspect
-	if err := c.doJSON(ctx, "GET", "/containers/"+id+"/json", nil, &out); err != nil {
+	if err := c.doJSON(ctx, "GET", "/containers/"+url.PathEscape(id)+"/json", nil, &out); err != nil {
 		return ContainerInspect{}, fmt.Errorf("inspecting container %s: %w", id, err)
 	}
 	return out, nil

@@ -64,6 +64,23 @@ func TestResolveInstallTemplate_UnknownCatalogID(t *testing.T) {
 	}
 }
 
+// 第六十輪 QA 覆核:重複安裝同一個目錄 App 要提前擋成 409(errAppIDAlreadyInstalled),
+// 而不是一路跑到 docker 才以「容器名稱已存在」爆 500。
+func TestResolveInstallTemplate_CatalogAlreadyInstalled(t *testing.T) {
+	s := newTestServer(t)
+	want := builtinCatalog[0]
+	if err := s.store.Update(func(st *state.State) error {
+		st.InstalledApps = append(st.InstalledApps, state.InstalledApp{Template: want})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.resolveInstallTemplate(installAppRequest{TemplateID: want.ID})
+	if err != errAppIDAlreadyInstalled {
+		t.Errorf("got err %v, want errAppIDAlreadyInstalled", err)
+	}
+}
+
 func TestResolveInstallTemplate_CustomTemplate(t *testing.T) {
 	s := newTestServer(t)
 	tmpl := minimalTemplate("my-custom-app")

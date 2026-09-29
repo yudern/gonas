@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/bng147/gonas/internal/appstore"
 	"github.com/bng147/gonas/internal/state"
@@ -46,6 +48,14 @@ func (s *Server) resolveInstallTemplate(req installAppRequest) (appstore.AppTemp
 	if hasID {
 		for i := range builtinCatalog {
 			if builtinCatalog[i].ID == req.TemplateID {
+				// 第六十輪 QA 覆核:目錄範本也要擋「已經裝過同一個」——原本只對
+				// 自訂範本檢查,結果重複安裝目錄 App(或手殘點兩下)會一路跑到
+				// docker 才以「容器名稱已存在」爆成 500。提前回可讀的 409。
+				for _, installed := range s.store.Snapshot().InstalledApps {
+					if installed.Template.ID == builtinCatalog[i].ID {
+						return appstore.AppTemplate{}, errAppIDAlreadyInstalled
+					}
+				}
 				return builtinCatalog[i], nil
 			}
 		}
@@ -84,9 +94,25 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := appstore.Install(r.Context(), s.docker, appstore.InstallRequest{
-		Template:  tmpl,
-		Overrides: req.Overrides,
+	// single-flight(第六十輪 QA 覆核):安裝要拉映像、建容器,可能好幾分鐘,
+	// 同一時間只允許一個,避免並發撞容器命名/網路或雙重寫入 InstalledApps。
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errAppInstallInProgress)
+		return
+	}
+	defer s.appInstalling.Store(false)
+
+	// 跟 HTTP 請求脫鉤的 context(第六十輪 QA 覆核):拉映像可能好幾分鐘,若綁
+	// r.Context(),使用者一關瀏覽器/連線一斷,安裝會被砍在半路,而且連內部的
+	// rollback 清理都會因為 context 已取消而失敗,留下半裝的容器/網路。給獨立、
+	// 30 分鐘上限的 context 讓它跑完;前端顯示「安裝中,可能需要幾分鐘」。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	result, err := appstore.Install(ctx, s.docker, appstore.InstallRequest{
+		Template:         tmpl,
+		Overrides:        req.Overrides,
+		StartGracePeriod: 2 * time.Second,
 		OnRollbackError: func(svc string, rbErr error) {
 			// 安裝失敗後的回滾清理若又出錯,記下來——不然會留下沒清乾淨的
 			// 容器/網路卻無跡可尋(第三十四輪)。
@@ -115,6 +141,14 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAppstoreUninstall(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// 跟安裝共用同一個 single-flight 旗標(第六十輪):不要讓解除安裝跟安裝
+	// (或另一個解除安裝)同時動 docker 資源與 InstalledApps。
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errAppInstallInProgress)
+		return
+	}
+	defer s.appInstalling.Store(false)
 
 	// 第五十八輪 QA 覆核(#6):先確認這個 app 真的裝過,不然回 404——跟
 	// shares/users/backup jobs/peers 的刪除行為一致(原本對不存在的 id 也

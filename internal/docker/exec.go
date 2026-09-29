@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 )
 
 // execCreateRequest 對應 `POST /containers/{id}/exec` 的請求 body,刻意只
@@ -61,7 +62,7 @@ func (c *Client) ExecInContainer(ctx context.Context, containerID string, cmd []
 
 	var created execCreateResponse
 	createReq := execCreateRequest{AttachStdout: true, AttachStderr: true, Cmd: cmd}
-	if err := c.doJSON(ctx, "POST", "/containers/"+containerID+"/exec", createReq, &created); err != nil {
+	if err := c.doJSON(ctx, "POST", "/containers/"+url.PathEscape(containerID)+"/exec", createReq, &created); err != nil {
 		return ExecResult{}, fmt.Errorf("creating exec for container %s: %w", containerID, err)
 	}
 
