@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -15,6 +16,19 @@ import (
 // 存在就代表這台機器內建了一包可離線安裝的選用套件(見 build-iso.sh 4.8)。
 // 用 var 而非 const,方便測試指到暫存檔驗證離線優先的行為。
 var offlineSourceList = "/etc/apt/sources.list.d/gonas-offline.list"
+
+// mirrorReachable 快速探測「這台機器能不能連到 Debian 鏡像」,用來決定離線
+// 安裝失敗後要不要退回走網路(見 installOptionalPackage)。用 var 讓測試能覆寫,
+// 避免測試真的去撥外網。3 秒逾時:通就是通,擋掉離線機器空等好幾分鐘的情況。
+var mirrorReachable = func(ctx context.Context) bool {
+	d := net.Dialer{Timeout: 3 * time.Second}
+	c, err := d.DialContext(ctx, "tcp", "deb.debian.org:443")
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
 
 // handleDoctorStatus 回傳每個選用外部套件「裝了沒」,給 Web「系統診斷」頁
 // 顯示 + 判斷要不要在儀表板提示。唯讀,requireAuth 即可。
@@ -191,8 +205,18 @@ func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte
 			s.logger.Info("installed optional package from the local offline repo (no network used)", "apt", apt)
 			return out, nil
 		}
-		// 離線包裡沒有(或其他原因)→ 記一筆,往下退回走網路(有網路才可能成功)。
-		s.logger.Info("offline-only install did not succeed; falling back to network sources", "apt", apt, "out", string(out))
+		// 離線包裡沒有(或其他原因)→ 只有在「真的連得到鏡像」時才退回走網路。
+		// 第六十輪(建置/運維覆核):這台機器內建了離線來源 = 它是離線 appliance,
+		// 若又連不到鏡像,原本的網路退回會卡在 `apt-get update` 連 deb.debian.org
+		// 直到 10 分鐘 context 逾時才回錯——對使用者像是「按了沒反應」。先用一個
+		// 3 秒的探測判斷鏡像通不通:不通就直接回「找不到套件(可能離線)」的可
+		// 行動錯誤,不要空等;通的話才走完整網路退回(對應「機器有網路、要裝
+		// 離線包裡沒有的套件」)。
+		if !mirrorReachable(ctx) {
+			s.logger.Info("offline-only install failed and the mirror is unreachable; not hanging on a network fallback", "apt", apt, "out", string(out))
+			return out, errPackageUnavailable
+		}
+		s.logger.Info("offline-only install did not succeed; mirror looks reachable, falling back to network sources", "apt", apt, "out", string(out))
 	}
 
 	// 後援:走完整來源(含網路)。給「沒有離線包、但機器有網路」的情況。

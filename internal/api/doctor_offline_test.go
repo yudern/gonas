@@ -94,6 +94,12 @@ func TestInstallOptionalPackage_FallsBackToNetwork(t *testing.T) {
 	offlineSourceList = f
 	defer func() { offlineSourceList = old }()
 
+	// 第六十輪:離線失敗後只有「鏡像連得到」才走網路退回。測試裡強制探測回 true,
+	// 才不會真的去撥外網(沙盒也撥不到),讓「有網路→退回」這條路徑被測到。
+	oldProbe := mirrorReachable
+	mirrorReachable = func(ctx context.Context) bool { return true }
+	defer func() { mirrorReachable = oldProbe }()
+
 	// 讓「本機限定的 install」失敗(命令列含 Dir::Etc::sourcelist 且含 install),
 	// 網路那條照常成功。
 	rr := &recordingRunner{
@@ -109,6 +115,40 @@ func TestInstallOptionalPackage_FallsBackToNetwork(t *testing.T) {
 	}
 	if !rr.sawContaining("apt-get update") {
 		t.Errorf("expected the network fallback to run a full 'apt-get update'; calls=%v", rr.calls)
+	}
+}
+
+// 第六十輪:有離線來源、離線裝不起來、而且鏡像連不到(離線 appliance)時,
+// 不要空等網路——直接回可行動錯誤,且「絕不」跑會連網的 apt-get update。
+func TestInstallOptionalPackage_OfflineAndMirrorUnreachableFailsFast(t *testing.T) {
+	s := newTestServer(t)
+	f := filepath.Join(t.TempDir(), "gonas-offline.list")
+	if err := os.WriteFile(f, []byte("deb [trusted=yes] file:///var/lib/gonas/debs ./\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := offlineSourceList
+	offlineSourceList = f
+	defer func() { offlineSourceList = old }()
+
+	oldProbe := mirrorReachable
+	mirrorReachable = func(ctx context.Context) bool { return false } // 鏡像不通
+	defer func() { mirrorReachable = oldProbe }()
+
+	// 本機限定安裝失敗(離線包沒這個套件)。
+	rr := &recordingRunner{
+		failWith: errors.New("E: Unable to locate package foo"),
+		failIf: func(cmd string) bool {
+			return strings.Contains(cmd, "Dir::Etc::sourcelist=") && strings.Contains(cmd, "install")
+		},
+	}
+	s.runner = rr
+	if _, err := s.installOptionalPackage(context.Background(), "mergerfs"); err == nil {
+		t.Fatal("expected an error when offline install fails and the mirror is unreachable")
+	}
+	for _, c := range rr.calls {
+		if c == "apt-get update" {
+			t.Errorf("must NOT run the network 'apt-get update' when the mirror is unreachable; calls=%v", rr.calls)
+		}
 	}
 }
 

@@ -444,6 +444,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/storage/array/start", s.requireAdmin(s.handleStorageArrayStart))
 	mux.HandleFunc("POST /api/v1/storage/array/stop", s.requireAdmin(s.handleStorageArrayStop))
 	mux.HandleFunc("POST /api/v1/storage/array/sync", s.requireAdmin(s.handleStorageArraySync))
+	mux.HandleFunc("POST /api/v1/storage/array/scrub", s.requireAdmin(s.handleStorageArrayScrub))
 
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))

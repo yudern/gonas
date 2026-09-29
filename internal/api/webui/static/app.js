@@ -1001,6 +1001,7 @@ async function renderStorage(el) {
         <button id="start-array" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.startArray"))}</button>
         <button id="stop-array" class="secondary" ${arrayStatus.state === "unconfigured" ? "disabled" : ""}>${esc(t("storage.stopArray"))}</button>
         ${arrayStatus.hasParity ? `<button id="sync-parity" class="secondary" ${arrayStatus.paritySyncing ? "disabled" : ""}>${esc(arrayStatus.paritySyncing ? t("storage.paritySyncing") : t("storage.syncParity"))}</button>` : ""}
+        ${arrayStatus.hasParity ? `<button id="scrub-parity" class="secondary" ${arrayStatus.paritySyncing ? "disabled" : ""}>${esc(t("storage.scrubParity"))}</button>` : ""}
       </div>
     </div>
 
@@ -1067,6 +1068,21 @@ async function renderStorage(el) {
       } catch (err) {
         el.querySelector("#pool-msg")?.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
         syncBtn.disabled = false;
+      }
+    });
+  }
+
+  const scrubBtn = el.querySelector("#scrub-parity");
+  if (scrubBtn) {
+    scrubBtn.addEventListener("click", async () => {
+      if (!confirm(t("storage.scrubConfirm"))) return;
+      scrubBtn.disabled = true;
+      try {
+        await api.scrubArray();
+        await renderStorage(el);
+      } catch (err) {
+        el.querySelector("#pool-msg")?.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+        scrubBtn.disabled = false;
       }
     });
   }

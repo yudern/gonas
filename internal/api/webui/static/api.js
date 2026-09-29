@@ -68,6 +68,7 @@ export const api = {
   startArray: () => request("POST", "/api/v1/storage/array/start"),
   stopArray: () => request("POST", "/api/v1/storage/array/stop"),
   syncArray: () => request("POST", "/api/v1/storage/array/sync"),
+  scrubArray: () => request("POST", "/api/v1/storage/array/scrub"),
 
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
   containers: () => request("GET", "/api/v1/docker/containers"),

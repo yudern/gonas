@@ -194,6 +194,51 @@ func (s *Server) handleStorageArraySync(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "syncing"})
 }
 
+// handleStorageArrayScrub 觸發一次 SnapRAID scrub(重新讀一部分資料、驗證同位
+// 是否吻合,用來及早抓到靜默資料損毀 / bit rot)。第六十輪產品覆核:先前
+// 只開放 sync,scrub 這個「驗證資料完整性」的動作在程式裡有、卻沒有出口。
+// 跟 sync 共用同一個 single-flight 旗標(snapraid 同一時間只能有一個動作在跑),
+// 一樣在背景 goroutine 執行,錯誤透過 paritySyncErr 回報。scrub 不寫
+// ParityLastSync(那代表「上次把目前狀態寫進同位」的時間,是 sync 的語意)。
+func (s *Server) handleStorageArrayScrub(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Snapshot()
+	if snap.Pool == nil {
+		writeError(w, http.StatusBadRequest, errNoPoolConfigured)
+		return
+	}
+	if len(snap.Pool.ParityDisks) == 0 {
+		writeError(w, http.StatusBadRequest, errNoParityDisks)
+		return
+	}
+	if !s.paritySyncing.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errParitySyncInProgress)
+		return
+	}
+	s.paritySyncErr.Store(nil)
+	pool := *snap.Pool
+	go func() {
+		defer s.paritySyncing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+		defer cancel()
+		if err := s.writeSnapraidConfig(pool); err != nil {
+			msg := "writing snapraid.conf: " + err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("parity scrub: could not write snapraid.conf", "err", err)
+			return
+		}
+		s.logger.Info("parity scrub starting", "pool", pool.Name)
+		if out, err := storage.RunSnapraid(ctx, s.runner, s.snapraidCfgPath, storage.SnapraidScrub); err != nil {
+			msg := err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("parity scrub failed", "err", err, "out", string(out))
+			return
+		}
+		s.paritySyncErr.Store(nil)
+		s.logger.Info("parity scrub completed", "pool", pool.Name)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scrubbing"})
+}
+
 // handleStoragePoolSet 建立或取代目前的 pool 設定並持久化。刻意只驗證、
 // 儲存設定,不會連帶啟動陣列 —— 「設定陣列該長什麼樣子」跟「掛載陣列讓它
 // 可以讀寫」是兩個語意不同的動作,呼叫端要另外打 /array/start,理由跟
@@ -205,6 +250,14 @@ func (s *Server) handleStoragePoolSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := pool.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// 第六十輪 QA 覆核:同位同步/校驗進行中時,拒絕改池設定。否則正在跑的
+	// sync goroutine 結束時會把 ParityLastSync 寫成 now,但那是「舊池」的同步,
+	// 卻會讓剛換上的「新池」被誤標成「已受保護」(其實從沒同步過)。
+	if s.paritySyncing.Load() {
+		writeError(w, http.StatusConflict, errParitySyncInProgress)
 		return
 	}
 
