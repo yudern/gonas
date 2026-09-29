@@ -3602,10 +3602,37 @@ function attachBackupJobRowHandlers(el) {
       try {
         const snapshots = await api.backupJobSnapshots(id);
         panel.innerHTML = snapshots.length
-          ? `<ul class="snapshot-list">${snapshots.map((s) => `<li><code>${esc(s.name)}</code> · ${esc(formatDateTime(s.createdAt))}</li>`).join("")}</ul>`
+          ? `<div class="snapshot-restore-msg"></div><ul class="snapshot-list">${snapshots.map((s) => `<li><code>${esc(s.name)}</code> · ${esc(formatDateTime(s.createdAt))} <button type="button" class="secondary snap-restore" data-snap="${esc(s.name)}" data-job="${esc(id)}">${esc(t("backup.restore"))}</button></li>`).join("")}</ul>`
           : `<p class="empty-state">${esc(t("backup.noSnapshots"))}</p>`;
+        wireSnapshotRestore(panel);
       } catch (err) {
         panel.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  });
+}
+
+// wireSnapshotRestore 接上每份快照旁的「還原」按钮:让用户填还原目标目录
+// (预设留空=还原回原来源),确认后调用还原 API。还原是写回数据的操作,
+// 用明确的输入+确认,避免误还原到错误位置。
+function wireSnapshotRestore(panel) {
+  panel.querySelectorAll(".snap-restore").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const box = panel.querySelector(".snapshot-restore-msg");
+      const target = prompt(t("backup.restoreTargetPrompt"), "");
+      if (target === null) return; // 取消
+      if (!confirm(t("backup.restoreConfirm", { snap: btn.dataset.snap, target: target || t("backup.restoreOriginalSource") }))) return;
+      btn.disabled = true;
+      btn.textContent = t("backup.restoring");
+      if (box) box.innerHTML = msg("warn", t("backup.restoringLong"));
+      try {
+        const res = await api.backupJobRestore(btn.dataset.job, btn.dataset.snap, target);
+        if (box) box.innerHTML = msg("ok", t("backup.restoreOk", { target: res.targetPath }));
+      } catch (err) {
+        if (box) box.innerHTML = msg("error", translateError(err.message));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = t("backup.restore");
       }
     });
   });

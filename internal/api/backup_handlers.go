@@ -219,6 +219,59 @@ func (s *Server) handleBackupJobsRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, runBackupJobResponse{Message: "備份已開始在背景執行,完成後請重新整理查看結果。"})
 }
 
+// restoreRequest 是 POST .../restore 的請求 body。
+type restoreRequest struct {
+	Snapshot   string `json:"snapshot"`   // ListSnapshots 回的 name(時間戳記目錄名)
+	TargetPath string `json:"targetPath"` // 還原到哪(絕對路徑);留空則還原回原本的來源目錄
+}
+
+// handleBackupJobsRestore 把某一份快照還原到指定目錄(第六十輪產品覆核 P0:
+// 補上「還原」——備份能建能列卻不能還原等於白備份)。同步執行 rsync 並回傳
+// 結果,讓使用者馬上知道成功與否;還原可能很久,所以關掉這條請求的讀寫逾時
+// (跟檔案上傳一樣),並用脫鉤的 context 讓使用者關掉瀏覽器也不會把還原砍在
+// 半路。requireAdmin。
+func (s *Server) handleBackupJobsRestore(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var job *backup.Job
+	for _, j := range s.store.Snapshot().BackupJobs {
+		if j.ID == id {
+			jc := j
+			job = &jc
+			break
+		}
+	}
+	if job == nil {
+		writeError(w, http.StatusNotFound, errBackupJobNotFound)
+		return
+	}
+
+	var req restoreRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	target := req.TargetPath
+	if target == "" {
+		target = job.SourcePath // 預設還原回原本的來源目錄
+	}
+
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetReadDeadline(time.Time{})
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
+
+	s.logger.Info("restoring backup snapshot", "job", id, "snapshot", req.Snapshot, "target", target)
+	result := backup.RunRestore(ctx, s.runner, *job, req.Snapshot, target)
+	if !result.Success {
+		s.logger.Error("backup restore failed", "job", id, "err", result.Error)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("%s", result.Error))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleBackupJobsSnapshots(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 

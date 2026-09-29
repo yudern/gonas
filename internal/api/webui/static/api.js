@@ -149,6 +149,7 @@ export const api = {
   deleteBackupJob: (id) => request("DELETE", `/api/v1/backup/jobs/${encodeURIComponent(id)}`),
   runBackupJob: (id) => request("POST", `/api/v1/backup/jobs/${encodeURIComponent(id)}/run`),
   backupJobSnapshots: (id) => request("GET", `/api/v1/backup/jobs/${encodeURIComponent(id)}/snapshots`),
+  backupJobRestore: (id, snapshot, targetPath) => request("POST", `/api/v1/backup/jobs/${encodeURIComponent(id)}/restore`, { snapshot, targetPath }),
 
   filesStatus: () => request("GET", "/api/v1/files/status"),
   filesList: (path) => request("GET", `/api/v1/files/list?path=${encodeURIComponent(path)}`),

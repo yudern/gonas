@@ -496,6 +496,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/backup/jobs/{id}", s.requireAdmin(s.handleBackupJobsDelete))
 	mux.HandleFunc("POST /api/v1/backup/jobs/{id}/run", s.requireAdmin(s.handleBackupJobsRun))
 	mux.HandleFunc("GET /api/v1/backup/jobs/{id}/snapshots", s.requireAuth(s.handleBackupJobsSnapshots))
+	mux.HandleFunc("POST /api/v1/backup/jobs/{id}/restore", s.requireAdmin(s.handleBackupJobsRestore))
 
 	mux.HandleFunc("GET /api/v1/files/status", s.requireAuth(s.handleFilesStatus))
 	mux.HandleFunc("GET /api/v1/files/list", s.requireAuth(s.handleFilesList))
