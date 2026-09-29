@@ -455,6 +455,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/start", s.requireAdmin(s.handleContainerStart))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/stop", s.requireAdmin(s.handleContainerStop))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/restart", s.requireAdmin(s.handleContainerRestart))
+	mux.HandleFunc("GET /api/v1/docker/containers/{id}/stats", s.requireAuth(s.handleContainerStats))
+	mux.HandleFunc("DELETE /api/v1/docker/containers/{id}", s.requireAdmin(s.handleContainerRemove))
 
 	mux.HandleFunc("GET /api/v1/appstore/catalog", s.requireAuth(s.handleAppstoreCatalog))
 	mux.HandleFunc("GET /api/v1/appstore/apps", s.requireAuth(s.handleAppstoreListInstalled))

@@ -1675,14 +1675,19 @@ async function renderApps(el) {
   // 容器目前狀態(id -> "running"/"exited"/…),給每個服務顯示狀態燈與決定
   // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
   // 存下的 containerIds 一致,直接對得起來。
+  // 注意:容器清单来自 docker.Container,JSON 字段是大写开头(Id/State/Ports/
+  // Labels/Names/Image),与 InstallResult.containerIds(小写)不同,别搞混。
   const stateById = {};
   const portById = {};
   (containers || []).forEach((c) => {
-    stateById[c.id] = c.state;
+    stateById[c.Id] = c.State;
     // 找出这个容器对外发布的第一个 TCP 端口,用来生成「打开」链接。
-    const pub = (c.ports || []).find((p) => p.publicPort && (p.type === "tcp" || !p.type));
-    if (pub) portById[c.id] = pub.publicPort;
+    const pub = (c.Ports || []).find((p) => p.PublicPort && (p.Type === "tcp" || !p.Type));
+    if (pub) portById[c.Id] = pub.PublicPort;
   });
+  // 非 GoNAS 应用商店安装的独立容器(CLI/compose/Portainer 建的):没有
+  // com.gonas.app 标签。单独列出让用户也能管理(第六十轮产品复审)。
+  const otherContainers = (containers || []).filter((c) => !(c.Labels && c.Labels["com.gonas.app"]));
   // 預填 appdata 路徑用的基準:優先用陣列掛載點,沒有就退回 /mnt/tank。
   const appdataBase = (arrayStatus && arrayStatus.mountPoint) || "/mnt/tank";
 
@@ -1722,6 +1727,7 @@ async function renderApps(el) {
                      <button type="button" data-ctr-restart="${esc(id)}">${esc(t("apps.restart"))}</button>`
                   : `<button type="button" data-ctr-start="${esc(id)}">${esc(t("apps.start"))}</button>`}
                 <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
+                <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
                 <button type="button" data-exec-toggle="${esc(id)}">${esc(t("apps.execCmd"))}</button>
               </div>
               <div class="service-panel" id="panel-${esc(id)}" hidden></div>
@@ -1730,6 +1736,33 @@ async function renderApps(el) {
         </div>
       `).join("") : `<p class="empty-state">${esc(t("apps.noneInstalled"))}</p>`}
     </div>
+
+    ${dockerStatus.available && otherContainers.length ? `
+    <div class="card">
+      ${h2i("box", esc(t("apps.otherContainers", { n: otherContainers.length })))}
+      <p class="hint">${esc(t("apps.otherContainersHint"))}</p>
+      ${otherContainers.map((c) => {
+        const id = c.Id;
+        const running = c.State === "running";
+        const name = (c.Names && c.Names[0] ? c.Names[0].replace(/^\//, "") : id.slice(0, 12));
+        const port = portById[id];
+        const statePill = `<span class="pill ${running ? "ok" : "danger"}">${esc(running ? t("apps.stateRunning") : t("apps.stateStopped"))}</span>`;
+        const openLink = running && port ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>` : "";
+        return `
+          <div class="service-row">
+            <span>${esc(name)} <span style="color:var(--text-faint)">${esc(c.Image || "")}</span> ${statePill}</span>
+            ${openLink}
+            ${running
+              ? `<button type="button" data-ctr-stop="${esc(id)}">${esc(t("apps.stop"))}</button>
+                 <button type="button" data-ctr-restart="${esc(id)}">${esc(t("apps.restart"))}</button>`
+              : `<button type="button" data-ctr-start="${esc(id)}">${esc(t("apps.start"))}</button>`}
+            <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
+            <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
+            <button type="button" data-ctr-remove="${esc(id)}" class="danger">${esc(t("apps.removeContainer"))}</button>
+          </div>
+          <div class="service-panel" id="panel-${esc(id)}" hidden></div>`;
+      }).join("")}
+    </div>` : ""}
 
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
@@ -1780,6 +1813,9 @@ async function renderApps(el) {
   el.querySelectorAll("[data-exec-toggle]").forEach((btn) => {
     btn.addEventListener("click", () => showContainerExecPanel(el, btn.dataset.execToggle));
   });
+  el.querySelectorAll("[data-stats-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => showContainerStatsPanel(el, btn.dataset.statsToggle));
+  });
 
   // 第六十輪:容器啟動/停止/重啟。按完重畫整頁,狀態燈與按鈕跟著更新。
   const wireCtrAction = (attr, call, busyKey) => {
@@ -1800,6 +1836,20 @@ async function renderApps(el) {
   wireCtrAction("data-ctr-start", (id) => api.containerStart(id), "apps.starting");
   wireCtrAction("data-ctr-stop", (id) => api.containerStop(id), "apps.stopping");
   wireCtrAction("data-ctr-restart", (id) => api.containerRestart(id), "apps.restarting");
+  // 移除独立容器(带确认,破坏性)。
+  el.querySelectorAll("[data-ctr-remove]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(t("apps.removeContainerConfirm"))) return;
+      btn.disabled = true;
+      try {
+        await api.containerRemove(btn.dataset.ctrRemove);
+        await renderApps(el);
+      } catch (err) {
+        btn.disabled = false;
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+      }
+    });
+  });
 
   el.querySelectorAll("[data-toggle-install]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1879,14 +1929,71 @@ async function showContainerLogsPanel(el, containerID) {
   const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
   if (!panel) return;
   panel.hidden = false;
-  panel.innerHTML = `<div class="panel-header"><strong>${esc(t("apps.logsTitle"))}</strong><button type="button" data-panel-close>${esc(t("common.close"))}</button></div><pre class="log-output">${esc(t("common.loading"))}</pre>`;
+  // 第六十轮:加 tail 选择 + 刷新,不用关掉再打开才能看新日志(产品/UI 复审)。
+  panel.innerHTML = `
+    <div class="panel-header">
+      <strong>${esc(t("apps.logsTitle"))}</strong>
+      <span class="panel-tools">
+        <select data-log-tail>
+          <option value="200">200</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+          <option value="2000">2000</option>
+        </select>
+        <button type="button" data-log-refresh>${esc(t("apps.refresh"))}</button>
+        <button type="button" data-panel-close>${esc(t("common.close"))}</button>
+      </span>
+    </div>
+    <pre class="log-output">${esc(t("common.loading"))}</pre>`;
   wirePanelClose(panel);
-  try {
-    const { logs } = await api.containerLogs(containerID, "200");
-    panel.querySelector(".log-output").textContent = logs || t("apps.logsEmpty");
-  } catch (err) {
-    panel.querySelector(".log-output").textContent = t("apps.logsFailed", { msg: err.message });
-  }
+  const out = panel.querySelector(".log-output");
+  const tailSel = panel.querySelector("[data-log-tail]");
+  const load = async () => {
+    out.textContent = t("common.loading");
+    try {
+      const { logs } = await api.containerLogs(containerID, tailSel.value);
+      out.textContent = logs || t("apps.logsEmpty");
+    } catch (err) {
+      out.textContent = t("apps.logsFailed", { msg: err.message });
+    }
+  };
+  panel.querySelector("[data-log-refresh]").addEventListener("click", load);
+  tailSel.addEventListener("change", load);
+  await load();
+}
+
+// showContainerStatsPanel 显示单个容器的一次性资源用量(CPU%/内存),带刷新。
+async function showContainerStatsPanel(el, containerID) {
+  const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="panel-header">
+      <strong>${esc(t("apps.statsTitle"))}</strong>
+      <span class="panel-tools">
+        <button type="button" data-stats-refresh>${esc(t("apps.refresh"))}</button>
+        <button type="button" data-panel-close>${esc(t("common.close"))}</button>
+      </span>
+    </div>
+    <div class="stats-body">${esc(t("common.loading"))}</div>`;
+  wirePanelClose(panel);
+  const body = panel.querySelector(".stats-body");
+  const load = async () => {
+    body.textContent = t("common.loading");
+    try {
+      const s = await api.containerStats(containerID);
+      const memLine = s.memoryLimit
+        ? `${formatBytes(s.memoryBytes)} / ${formatBytes(s.memoryLimit)} (${s.memPercent.toFixed(1)}%)`
+        : formatBytes(s.memoryBytes);
+      body.innerHTML = `
+        <div class="stat-line"><span>${esc(t("apps.statCpu"))}</span><strong>${s.cpuPercent.toFixed(1)}%</strong></div>
+        <div class="stat-line"><span>${esc(t("apps.statMem"))}</span><strong>${esc(memLine)}</strong></div>`;
+    } catch (err) {
+      body.textContent = t("apps.statsFailed", { msg: translateError(err.message) });
+    }
+  };
+  panel.querySelector("[data-stats-refresh]").addEventListener("click", load);
+  await load();
 }
 
 function showContainerExecPanel(el, containerID) {
@@ -1912,12 +2019,24 @@ function showContainerExecPanel(el, containerID) {
     output.hidden = false;
     output.textContent = t("apps.execRunning");
     try {
-      const result = await api.containerExec(containerID, raw.split(/\s+/));
+      const result = await api.containerExec(containerID, tokenizeCommand(raw));
       output.textContent = t("apps.execResult", { code: result.exitCode, output: result.output || t("apps.execEmptyOutput") });
     } catch (err) {
       output.textContent = t("apps.execFailed", { msg: err.message });
     }
   });
+}
+
+// tokenizeCommand 把一行指令拆成 argv,支援单/双引号,让 `sh -c "echo hi"`
+// 这类带引号的参数不会被空白硬拆坏(第六十轮复审)。
+function tokenizeCommand(raw) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    out.push(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3]);
+  }
+  return out;
 }
 
 function wirePanelClose(panel) {

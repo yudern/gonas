@@ -125,7 +125,7 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	installed := state.InstalledApp{Template: tmpl, Result: result}
+	installed := state.InstalledApp{Template: tmpl, Result: result, Overrides: req.Overrides}
 	if err := s.store.Update(func(st *state.State) error {
 		st.InstalledApps = append(st.InstalledApps, installed)
 		return nil

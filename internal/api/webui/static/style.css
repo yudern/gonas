@@ -334,6 +334,11 @@ textarea:focus-visible {
 a.btnlink-sm { display: inline-flex; align-items: center; text-decoration: none; border-radius: 6px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); font-weight: 600; }
 a.btnlink-sm:hover { filter: brightness(1.05); }
 .service-panel { margin: 6px 0 10px; padding: 10px; border-radius: 8px; background: var(--surface-2); }
+.panel-tools { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.panel-tools select { font-size: 11px; padding: 3px 6px; }
+.stats-body { display: flex; flex-direction: column; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.stat-line { display: flex; justify-content: space-between; gap: 12px; }
+.stat-line span { color: var(--text-dim); }
 .service-panel .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12.5px; }
 .service-panel .hint { margin: 0 0 8px; }
 .service-panel .exec-form { display: flex; gap: 8px; margin-bottom: 8px; }

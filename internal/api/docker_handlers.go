@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bng147/gonas/internal/docker"
 )
@@ -124,6 +126,35 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+// handleContainerStats 回傳單一容器一次性的資源用量(CPU%/記憶體),給
+// 「應用程式」頁面顯示即時負載。requireAuth 即可(唯讀)。
+func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// 統計會等 daemon 取兩個樣點,給一個獨立的短逾時,避免掛在請求上太久。
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	stats, err := s.docker.ContainerStats(ctx, id)
+	if err != nil {
+		s.logger.Error("getting container stats failed", "err", err, "containerId", id)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// handleContainerRemove 刪除一個容器(給「所有容器」清單裡管理非 GoNAS 建立的
+// 獨立容器用;GoNAS 自己裝的 App 請走「解除安裝」以連同網路一起清掉)。
+// requireAdmin。預設會先停再刪(force)。
+func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.docker.RemoveContainer(r.Context(), id, true); err != nil {
+		s.logger.Error("removing container failed", "err", err, "containerId", id)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 // containerExecRequest 是 POST .../containers/{id}/exec 的請求 body:一個

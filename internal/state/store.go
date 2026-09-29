@@ -240,6 +240,11 @@ type UserRecord struct {
 type InstalledApp struct {
 	Template appstore.AppTemplate   `json:"template"`
 	Result   appstore.InstallResult `json:"result"`
+	// Overrides 記錄安裝當下使用者填的 env / 掛載路徑 / 埠覆寫。第六十輪加上,
+	// 讓之後的「更新/重建 App」能沿用原本的設定重建,而不是退回範本預設(那樣
+	// 會把使用者的密碼、資料路徑等設定弄丟)。舊版安裝的紀錄沒有這個欄位,
+	// 更新流程要能偵測到並提示使用者。omitempty 保持 state.json 精簡。
+	Overrides map[string]appstore.ServiceOverride `json:"overrides,omitempty"`
 }
 
 // Store 是執行期持有 State 並負責原子讀寫的物件。所有方法都是

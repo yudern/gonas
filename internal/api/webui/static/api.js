@@ -78,6 +78,8 @@ export const api = {
   containerStart: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/start`),
   containerStop: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/stop`),
   containerRestart: (id) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/restart`),
+  containerStats: (id) => request("GET", `/api/v1/docker/containers/${encodeURIComponent(id)}/stats`),
+  containerRemove: (id) => request("DELETE", `/api/v1/docker/containers/${encodeURIComponent(id)}`),
 
   catalog: () => request("GET", "/api/v1/appstore/catalog"),
   installedApps: () => request("GET", "/api/v1/appstore/apps"),
