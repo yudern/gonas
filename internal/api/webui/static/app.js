@@ -1721,7 +1721,10 @@ async function renderApps(el) {
               <h3>${esc(app.template.name)}</h3>
               <p>${esc(translateNotice(app.template.description || ""))}</p>
             </div>
-            <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
+            <div class="btn-row" style="margin:0">
+              <button class="secondary" data-update="${esc(app.template.id)}">${esc(t("apps.update"))}</button>
+              <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
+            </div>
           </div>
           <div class="services">
             ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => {
@@ -1818,6 +1821,25 @@ async function renderApps(el) {
         await api.uninstallApp(btn.dataset.uninstall);
         await renderApps(el);
       } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+      }
+    });
+  });
+
+  el.querySelectorAll("[data-update]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.closest(".app-card").querySelector("h3").textContent;
+      if (!confirm(t("apps.updateConfirm", { name }))) return;
+      btn.disabled = true;
+      btn.textContent = t("apps.updating");
+      // 更新会先拉镜像(可能几分钟),期间保持提示。
+      el.insertAdjacentHTML("afterbegin", msg("warn", t("apps.updatingLong", { name })));
+      try {
+        await api.updateApp(btn.dataset.update);
+        await renderApps(el);
+        el.insertAdjacentHTML("afterbegin", msg("ok", t("apps.updateOk", { name })));
+      } catch (err) {
+        await renderApps(el);
         el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
       }
     });

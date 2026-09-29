@@ -139,6 +139,71 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, installed)
 }
 
+// handleAppstoreUpdate 更新一個已安裝的 App:重拉映像、用原本的設定重建容器
+// (保留資料)。第六十輪產品覆核:原本 App 裝好就凍結,想升級只能解除安裝再
+// 重裝、重填所有設定。這裡沿用安裝當下存下的 Overrides(見 InstalledApp.Overrides)
+// 重建,使用者不必重填。requireAdmin。
+func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	// 找出這個已安裝 App 的範本與當初的覆寫設定。
+	var app *state.InstalledApp
+	for i := range s.store.Snapshot().InstalledApps {
+		if s.store.Snapshot().InstalledApps[i].Template.ID == id {
+			a := s.store.Snapshot().InstalledApps[i]
+			app = &a
+			break
+		}
+	}
+	if app == nil {
+		writeError(w, http.StatusNotFound, errAppNotFound)
+		return
+	}
+
+	// single-flight,跟安裝/解除安裝共用。
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errAppInstallInProgress)
+		return
+	}
+	defer s.appInstalling.Store(false)
+
+	// 跟安裝一樣脫鉤的背景 context:重拉映像可能好幾分鐘。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	s.logger.Info("updating app", "app", id)
+	result, err := appstore.Update(ctx, s.docker, appstore.InstallRequest{
+		Template:         app.Template,
+		Overrides:        app.Overrides,
+		StartGracePeriod: 2 * time.Second,
+		OnRollbackError: func(svc string, rbErr error) {
+			s.logger.Warn("app update rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
+		},
+	})
+	if err != nil {
+		s.logger.Error("updating app failed", "app", id, "err", err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// 更新成功:換掉這個 App 的 Result(容器 ID 變了),Template/Overrides 不變。
+	updated := state.InstalledApp{Template: app.Template, Result: result, Overrides: app.Overrides}
+	if err := s.store.Update(func(st *state.State) error {
+		for i := range st.InstalledApps {
+			if st.InstalledApps[i].Template.ID == id {
+				st.InstalledApps[i] = updated
+				return nil
+			}
+		}
+		// 理論上不會走到(上面已確認存在),保險起見補一筆。
+		st.InstalledApps = append(st.InstalledApps, updated)
+		return nil
+	}); err != nil {
+		s.logger.Error("app updated but persisting the new record failed", "app", id, "err", err)
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) handleAppstoreUninstall(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 

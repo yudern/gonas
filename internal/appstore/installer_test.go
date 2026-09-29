@@ -22,6 +22,8 @@ type fakeDockerDaemon struct {
 	nextID     int
 	failImage  string // 若某個 create 請求的 Image 等於這個值，故意回傳錯誤，用來測試 rollback
 	crashImage string // 若某容器的 Image 等於這個值,start 後它「立刻退出」,用來測試裝後存活檢查
+	pullCount  int    // /images/create 被呼叫幾次,驗證更新有重拉映像
+	failPull   bool   // 讓 /images/create 回錯,測試更新在拉取失敗時不動舊 App
 }
 
 type fakeContainer struct {
@@ -102,6 +104,15 @@ func (f *fakeDockerDaemon) handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /images/create", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.pullCount++
+		fail := f.failPull
+		f.mu.Unlock()
+		if fail {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"simulated pull failure"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"status":"Pull complete"}` + "\n"))
 	})
 
@@ -401,6 +412,111 @@ func TestInstall_FailsAndRollsBackWhenContainerCrashesOnStart(t *testing.T) {
 	daemon.mu.Unlock()
 	if n != 0 {
 		t.Errorf("expected the crashed container to be rolled back, got %d left", n)
+	}
+}
+
+// 第六十輪:更新一個已安裝 App —— 重拉映像 + 重建容器(容器 ID 應該換新),
+// 舊容器被移除、不殘留。
+func TestUpdate_RepullsAndRecreates(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	client := newFakeClient(t, daemon)
+	tmpl := AppTemplate{
+		ID:   "portainer",
+		Name: "Portainer",
+		Services: []ServiceTemplate{
+			{Name: "app", Image: "portainer/portainer-ce:latest"},
+		},
+	}
+	first, err := Install(context.Background(), client, InstallRequest{Template: tmpl})
+	if err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	daemon.mu.Lock()
+	pullsAfterInstall := daemon.pullCount
+	daemon.mu.Unlock()
+
+	second, err := Update(context.Background(), client, InstallRequest{Template: tmpl})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	daemon.mu.Lock()
+	pullsAfterUpdate := daemon.pullCount
+	nContainers := len(daemon.containers)
+	daemon.mu.Unlock()
+
+	if pullsAfterUpdate <= pullsAfterInstall {
+		t.Errorf("expected update to re-pull the image (pulls: install=%d, update=%d)", pullsAfterInstall, pullsAfterUpdate)
+	}
+	if first.ContainerIDs["app"] == second.ContainerIDs["app"] {
+		t.Error("expected the container to be recreated with a new id after update")
+	}
+	if nContainers != 1 {
+		t.Errorf("expected exactly one container after update (old removed), got %d", nContainers)
+	}
+}
+
+// 更新時若「必填設定不齊」(舊版安裝沒存 overrides),要在動任何東西之前就
+// 拒絕,不能把正在跑的 App 拆掉。
+func TestUpdate_RefusesWhenRequiredEnvMissing_LeavesAppUntouched(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	client := newFakeClient(t, daemon)
+	tmpl := AppTemplate{
+		ID:   "code-server",
+		Name: "code-server",
+		Services: []ServiceTemplate{
+			{Name: "app", Image: "lscr.io/linuxserver/code-server:latest",
+				Env: []EnvVar{{Key: "PASSWORD", Required: true}}},
+		},
+	}
+	// 先用带 overrides 装好。
+	if _, err := Install(context.Background(), client, InstallRequest{
+		Template:  tmpl,
+		Overrides: map[string]ServiceOverride{"app": {Env: map[string]string{"PASSWORD": "secret"}}},
+	}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	daemon.mu.Lock()
+	before := len(daemon.containers)
+	daemon.mu.Unlock()
+
+	// 更新時「不带」overrides(模拟旧版安装没存)→ 必填 PASSWORD 缺 → 应拒绝。
+	_, err := Update(context.Background(), client, InstallRequest{Template: tmpl})
+	if err == nil {
+		t.Fatal("expected update to be refused when a required env value is missing")
+	}
+	daemon.mu.Lock()
+	after := len(daemon.containers)
+	daemon.mu.Unlock()
+	if after != before {
+		t.Errorf("running app must be left untouched when update is refused (before=%d after=%d)", before, after)
+	}
+}
+
+// 更新時拉取新映像失敗(网络/registry 挂了):舊 App 不能被拆掉。
+func TestUpdate_PullFailureLeavesAppRunning(t *testing.T) {
+	daemon := newFakeDockerDaemon()
+	client := newFakeClient(t, daemon)
+	tmpl := AppTemplate{
+		ID:       "portainer",
+		Name:     "Portainer",
+		Services: []ServiceTemplate{{Name: "app", Image: "portainer/portainer-ce:latest"}},
+	}
+	if _, err := Install(context.Background(), client, InstallRequest{Template: tmpl}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	daemon.mu.Lock()
+	before := len(daemon.containers)
+	daemon.failPull = true // 之后的拉取都失败
+	daemon.mu.Unlock()
+
+	if _, err := Update(context.Background(), client, InstallRequest{Template: tmpl}); err == nil {
+		t.Fatal("expected update to fail when the image pull fails")
+	}
+	daemon.mu.Lock()
+	after := len(daemon.containers)
+	daemon.mu.Unlock()
+	if after != before {
+		t.Errorf("app must stay running when the pre-update image pull fails (before=%d after=%d)", before, after)
 	}
 }
 

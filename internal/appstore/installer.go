@@ -33,6 +33,9 @@ type InstallRequest struct {
 	// 失敗、回滾又沒清乾淨」時完全無跡可尋;呼叫端(internal/api)接上
 	// 自己的 logger 就能記下來。
 	OnRollbackError func(serviceName string, err error)
+	// ForcePull 為 true 時,即使本機已有該 image 也強制重拉(給「更新 App」用:
+	// 重拉同一個 tag 以取得 registry 上的新版本)。預設 false(安裝時本機有就用)。
+	ForcePull bool
 	// StartGracePeriod 是「啟動容器後、回頭確認它還活著」之前等待的時間。
 	// 第六十輪(QA 覆核):原本 Install 呼叫 StartContainer 後就無條件回報成功,
 	// 一個因設定錯誤(env 缺、image entrypoint 掛)開機即崩潰的容器也會被當成
@@ -138,10 +141,16 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		// 先看本機是不是已經有這個 image，有的話就不用去 registry —— 這對
 		// 網路受限的環境、或是使用者自建的本機映像檔(RepoTag 不在任何
 		// registry 上)特別重要,詳見 docker.ImageExists 的說明。
-		exists, err := client.ImageExists(ctx, svc.Image)
-		if err != nil {
-			rollback()
-			return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+		// 第六十輪:ForcePull 時強制重拉(即使本機已有),這是「更新 App」要的——
+		// 同一個 tag(例如 :latest)在 registry 上可能已經是新版本了。
+		exists := false
+		if !req.ForcePull {
+			var err error
+			exists, err = client.ImageExists(ctx, svc.Image)
+			if err != nil {
+				rollback()
+				return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
+			}
 		}
 		if exists {
 			if req.OnPullProgress != nil {
@@ -204,6 +213,58 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 	}
 
 	return result, nil
+}
+
+// ValidateInstallable 確認「這份範本 + 使用者當初填的覆寫」真的裝得起來——
+// 尤其是必填 env 有值、每個掛載都有宿主路徑。第六十輪:給「更新 App」在
+// 「移除舊容器之前」先擋掉會失敗的情況,才不會把 App 拆了卻裝不回去。
+func ValidateInstallable(tmpl AppTemplate, overrides map[string]ServiceOverride) error {
+	if err := tmpl.Validate(); err != nil {
+		return err
+	}
+	for _, svc := range tmpl.Services {
+		ov := overrides[svc.Name]
+		if _, err := ResolveEnv(svc, ov.Env); err != nil {
+			return fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+		if _, err := resolveMounts(svc, ov.VolumeHostPaths); err != nil {
+			return fmt.Errorf("service %q: %w", svc.Name, err)
+		}
+	}
+	return nil
+}
+
+// Update 用同一份範本 + 覆寫「重拉映像並重建容器」,保留 bind 掛載的宿主資料
+// (更新 App 到新版本的動作)。順序刻意是「先拉、再換」以確保安全:
+//
+//  1. 先驗證裝得起來(ValidateInstallable)——必填 env/掛載都齊,不齊就直接
+//     回錯,完全不動正在跑的 App。
+//  2. 把所有服務的新映像先拉下來(舊 App 還在跑)。這一步最可能因為網路/
+//     registry 失敗——失敗就中止,舊 App 原封不動,使用者沒有任何損失。
+//  3. 映像都到手後,才移除舊容器/網路(bind 掛載的宿主資料不會被刪),
+//     再用剛拉下來的本機映像重建(此時不需要再 ForcePull)。
+//
+// 這樣「更新失敗」在絕大多數情況下 = 「還是舊版本、東西照跑」,而不是把 App
+// 弄不見。第三、四步之間的視窗很短、且都是本機操作,失敗機率低。
+func Update(ctx context.Context, client *docker.Client, req InstallRequest) (InstallResult, error) {
+	if err := ValidateInstallable(req.Template, req.Overrides); err != nil {
+		return InstallResult{}, err
+	}
+	for _, svc := range req.Template.Services {
+		progress := func(status string) {
+			if req.OnPullProgress != nil {
+				req.OnPullProgress(svc.Name, status)
+			}
+		}
+		if err := client.PullImage(ctx, svc.Image, progress); err != nil {
+			return InstallResult{}, fmt.Errorf("pulling new image for service %q (%s): %w — the app was left running on its current version", svc.Name, svc.Image, err)
+		}
+	}
+	if err := Uninstall(ctx, client, req.Template.ID); err != nil {
+		return InstallResult{}, fmt.Errorf("removing the old version before update: %w", err)
+	}
+	req.ForcePull = false // 剛才已經逐一拉過新映像,重建時直接用本機的即可
+	return Install(ctx, client, req)
 }
 
 // Uninstall 找出所有標記為屬於這個 App 的容器並停止、移除，多服務 App
