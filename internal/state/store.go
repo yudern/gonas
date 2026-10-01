@@ -52,6 +52,19 @@ type State struct {
 	AuditLog       []AuditEntry            `json:"auditLog"`
 	Digest         DigestConfig            `json:"digest"`
 	UPS            UPSConfig               `json:"ups"`
+	ParityScrub    ParityScrubConfig       `json:"parityScrub"`
+}
+
+// ParityScrubConfig 是「定時同位校驗(scrub)」的設定。第六十輪產品覆核:
+// internal/storage 早就有可用的 Scheduler,卻沒接上、也沒有設定介面,定時
+// scrub 從來不會跑。這裡用「每隔幾天、在一天中某個時刻」的簡化排程(對應
+// storage.ParitySchedule),Enabled 為 false(預設)代表完全不排程——跟其他
+// 背景功能一樣的「預設不做任何動作」設計。
+type ParityScrubConfig struct {
+	Enabled   bool `json:"enabled"`
+	EveryDays int  `json:"everyDays"` // 每隔幾天跑一次(>=1)
+	Hour      int  `json:"hour"`      // 0-23
+	Minute    int  `json:"minute"`    // 0-59
 }
 
 // DigestConfig 是 Phase 18c 新增的週期性健康摘要設定。CronExpr 留空

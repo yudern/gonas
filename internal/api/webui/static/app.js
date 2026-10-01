@@ -981,8 +981,9 @@ function wizardDone(el) {
 }
 
 async function renderStorage(el) {
-  const [disks, arrayStatus] = await Promise.all([
+  const [disks, arrayStatus, scrubSchedule] = await Promise.all([
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unconfigured" })),
+    api.paritySchedule().catch(() => ({ enabled: false, everyDays: 7, hour: 3, minute: 0 })),
   ]);
 
   el.innerHTML = `
@@ -1004,6 +1005,22 @@ async function renderStorage(el) {
         ${arrayStatus.hasParity ? `<button id="scrub-parity" class="secondary" ${arrayStatus.paritySyncing ? "disabled" : ""}>${esc(t("storage.scrubParity"))}</button>` : ""}
       </div>
     </div>
+
+    ${arrayStatus.hasParity ? `
+    <div class="card">
+      ${h2i("calendar", esc(t("storage.scrubScheduleTitle")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.scrubScheduleHint"))}</p>
+      <div id="scrub-sched-msg"></div>
+      <form class="stacked" id="scrub-sched-form">
+        <label class="checkbox-row"><input type="checkbox" name="enabled" ${scrubSchedule.enabled ? "checked" : ""}> ${esc(t("storage.scrubScheduleEnable"))}</label>
+        <div class="field-row">
+          <div class="field"><label>${esc(t("storage.scrubEveryDays"))}</label><input type="number" name="everyDays" min="1" max="365" value="${esc(String(scrubSchedule.everyDays || 7))}"></div>
+          <div class="field"><label>${esc(t("storage.scrubHour"))}</label><input type="number" name="hour" min="0" max="23" value="${esc(String(scrubSchedule.hour || 0))}"></div>
+          <div class="field"><label>${esc(t("storage.scrubMinute"))}</label><input type="number" name="minute" min="0" max="59" value="${esc(String(scrubSchedule.minute || 0))}"></div>
+        </div>
+        <div class="btn-row"><button type="submit">${esc(t("common.save"))}</button></div>
+      </form>
+    </div>` : ""}
 
     <div class="card">
       ${h2i("disks", esc(t("storage.disksDetected")))}
@@ -1083,6 +1100,27 @@ async function renderStorage(el) {
       } catch (err) {
         el.querySelector("#pool-msg")?.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
         scrubBtn.disabled = false;
+      }
+    });
+  }
+
+  const scrubSchedForm = el.querySelector("#scrub-sched-form");
+  if (scrubSchedForm) {
+    scrubSchedForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const box = el.querySelector("#scrub-sched-msg");
+      const cfg = {
+        enabled: f.get("enabled") === "on",
+        everyDays: Number(f.get("everyDays")) || 7,
+        hour: Number(f.get("hour")) || 0,
+        minute: Number(f.get("minute")) || 0,
+      };
+      try {
+        await api.setParitySchedule(cfg);
+        if (box) box.innerHTML = msg("ok", t("storage.scrubScheduleSaved"));
+      } catch (err) {
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   }

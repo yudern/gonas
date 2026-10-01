@@ -236,6 +236,9 @@ input[type=text], input[type=password], input[type=number], select, textarea {
 }
 input[type=checkbox] { margin-right: 6px; }
 .checkbox-row { display: flex; align-items: center; font-size: 13px; }
+/* field-row:几个窄输入框排一行(如定时校验的 天/时/分),手机自动换行。 */
+.field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.field-row .field { flex: 1 1 90px; }
 
 button {
   font: inherit;

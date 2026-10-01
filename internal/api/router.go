@@ -178,6 +178,12 @@ type Server struct {
 	backupMu         sync.Mutex
 	backupSchedulers map[string]*backup.JobScheduler
 
+	// parityScrubMu / parityScrubScheduler:定時同位校驗(scrub)背景排程。
+	// state.State.ParityScrub.Enabled 時才啟動,PUT 設定後停舊啟新。跟
+	// digestScheduler 同一種「看設定決定要不要跑」的背景工作。
+	parityScrubMu        sync.Mutex
+	parityScrubScheduler *storage.Scheduler
+
 	// certRenewer 是 HTTPS 啟用時,背景週期性檢查/續簽自簽 TLS 憑證的
 	// goroutine(見 internal/security.CertRenewer)。HTTPS 沒有啟用時
 	// 維持 nil,New()/Close() 都要檢查 nil 再動作。
@@ -350,6 +356,12 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 		s.startDigestScheduler(snap.Digest.CronExpr)
 	}
 
+	// 定時同位校驗排程:跟 digest 一樣「看設定決定要不要啟動」。啟用時把它掛
+	// 起來,daemon 重啟後也會依持久化設定自動恢復,不用手動重設。
+	if snap := store.Snapshot(); snap.ParityScrub.Enabled {
+		s.startParityScrubScheduler(snap.ParityScrub)
+	}
+
 	// UPS 監控一律啟動,但每輪自己讀設定決定要不要動作(沒啟用/沒開自動
 	// 關機時等於空轉,不查也不動)。getConfig 每輪讀當下持久化設定,所以
 	// 使用者改設定存檔後不必重啟就生效;onShutdown 走跟網頁電源按鈕同一條
@@ -445,6 +457,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/storage/array/stop", s.requireAdmin(s.handleStorageArrayStop))
 	mux.HandleFunc("POST /api/v1/storage/array/sync", s.requireAdmin(s.handleStorageArraySync))
 	mux.HandleFunc("POST /api/v1/storage/array/scrub", s.requireAdmin(s.handleStorageArrayScrub))
+	mux.HandleFunc("GET /api/v1/storage/parity/schedule", s.requireAuth(s.handleStorageParityScheduleGet))
+	mux.HandleFunc("PUT /api/v1/storage/parity/schedule", s.requireAdmin(s.handleStorageParityScheduleSet))
 
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))
@@ -566,6 +580,7 @@ func (s *Server) Close() {
 	}
 
 	s.stopDigestScheduler()
+	s.stopParityScrubScheduler()
 }
 
 // RestartRequested 回傳一個訊號 channel,self-update 成功把新版執行檔

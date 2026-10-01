@@ -239,6 +239,101 @@ func (s *Server) handleStorageArrayScrub(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scrubbing"})
 }
 
+// --- 定時同位校驗(scrub)排程 ------------------------------------------
+
+// startParityScrubScheduler 依 cfg 啟動(或停掉)定時 scrub 背景排程。停舊啟新,
+// 給 PUT 設定後與 New() 啟動時共用。cfg.Enabled 為 false 時只停不啟。
+func (s *Server) startParityScrubScheduler(cfg state.ParityScrubConfig) {
+	s.parityScrubMu.Lock()
+	defer s.parityScrubMu.Unlock()
+	if s.parityScrubScheduler != nil {
+		s.parityScrubScheduler.Stop()
+		s.parityScrubScheduler = nil
+	}
+	if !cfg.Enabled {
+		return
+	}
+	every := time.Duration(cfg.EveryDays) * 24 * time.Hour
+	if every <= 0 {
+		every = 7 * 24 * time.Hour
+	}
+	sched := storage.ParitySchedule{Every: every, HourOfDay: cfg.Hour, MinuteOfHr: cfg.Minute, Action: storage.SnapraidScrub}
+	s.parityScrubScheduler = storage.NewScheduler(s.logger)
+	s.parityScrubScheduler.Start(context.Background(), sched, s.runScheduledScrub)
+	s.logger.Info("scheduled parity scrub enabled", "schedule", sched.Describe())
+}
+
+func (s *Server) stopParityScrubScheduler() {
+	s.parityScrubMu.Lock()
+	defer s.parityScrubMu.Unlock()
+	if s.parityScrubScheduler != nil {
+		s.parityScrubScheduler.Stop()
+		s.parityScrubScheduler = nil
+	}
+}
+
+// runScheduledScrub 是排程實際跑的動作:跟手動 sync/scrub 共用 paritySyncing
+// single-flight(有別的同位動作在跑就跳過這次,不排隊堆疊),寫好 snapraid.conf
+// 後跑一次 scrub。沒有同位碟就直接跳過(不算錯)。
+func (s *Server) runScheduledScrub(ctx context.Context) error {
+	snap := s.store.Snapshot()
+	if snap.Pool == nil || len(snap.Pool.ParityDisks) == 0 {
+		return nil
+	}
+	if !s.paritySyncing.CompareAndSwap(false, true) {
+		s.logger.Info("scheduled scrub skipped: another parity operation is already running")
+		return nil
+	}
+	defer s.paritySyncing.Store(false)
+	s.paritySyncErr.Store(nil)
+	pool := *snap.Pool
+	if err := s.writeSnapraidConfig(pool); err != nil {
+		msg := "writing snapraid.conf: " + err.Error()
+		s.paritySyncErr.Store(&msg)
+		return err
+	}
+	if out, err := storage.RunSnapraid(ctx, s.runner, s.snapraidCfgPath, storage.SnapraidScrub); err != nil {
+		msg := err.Error()
+		s.paritySyncErr.Store(&msg)
+		s.logger.Error("scheduled parity scrub failed", "err", err, "out", string(out))
+		return err
+	}
+	s.paritySyncErr.Store(nil)
+	s.logger.Info("scheduled parity scrub completed", "pool", pool.Name)
+	return nil
+}
+
+// handleStorageParityScheduleGet / Set 讀寫定時校驗設定。
+func (s *Server) handleStorageParityScheduleGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.store.Snapshot().ParityScrub)
+}
+
+func (s *Server) handleStorageParityScheduleSet(w http.ResponseWriter, r *http.Request) {
+	var cfg state.ParityScrubConfig
+	if !readJSON(w, r, &cfg) {
+		return
+	}
+	// 正規化 / 驗證輸入。
+	if cfg.Enabled {
+		if cfg.EveryDays < 1 {
+			cfg.EveryDays = 7
+		}
+		if cfg.Hour < 0 || cfg.Hour > 23 || cfg.Minute < 0 || cfg.Minute > 59 {
+			writeError(w, http.StatusBadRequest, errInvalidScrubSchedule)
+			return
+		}
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		st.ParityScrub = cfg
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.startParityScrubScheduler(cfg)
+	writeJSON(w, http.StatusOK, cfg)
+}
+
 // handleStoragePoolSet 建立或取代目前的 pool 設定並持久化。刻意只驗證、
 // 儲存設定,不會連帶啟動陣列 —— 「設定陣列該長什麼樣子」跟「掛載陣列讓它
 // 可以讀寫」是兩個語意不同的動作,呼叫端要另外打 /array/start,理由跟

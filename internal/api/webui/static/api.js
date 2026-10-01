@@ -69,6 +69,8 @@ export const api = {
   stopArray: () => request("POST", "/api/v1/storage/array/stop"),
   syncArray: () => request("POST", "/api/v1/storage/array/sync"),
   scrubArray: () => request("POST", "/api/v1/storage/array/scrub"),
+  paritySchedule: () => request("GET", "/api/v1/storage/parity/schedule"),
+  setParitySchedule: (cfg) => request("PUT", "/api/v1/storage/parity/schedule", cfg),
 
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
   containers: () => request("GET", "/api/v1/docker/containers"),
