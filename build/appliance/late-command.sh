@@ -330,6 +330,12 @@ for _svc in smbd nmbd nfs-kernel-server nfs-server rpcbind; do
     if systemctl disable "$_svc" 2>/dev/null; then
         log "disabled $_svc for boot (GoNAS will enable it when a share is created)"
     fi
+    # 第六十輪安全複審:光 disable .service 只去掉開機 symlink,socket-activated
+    # 單元(尤其 rpcbind.socket)還會在開機時把守護進程拉起來、繼續監聽。連
+    # .socket 一起 disable,確保全新機器在建立共享前真的沒有東西在監聽。這裡用
+    # disable(不是 mask),因為 GoNAS 建立共享時會 systemctl enable --now 把服務
+    # 拉起來——mask 會讓那條 enable 失敗,disable 不會。
+    systemctl disable "${_svc}.socket" 2>/dev/null || true
 done
 
 # --- 3. 品牌化 ------------------------------------------------------

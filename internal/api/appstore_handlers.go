@@ -146,12 +146,21 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	// 找出這個已安裝 App 的範本與當初的覆寫設定。
+	// 第六十輪複審:先搶 single-flight,再查。原本先查、後搶,而且在迴圈裡重複
+	// 呼叫 Snapshot() 並沿用索引——跟並發的 handleAppstoreUninstall(會原地縮短
+	// InstalledApps 切片)撞在一起可能 index out of range panic / data race。先搶旗標
+	// 把安裝/解除安裝/更新互斥起來,再用「單一一份」snapshot 查,就沒有這個窗口。
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errAppInstallInProgress)
+		return
+	}
+	defer s.appInstalling.Store(false)
+
 	var app *state.InstalledApp
-	for i := range s.store.Snapshot().InstalledApps {
-		if s.store.Snapshot().InstalledApps[i].Template.ID == id {
-			a := s.store.Snapshot().InstalledApps[i]
-			app = &a
+	for _, a := range s.store.Snapshot().InstalledApps {
+		if a.Template.ID == id {
+			ac := a
+			app = &ac
 			break
 		}
 	}
@@ -159,13 +168,6 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errAppNotFound)
 		return
 	}
-
-	// single-flight,跟安裝/解除安裝共用。
-	if !s.appInstalling.CompareAndSwap(false, true) {
-		writeError(w, http.StatusConflict, errAppInstallInProgress)
-		return
-	}
-	defer s.appInstalling.Store(false)
 
 	// 跟安裝一樣脫鉤的背景 context:重拉映像可能好幾分鐘。
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -182,6 +184,36 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Error("updating app failed", "app", id, "err", err)
+		// 第六十輪複審:Update 是「先拉、再移除舊容器、再重建」。若在「移除舊的
+		// 之後、重建失敗」才出錯,舊容器已經不在了,但狀態記錄還指著那些已消失的
+		// 容器——UI 會顯示成「已安裝」卻處處 404。偵測這種情況(容器真的不見了)
+		// 就把記錄移除,讓使用者看到它已經不在、可以重裝,而不是卡在殭屍狀態。
+		// 用 label 掃描判斷:這個 app 還有沒有任何容器存活。
+		stillThere := false
+		if cs, lerr := s.docker.ListContainers(ctx, true); lerr == nil {
+			for _, c := range cs {
+				if c.Labels["com.gonas.app"] == id {
+					stillThere = true
+					break
+				}
+			}
+		} else {
+			stillThere = true // 查不到就保守保留記錄,不要誤刪
+		}
+		if !stillThere {
+			if uerr := s.store.Update(func(st *state.State) error {
+				kept := st.InstalledApps[:0]
+				for _, a := range st.InstalledApps {
+					if a.Template.ID != id {
+						kept = append(kept, a)
+					}
+				}
+				st.InstalledApps = kept
+				return nil
+			}); uerr != nil {
+				s.logger.Error("failed to remove the stale app record after a failed update", "app", id, "err", uerr)
+			}
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

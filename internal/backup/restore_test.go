@@ -62,3 +62,36 @@ func TestRunRestore_RejectsTargetInsideDest(t *testing.T) {
 		t.Error("expected a target inside the backup destination to be rejected")
 	}
 }
+
+// 第六十輪安全複審:不得還原到系統關鍵目錄(防以 root 覆寫系統檔)。
+func TestRunRestore_RejectsSystemPaths(t *testing.T) {
+	job := testJob(t, 5)
+	r := &fakeRunner{}
+	for _, p := range []string{"/", "/etc", "/etc/cron.d", "/root/.ssh", "/boot", "/usr/bin", "/etc/../etc"} {
+		res := RunRestore(context.Background(), r, job, "x", p)
+		if res.Success {
+			t.Errorf("expected restore into system path %q to be rejected", p)
+		}
+	}
+	// 不該真的跑 rsync。
+	for _, c := range r.calls {
+		if c.name == "rsync" {
+			t.Errorf("must not invoke rsync for a rejected system path; calls=%+v", r.calls)
+		}
+	}
+}
+
+func TestIsSystemPath(t *testing.T) {
+	bad := []string{"/", "/etc", "/etc/x", "/root", "/boot/grub", "/usr", "/var/lib", "/etc/../etc"}
+	for _, p := range bad {
+		if !isSystemPath(p) {
+			t.Errorf("expected %q to be a system path", p)
+		}
+	}
+	ok := []string{"/mnt/tank/restore", "/mnt/tank", "/home/user/data", "/srv/share"}
+	for _, p := range ok {
+		if isSystemPath(p) {
+			t.Errorf("expected %q to NOT be a system path", p)
+		}
+	}
+}

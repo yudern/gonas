@@ -48,6 +48,13 @@ func RunRestore(ctx context.Context, r cmdrunner.Runner, job Job, snapshotName, 
 	if pathContainsOrEqual(job.DestPath, targetPath) {
 		return failRestore(res, fmt.Errorf("restore target must not be inside the backup destination (%s)", job.DestPath))
 	}
+	// 第六十輪安全複審:還原是「以 root 把(可能來自共享、內容由使用者掌控的)
+	// 快照檔案寫到 targetPath」。若不設限,管理者(或被盜用的管理者 session)可
+	// 以還原到 /etc、/root、/boot… 覆寫系統檔。擋掉這些危險的系統目錄根——還原
+	// 的正當目標是資料區(/mnt/...)或原本的來源目錄,不會是這些。
+	if isSystemPath(targetPath) {
+		return failRestore(res, fmt.Errorf("refusing to restore into a system directory (%s) — choose a path on your data array", targetPath))
+	}
 
 	// 確認指定的快照真的存在(且是這個 Job 底下已完成的快照),不接受呼叫端
 	// 傳進來的任意目錄名——避免 "../" 之類的路徑穿越。
@@ -82,6 +89,22 @@ func RunRestore(ctx context.Context, r cmdrunner.Runner, job Job, snapshotName, 
 
 	res.Success = true
 	return res
+}
+
+// isSystemPath 回報 targetPath 是不是落在(或就是)作業系統的關鍵目錄,
+// 這些地方不該被還原覆寫。比對前先 Clean,避免用 "/etc/../etc" 之類繞過。
+func isSystemPath(targetPath string) bool {
+	clean := filepath.Clean(targetPath)
+	if clean == "/" {
+		return true
+	}
+	systemRoots := []string{"/etc", "/root", "/boot", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/var", "/sys", "/proc", "/dev", "/run"}
+	for _, root := range systemRoots {
+		if clean == root || strings.HasPrefix(clean, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func failRestore(res RestoreResult, err error) RestoreResult {

@@ -348,7 +348,7 @@ async function renderDashboard(el) {
     <p class="page-subtitle">${esc(t("dashboard.subtitle", { version: version.version, os: version.goos, arch: version.goarch, uptime: formatUptime(health.uptimeSeconds) }))}</p>
     <div class="grid">
       ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok", "server")}
-      ${statTile("Docker", dockerValue, dockerStatus.available ? (stopped > 0 ? "warn" : "ok") : "danger", "docker")}
+      ${statTile("Docker", dockerValue, dockerStatus.available ? "ok" : "danger", "docker")}
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
@@ -1728,6 +1728,25 @@ async function loadTrash(root) {
 
 // ---------- 應用程式 ----------
 
+// reRenderAppsKeepingScroll 重畫應用頁,但保留捲動位置——第六十輪 UI 複審:
+// 容器開關/移除/鏡像清理等動作都會整頁重畫,原本每次都把長頁面跳回最上面。
+// 無法完全避免重畫(面板也會被重建),但至少不要讓捲動位置亂跳。
+async function reRenderAppsKeepingScroll(el) {
+  const y = window.scrollY;
+  await renderApps(el);
+  window.scrollTo(0, y);
+}
+
+// containerStatePill 把 docker 容器状态渲染成状态灯。running=绿;exited/dead/
+// created=红(已停止);paused/restarting 等过渡态=黄(不当成"已停止");未知=灰。
+function containerStatePill(st) {
+  if (st === "running") return `<span class="pill ok">${esc(t("apps.stateRunning"))}</span>`;
+  if (!st) return `<span class="pill neutral">${esc(t("apps.stateUnknown"))}</span>`;
+  if (st === "exited" || st === "dead" || st === "created") return `<span class="pill danger">${esc(t("apps.stateStopped"))}</span>`;
+  // paused / restarting / removing 等:黄灯 + 显示原始状态词。
+  return `<span class="pill warn">${esc(st)}</span>`;
+}
+
 async function renderApps(el) {
   const [installed, catalog, dockerStatus, containers, arrayStatus, images] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
@@ -1778,9 +1797,7 @@ async function renderApps(el) {
             ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => {
               const st = stateById[id];
               const running = st === "running";
-              const statePill = st
-                ? `<span class="pill ${running ? "ok" : "danger"}">${esc(running ? t("apps.stateRunning") : t("apps.stateStopped"))}</span>`
-                : `<span class="pill neutral">${esc(t("apps.stateUnknown"))}</span>`;
+              const statePill = containerStatePill(st);
               const port = portById[id];
               const openLink = running && port
                 ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>`
@@ -1813,7 +1830,7 @@ async function renderApps(el) {
         const running = c.State === "running";
         const name = (c.Names && c.Names[0] ? c.Names[0].replace(/^\//, "") : id.slice(0, 12));
         const port = portById[id];
-        const statePill = `<span class="pill ${running ? "ok" : "danger"}">${esc(running ? t("apps.stateRunning") : t("apps.stateStopped"))}</span>`;
+        const statePill = containerStatePill(c.State);
         const openLink = running && port ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>` : "";
         return `
           <div class="service-row">
@@ -1912,13 +1929,15 @@ async function renderApps(el) {
   const wireCtrAction = (attr, call, busyKey) => {
     el.querySelectorAll(`[${attr}]`).forEach((btn) => {
       btn.addEventListener("click", async () => {
+        const label = btn.textContent; // 失敗時要還原,否則按鈕卡在「…中…」
         btn.disabled = true;
         btn.textContent = t(busyKey);
         try {
           await call(btn.getAttribute(attr));
-          await renderApps(el);
+          await reRenderAppsKeepingScroll(el);
         } catch (err) {
           btn.disabled = false;
+          btn.textContent = label;
           el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
         }
       });
@@ -1933,13 +1952,16 @@ async function renderApps(el) {
     pruneBtn.addEventListener("click", async () => {
       if (!confirm(t("apps.pruneImagesConfirm"))) return;
       pruneBtn.disabled = true;
-      const box = el.querySelector("#images-msg");
       try {
         const res = await api.pruneImages();
-        if (box) box.innerHTML = msg("ok", t("apps.pruneImagesOk", { size: formatBytes(res.spaceReclaimed || 0) }));
-        await renderApps(el);
+        // 先重畫(會清掉整頁),再把成功訊息放上去——否則訊息會被緊接著的
+        // 重畫一起抹掉(第六十輪 UI 複審)。
+        await reRenderAppsKeepingScroll(el);
+        const box2 = el.querySelector("#images-msg");
+        if (box2) box2.innerHTML = msg("ok", t("apps.pruneImagesOk", { size: formatBytes(res.spaceReclaimed || 0) }));
       } catch (err) {
         pruneBtn.disabled = false;
+        const box = el.querySelector("#images-msg");
         if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
@@ -1950,7 +1972,7 @@ async function renderApps(el) {
       btn.disabled = true;
       try {
         await api.removeImage(btn.dataset.imgRemove);
-        await renderApps(el);
+        await reRenderAppsKeepingScroll(el);
       } catch (err) {
         btn.disabled = false;
         const box = el.querySelector("#images-msg");
@@ -1966,7 +1988,7 @@ async function renderApps(el) {
       btn.disabled = true;
       try {
         await api.containerRemove(btn.dataset.ctrRemove);
-        await renderApps(el);
+        await reRenderAppsKeepingScroll(el);
       } catch (err) {
         btn.disabled = false;
         el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
@@ -2093,7 +2115,7 @@ async function showContainerLogsPanel(el, containerID) {
       const { logs } = await api.containerLogs(containerID, tailSel.value);
       out.textContent = logs || t("apps.logsEmpty");
     } catch (err) {
-      out.textContent = t("apps.logsFailed", { msg: err.message });
+      out.textContent = t("apps.logsFailed", { msg: translateError(err.message) });
     }
   };
   panel.querySelector("[data-log-refresh]").addEventListener("click", load);
@@ -2161,7 +2183,7 @@ function showContainerExecPanel(el, containerID) {
       const result = await api.containerExec(containerID, tokenizeCommand(raw));
       output.textContent = t("apps.execResult", { code: result.exitCode, output: result.output || t("apps.execEmptyOutput") });
     } catch (err) {
-      output.textContent = t("apps.execFailed", { msg: err.message });
+      output.textContent = t("apps.execFailed", { msg: translateError(err.message) });
     }
   });
 }

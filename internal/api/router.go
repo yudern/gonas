@@ -466,7 +466,9 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/docker/images/prune", s.requireAdmin(s.handleDockerImagesPrune))
 	mux.HandleFunc("DELETE /api/v1/docker/images/{id}", s.requireAdmin(s.handleDockerImageRemove))
 	mux.HandleFunc("GET /api/v1/docker/networks", s.requireAuth(s.handleDockerNetworks))
-	mux.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.requireAuth(s.handleContainerLogs))
+	// 容器 log 常把啟動時的 DB 密碼/token 印出來,只讀帳號不該看得到——第六十輪
+	// 安全複審:改成 requireAdmin(機密揭露考量,非動作授權)。
+	mux.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.requireAdmin(s.handleContainerLogs))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/exec", s.requireAdmin(s.handleContainerExec))
 	// 第六十輪:容器啟動/停止/重啟(應用程式頁每個服務的開關按鈕)。requireAdmin。
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/start", s.requireAdmin(s.handleContainerStart))

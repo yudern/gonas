@@ -102,7 +102,7 @@ func (s *Server) handleContainerStart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.docker.StartContainer(r.Context(), id); err != nil {
 		s.logger.Error("starting container failed", "err", err, "containerId", id)
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
@@ -112,7 +112,7 @@ func (s *Server) handleContainerStop(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.docker.StopContainer(r.Context(), id, containerLifecycleStopTimeoutSec); err != nil {
 		s.logger.Error("stopping container failed", "err", err, "containerId", id)
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
@@ -122,7 +122,7 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	if err := s.docker.RestartContainer(r.Context(), id, containerLifecycleStopTimeoutSec); err != nil {
 		s.logger.Error("restarting container failed", "err", err, "containerId", id)
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
@@ -135,10 +135,26 @@ func (s *Server) handleDockerImageRemove(w http.ResponseWriter, r *http.Request)
 	id := r.PathValue("id")
 	if err := s.docker.RemoveImage(r.Context(), id, false); err != nil {
 		s.logger.Warn("removing image failed", "err", err, "image", id)
-		writeError(w, http.StatusConflict, err)
+		writeError(w, dockerErrStatus(err, http.StatusConflict), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// dockerErrStatus 把 docker daemon 的錯誤粗略分類成合適的 HTTP 狀態:找不到
+// (no such …)→ 404;正在使用中(conflict/in use)→ 409;其餘用呼叫端給的
+// 預設值。第六十輪複審:原本這些 handler 把所有錯誤都壓成單一狀態碼(全 500
+// 或全 409),對「刪一個不存在的東西」回 404 更準確、前端也好處理。
+func dockerErrStatus(err error, dflt int) int {
+	m := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(m, "no such"), strings.Contains(m, "not found"):
+		return http.StatusNotFound
+	case strings.Contains(m, "in use"), strings.Contains(m, "conflict"), strings.Contains(m, "being used"):
+		return http.StatusConflict
+	default:
+		return dflt
+	}
 }
 
 // handleDockerImagesPrune 清掉所有懸空(未使用、無 tag)映像。requireAdmin。
@@ -175,7 +191,7 @@ func (s *Server) handleContainerRemove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.docker.RemoveContainer(r.Context(), id, true); err != nil {
 		s.logger.Error("removing container failed", "err", err, "containerId", id)
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})

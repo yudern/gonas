@@ -183,6 +183,14 @@ func (s *Server) handleStorageArraySync(w http.ResponseWriter, r *http.Request) 
 		}
 		now := time.Now()
 		if err := s.store.Update(func(st *state.State) error {
+			// 第六十輪複審:只有在「目前的池還是我們剛剛同步的那個池」時,才把
+			// ParityLastSync 標成現在——否則若同步期間使用者換了池
+			// (handleStoragePoolSet 已把 ParityLastSync 清成 nil),這裡會把從沒同步過
+			// 的新池誤標成「已受保護」。用池名比對身分(換池必然換名或換碟)。
+			if st.Pool == nil || st.Pool.Name != pool.Name {
+				s.logger.Warn("pool changed during the sync; not marking the new pool as protected", "syncedPool", pool.Name)
+				return nil
+			}
 			st.ParityLastSync = &now
 			return nil
 		}); err != nil {
