@@ -463,6 +463,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))
 	mux.HandleFunc("GET /api/v1/docker/images", s.requireAuth(s.handleDockerImages))
+	mux.HandleFunc("POST /api/v1/docker/images/prune", s.requireAdmin(s.handleDockerImagesPrune))
+	mux.HandleFunc("DELETE /api/v1/docker/images/{id}", s.requireAdmin(s.handleDockerImageRemove))
 	mux.HandleFunc("GET /api/v1/docker/networks", s.requireAuth(s.handleDockerNetworks))
 	mux.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.requireAuth(s.handleContainerLogs))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/exec", s.requireAdmin(s.handleContainerExec))

@@ -128,6 +128,30 @@ func (s *Server) handleContainerRestart(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 }
 
+// handleDockerImageRemove 刪除一個映像(第六十輪產品覆核:映像會越積越多、
+// 悄悄塞滿系統碟,卻沒有清理的出口)。requireAdmin。被執行中容器使用的映像
+// Docker 會回 409,錯誤會透傳給前端顯示。
+func (s *Server) handleDockerImageRemove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.docker.RemoveImage(r.Context(), id, false); err != nil {
+		s.logger.Warn("removing image failed", "err", err, "image", id)
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// handleDockerImagesPrune 清掉所有懸空(未使用、無 tag)映像。requireAdmin。
+func (s *Server) handleDockerImagesPrune(w http.ResponseWriter, r *http.Request) {
+	res, err := s.docker.PruneImages(r.Context())
+	if err != nil {
+		s.logger.Error("pruning images failed", "err", err)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // handleContainerStats 回傳單一容器一次性的資源用量(CPU%/記憶體),給
 // 「應用程式」頁面顯示即時負載。requireAuth 即可(唯讀)。
 func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {

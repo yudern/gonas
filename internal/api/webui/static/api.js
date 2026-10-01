@@ -75,6 +75,8 @@ export const api = {
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
   containers: () => request("GET", "/api/v1/docker/containers"),
   images: () => request("GET", "/api/v1/docker/images"),
+  removeImage: (id) => request("DELETE", `/api/v1/docker/images/${encodeURIComponent(id)}`),
+  pruneImages: () => request("POST", "/api/v1/docker/images/prune"),
   networks: () => request("GET", "/api/v1/docker/networks"),
   containerLogs: (id, tail) => request("GET", `/api/v1/docker/containers/${encodeURIComponent(id)}/logs${tail ? `?tail=${encodeURIComponent(tail)}` : ""}`),
   containerExec: (id, cmd) => request("POST", `/api/v1/docker/containers/${encodeURIComponent(id)}/exec`, { cmd }),

@@ -45,6 +45,38 @@ func (c *Client) ImageExists(ctx context.Context, ref string) (bool, error) {
 	return false, nil
 }
 
+// RemoveImage 刪除一個映像(依 ID 或 repo:tag)。force=true 時即使還有 tag 或
+// 被已停止的容器參照也強制移除。被「執行中」容器使用的映像,Docker 會回 409,
+// 錯誤會原樣透傳給呼叫端(讓前端顯示「映像使用中,無法刪除」)。
+func (c *Client) RemoveImage(ctx context.Context, ref string, force bool) error {
+	path := "/images/" + url.PathEscape(ref)
+	if force {
+		path += "?force=1"
+	}
+	if err := c.doJSON(ctx, "DELETE", path, nil, nil); err != nil {
+		return fmt.Errorf("removing image %q: %w", ref, err)
+	}
+	return nil
+}
+
+// ImagePruneResult 是清理未使用映像後回報釋放了多少空間。
+type ImagePruneResult struct {
+	SpaceReclaimed int64 `json:"spaceReclaimed"`
+}
+
+// PruneImages 清掉所有「懸空(dangling,沒有任何 tag)」的映像,對應
+// `docker image prune`。這是安全的清理——只刪沒 tag、也沒被容器用的中間層,
+// 不會動到正在用的映像。回傳釋放的位元組數。
+func (c *Client) PruneImages(ctx context.Context) (ImagePruneResult, error) {
+	var raw struct {
+		SpaceReclaimed int64 `json:"SpaceReclaimed"`
+	}
+	if err := c.doJSON(ctx, "POST", "/images/prune", nil, &raw); err != nil {
+		return ImagePruneResult{}, fmt.Errorf("pruning images: %w", err)
+	}
+	return ImagePruneResult{SpaceReclaimed: raw.SpaceReclaimed}, nil
+}
+
 // normalizeRef 讓 "nginx" 與 "nginx:latest" 被視為同一個參照，比對 RepoTags
 // 時才不會因為使用者沒寫 tag 就誤判成「本機沒有」。
 func normalizeRef(ref string) string {

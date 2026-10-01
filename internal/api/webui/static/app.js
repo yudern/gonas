@@ -1720,11 +1720,12 @@ async function loadTrash(root) {
 // ---------- 應用程式 ----------
 
 async function renderApps(el) {
-  const [installed, catalog, dockerStatus, containers, arrayStatus] = await Promise.all([
+  const [installed, catalog, dockerStatus, containers, arrayStatus, images] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
     api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.containers().catch(() => []),
     api.arrayStatus().catch(() => ({})),
+    api.images().catch(() => []),
   ]);
   // 容器目前狀態(id -> "running"/"exited"/…),給每個服務顯示狀態燈與決定
   // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
@@ -1821,6 +1822,22 @@ async function renderApps(el) {
       }).join("")}
     </div>` : ""}
 
+    ${dockerStatus.available && (images && images.length) ? `
+    <div class="card">
+      ${h2i("box", esc(t("apps.images", { n: images.length })))}
+      <p class="hint">${esc(t("apps.imagesHint"))}</p>
+      <div id="images-msg"></div>
+      <div class="btn-row" style="margin:0 0 10px"><button type="button" id="prune-images" class="secondary">${esc(t("apps.pruneImages"))}</button></div>
+      ${images.map((im) => {
+        const tag = (im.RepoTags && im.RepoTags.length && im.RepoTags[0] !== "<none>:<none>") ? im.RepoTags[0] : (im.Id || "").replace(/^sha256:/, "").slice(0, 12);
+        return `
+          <div class="service-row">
+            <span><code>${esc(tag)}</code> <span style="color:var(--text-faint)">${esc(formatBytes(im.Size || 0))}</span></span>
+            <button type="button" data-img-remove="${esc(im.Id)}" class="danger">${esc(t("apps.removeImage"))}</button>
+          </div>`;
+      }).join("")}
+    </div>` : ""}
+
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase)).join("")}
@@ -1912,6 +1929,38 @@ async function renderApps(el) {
   wireCtrAction("data-ctr-start", (id) => api.containerStart(id), "apps.starting");
   wireCtrAction("data-ctr-stop", (id) => api.containerStop(id), "apps.stopping");
   wireCtrAction("data-ctr-restart", (id) => api.containerRestart(id), "apps.restarting");
+  // 镜像:清理未使用 + 单个移除。
+  const pruneBtn = el.querySelector("#prune-images");
+  if (pruneBtn) {
+    pruneBtn.addEventListener("click", async () => {
+      if (!confirm(t("apps.pruneImagesConfirm"))) return;
+      pruneBtn.disabled = true;
+      const box = el.querySelector("#images-msg");
+      try {
+        const res = await api.pruneImages();
+        if (box) box.innerHTML = msg("ok", t("apps.pruneImagesOk", { size: formatBytes(res.spaceReclaimed || 0) }));
+        await renderApps(el);
+      } catch (err) {
+        pruneBtn.disabled = false;
+        if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  }
+  el.querySelectorAll("[data-img-remove]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(t("apps.removeImageConfirm"))) return;
+      btn.disabled = true;
+      try {
+        await api.removeImage(btn.dataset.imgRemove);
+        await renderApps(el);
+      } catch (err) {
+        btn.disabled = false;
+        const box = el.querySelector("#images-msg");
+        if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  });
+
   // 移除独立容器(带确认,破坏性)。
   el.querySelectorAll("[data-ctr-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
