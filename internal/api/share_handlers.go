@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -104,6 +105,21 @@ func (s *Server) handleSharesDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, applyResult{Applied: applied, Warning: warn})
 }
 
+// ensureServicesRunning 對每個服務 best-effort 執行 `systemctl enable --now`,
+// 讓服務「現在就起來、且開機自動起」。第六十輪(安全/構建覆核):appliance
+// 刻意不在安裝階段自動啟用 samba/nfs 這類守護進程(避免使用者還沒設定任何
+// 共享,服務就先在網路上監聽);改成「使用者真的建立共享時,GoNAS 才把對應
+// 服務拉起來並設為開機啟用」——跟 Doctor 裝好 docker.io 後 enable --now docker
+// 是同一個模式。沒裝那個服務就會失敗,但這裡是 best-effort(只記 log),後面
+// 的 Reload 失敗會給使用者看得懂的「是否已安裝」警告,不在這裡擋。
+func (s *Server) ensureServicesRunning(ctx context.Context, names ...string) {
+	for _, name := range names {
+		if out, err := s.runner.Run(ctx, "systemctl", "enable", "--now", name); err != nil {
+			s.logger.Warn("could not enable/start service (may not be installed yet)", "service", name, "err", err, "out", string(out))
+		}
+	}
+}
+
 // applySambaConfig 把目前完整的共享清單重新產生成設定檔、寫入、並嘗試
 // 通知 smbd 重新讀取。任何一步失敗都只回傳警告，不會讓呼叫端誤以為
 // 「共享沒有存成功」——存到 state store 才是唯一的事實來源。
@@ -123,6 +139,10 @@ func (s *Server) applySambaConfig(r *http.Request, shares []share.Share) (applie
 	if err := share.EnsureSambaInclude(smbConfPath, sambaConfigPath); err != nil {
 		return false, "config saved, but wiring it into smb.conf failed (is samba installed?): " + err.Error()
 	}
+	// 第六十輪:建立共享時才把 samba 服務拉起來+設開機啟用(appliance 預設不自動
+	// 啟用,見 ensureServicesRunning)。best-effort,沒裝 samba 就由下面的 reload
+	// 給出「是否已安裝」的警告。
+	s.ensureServicesRunning(r.Context(), "smbd", "nmbd")
 	if err := share.ReloadSamba(r.Context(), s.runner); err != nil {
 		return false, "config saved, but reloading smbd failed (is samba installed and running?): " + err.Error()
 	}
@@ -221,6 +241,8 @@ func (s *Server) applyExportsConfig(r *http.Request, exports []share.Export) (ap
 	if err := share.WriteConfigAtomically(exportsConfigPath, content); err != nil {
 		return false, err.Error()
 	}
+	// 第六十輪:建立 NFS 匯出時才把 nfs 服務拉起來+設開機啟用(同 samba)。
+	s.ensureServicesRunning(r.Context(), "nfs-kernel-server")
 	if err := share.ReloadNFS(r.Context(), s.runner); err != nil {
 		return false, "config saved, but reloading nfs exports failed (is nfs-kernel-server installed and running?): " + err.Error()
 	}

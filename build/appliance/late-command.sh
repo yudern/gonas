@@ -317,6 +317,21 @@ else
     log "WARNING: 'systemctl enable gonas-console.service' failed — tty1 status console will NOT appear after reboot"
 fi
 
+# 第六十輪(安全/構建覆核):如果 DVD 上剛好帶了 samba / nfs 等服務、被
+# pkgsel 一併裝了,它們的 postinst 會把服務設成開機自動啟用——結果是一台
+# 全新的 appliance 還沒設定任何共享,smbd/nmbd/nfs/rpcbind 就已經在網路上
+# 監聽,跟 GoNAS「使用者沒開的功能不該自己跑起來」的設計相違。這裡在裝機
+# 階段明確把這些共享守護進程「disable」掉(只移除開機啟用的 symlink,不影響
+# 檔案本身已安裝)。使用者之後在 Web UI 真的建立共享時,GoNAS 會自己把對應
+# 服務 enable --now 拉起來(見 internal/api 的 ensureServicesRunning),所以
+# 預設關著不會讓功能變得不能用,只是「沒設定前不監聽」。best-effort:服務
+# 根本沒裝時 disable 會失敗,無所謂。
+for _svc in smbd nmbd nfs-kernel-server nfs-server rpcbind; do
+    if systemctl disable "$_svc" 2>/dev/null; then
+        log "disabled $_svc for boot (GoNAS will enable it when a share is created)"
+    fi
+done
+
 # --- 3. 品牌化 ------------------------------------------------------
 echo "gonas" > /etc/hostname
 if [ -f /etc/hosts ]; then

@@ -325,21 +325,30 @@ function showSetupGate() {
 // ---------- 儀表板 ----------
 
 async function renderDashboard(el) {
-  const [health, version, dockerStatus, disks, arrayStatus, me, deps] = await Promise.all([
+  const [health, version, dockerStatus, disks, arrayStatus, me, deps, containers] = await Promise.all([
     api.health(), api.version(), api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unknown" })),
     api.me().catch(() => ({ role: "" })),
     api.doctorStatus().catch(() => []),
+    api.containers().catch(() => []),
   ]);
   const isAdmin = me.role === "admin";
   const missingDeps = (deps || []).filter((d) => !d.installed);
+  // 容器运行概览(第六十轮产品复审):仪表盘一眼看出有没有容器挂了。
+  const running = (containers || []).filter((c) => c.State === "running").length;
+  const stopped = (containers || []).length - running;
+  const dockerValue = dockerStatus.available
+    ? ((containers && containers.length)
+        ? t("dashboard.dockerRunningStopped", { running, stopped })
+        : t("dashboard.dockerAvailable"))
+    : t("dashboard.dockerUnavailable");
 
   el.innerHTML = `
     <h1>${esc(t("dashboard.title"))}</h1>
     <p class="page-subtitle">${esc(t("dashboard.subtitle", { version: version.version, os: version.goos, arch: version.goarch, uptime: formatUptime(health.uptimeSeconds) }))}</p>
     <div class="grid">
       ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok", "server")}
-      ${statTile("Docker", dockerStatus.available ? t("dashboard.dockerAvailable") : t("dashboard.dockerUnavailable"), dockerStatus.available ? "ok" : "danger", "docker")}
+      ${statTile("Docker", dockerValue, dockerStatus.available ? (stopped > 0 ? "warn" : "ok") : "danger", "docker")}
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
@@ -1851,19 +1860,8 @@ async function renderApps(el) {
         <div class="field"><label>${esc(t("apps.appId"))}</label><input type="text" name="id" pattern="[a-z0-9][a-z0-9\\-]*" placeholder="my-app" required></div>
         <div class="field"><label>${esc(t("apps.name"))}</label><input type="text" name="name" required></div>
         <div class="field"><label>${esc(t("apps.description"))}</label><input type="text" name="description"></div>
-        <div class="field"><label>${esc(t("apps.image"))}</label><input type="text" name="image" placeholder="nginx:latest" required></div>
-        <div class="field">
-          <label>${esc(t("apps.ports"))}</label>
-          <textarea name="ports" rows="2" placeholder="8080:80"></textarea>
-        </div>
-        <div class="field">
-          <label>${esc(t("apps.volumes"))}</label>
-          <textarea name="volumes" rows="2" placeholder="/mnt/tank/appdata/my-app:/data"></textarea>
-        </div>
-        <div class="field">
-          <label>${esc(t("apps.env"))}</label>
-          <textarea name="env" rows="2" placeholder="TZ=Asia/Taipei"></textarea>
-        </div>
+        <div id="custom-services">${customServiceBlock(0)}</div>
+        <div class="btn-row" style="margin-top:4px"><button type="button" id="add-service" class="secondary">${esc(t("apps.addService"))}</button></div>
         <div class="btn-row"><button type="submit">${esc(t("apps.install"))}</button></div>
       </form>
     </div>
@@ -2011,23 +2009,39 @@ async function renderApps(el) {
 
   const customForm = el.querySelector("#custom-install-form");
   if (customForm) {
+    // 「+ 新增服務」:再加一個服務欄位塊(多服務自定义安装)。
+    let svcCount = 1;
+    const addBtn = el.querySelector("#add-service");
+    const servicesBox = el.querySelector("#custom-services");
+    if (addBtn && servicesBox) {
+      addBtn.addEventListener("click", () => {
+        servicesBox.insertAdjacentHTML("beforeend", customServiceBlock(svcCount));
+        svcCount++;
+        associateLabels(servicesBox);
+      });
+      servicesBox.addEventListener("click", (ev) => {
+        const rm = ev.target.closest(".remove-service");
+        if (rm) rm.closest(".custom-service").remove();
+      });
+    }
     customForm.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const f = new FormData(customForm);
       const box = el.querySelector("#custom-install-msg");
       let template;
       try {
+        const services = [...customForm.querySelectorAll(".custom-service")].map((blk) => ({
+          name: blk.querySelector(".svc-name").value.trim(),
+          image: blk.querySelector(".svc-image").value.trim(),
+          ports: parsePortLines(blk.querySelector(".svc-ports").value),
+          volumes: parseVolumeLines(blk.querySelector(".svc-volumes").value),
+          env: parseEnvLines(blk.querySelector(".svc-env").value),
+        }));
         template = {
           id: f.get("id").trim(),
           name: f.get("name").trim(),
           description: f.get("description").trim(),
-          services: [{
-            name: "app",
-            image: f.get("image").trim(),
-            ports: parsePortLines(f.get("ports")),
-            volumes: parseVolumeLines(f.get("volumes")),
-            env: parseEnvLines(f.get("env")),
-          }],
+          services,
         };
       } catch (err) {
         box.innerHTML = msg("error", translateError(err.message));
@@ -2210,6 +2224,24 @@ function parseEnvLines(text) {
     if (idx <= 0) throw new Error(t("apps.envFormatError", { line }));
     return { key: line.slice(0, idx), default: line.slice(idx + 1) };
   });
+}
+
+// customServiceBlock 画出自定义安装里「一个服务」的字段块(第六十轮:支持
+// 多服务自定义安装,例如 app + db)。第 0 个不给移除按钮(至少要有一个)。
+function customServiceBlock(idx) {
+  const removable = idx > 0;
+  return `
+    <div class="custom-service" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin:8px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:12.5px">${esc(t("apps.service"))} ${idx + 1}</strong>
+        ${removable ? `<button type="button" class="secondary remove-service" style="padding:2px 8px">${esc(t("apps.removeService"))}</button>` : ""}
+      </div>
+      <div class="field"><label>${esc(t("apps.serviceName"))}</label><input type="text" class="svc-name" placeholder="app" value="${idx === 0 ? "app" : ""}" required></div>
+      <div class="field"><label>${esc(t("apps.image"))}</label><input type="text" class="svc-image" placeholder="nginx:latest" required></div>
+      <div class="field"><label>${esc(t("apps.ports"))}</label><textarea class="svc-ports" rows="2" placeholder="8080:80"></textarea></div>
+      <div class="field"><label>${esc(t("apps.volumes"))}</label><textarea class="svc-volumes" rows="2" placeholder="/mnt/tank/appdata/my-app:/data"></textarea></div>
+      <div class="field"><label>${esc(t("apps.env"))}</label><textarea class="svc-env" rows="2" placeholder="TZ=Asia/Taipei"></textarea></div>
+    </div>`;
 }
 
 function renderCatalogEntry(tmpl, appdataBase) {
