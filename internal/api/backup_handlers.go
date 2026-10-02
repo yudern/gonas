@@ -117,12 +117,13 @@ func (s *Server) handleBackupJobsList(w http.ResponseWriter, r *http.Request) {
 }
 
 type createBackupJobRequest struct {
-	Name           string          `json:"name"`
-	SourcePath     string          `json:"sourcePath"`
-	DestPath       string          `json:"destPath"`
-	RetentionCount int             `json:"retentionCount"`
-	Enabled        bool            `json:"enabled"`
-	Schedule       backup.Schedule `json:"schedule"`
+	Name           string             `json:"name"`
+	SourcePath     string             `json:"sourcePath"`
+	DestPath       string             `json:"destPath"`
+	RetentionCount int                `json:"retentionCount"`
+	Enabled        bool               `json:"enabled"`
+	Schedule       backup.Schedule    `json:"schedule"`
+	Remote         *backup.RemoteDest `json:"remote,omitempty"` // 設了就是異地鏡像(SSH)
 }
 
 // handleBackupJobsCreate 驗證並儲存一份新的備份工作設定。驗證失敗(例如
@@ -142,6 +143,7 @@ func (s *Server) handleBackupJobsCreate(w http.ResponseWriter, r *http.Request) 
 		RetentionCount: req.RetentionCount,
 		Enabled:        req.Enabled,
 		Schedule:       req.Schedule,
+		Remote:         req.Remote,
 	}
 	if err := job.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err)

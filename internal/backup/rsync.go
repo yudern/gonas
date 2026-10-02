@@ -24,6 +24,10 @@ func RunBackup(ctx context.Context, r cmdrunner.Runner, job Job, now time.Time) 
 	if err := job.Validate(); err != nil {
 		return failResult(result, fmt.Errorf("invalid backup job: %w", err))
 	}
+	// 異地鏡像(SSH):走完全不同的一條路(rsync over ssh、無本機快照輪替)。
+	if job.IsRemote() {
+		return runRemoteMirror(ctx, r, job, now)
+	}
 	if err := os.MkdirAll(jobDir(job), 0o750); err != nil {
 		return failResult(result, fmt.Errorf("ensuring backup destination directory: %w", err))
 	}
@@ -72,6 +76,39 @@ func RunBackup(ctx context.Context, r cmdrunner.Runner, job Job, now time.Time) 
 		return result
 	}
 
+	result.FinishedAt = time.Now()
+	result.Success = true
+	return result
+}
+
+// buildRemoteSSHOpt 組出要傳給 rsync `-e` 的 ssh 指令字串。只用金鑰認證:
+// BatchMode=yes 讓它在需要密碼/互動時直接失敗而不是卡住;StrictHostKeyChecking=
+// accept-new 是「首次信任」(避免第一次連線卡在 host key 確認),對使用者自己的
+// 遠端主機是合理預設;ConnectTimeout 避免遠端不通時吊很久。
+func buildRemoteSSHOpt(rd *RemoteDest) string {
+	port := rd.Port
+	if port == 0 {
+		port = 22
+	}
+	opt := fmt.Sprintf("ssh -p %d -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20", port)
+	if rd.SSHKey != "" {
+		opt += " -i " + rd.SSHKey // 已在 Validate 擋掉空白/特殊字元
+	}
+	return opt
+}
+
+// runRemoteMirror 把來源用 rsync over SSH 鏡像到遠端目錄(含 --delete,遠端成為
+// 來源的即時鏡像)。這是「異地備份」——資料離開本機,防火災/失竊。不做快照
+// 輪替(那需要在遠端跑一堆 mkdir/mv/ln,複雜且脆弱);要版本化就在本機另外
+// 開一個本機快照備份。
+func runRemoteMirror(ctx context.Context, r cmdrunner.Runner, job Job, now time.Time) RunResult {
+	result := RunResult{StartedAt: now}
+	rd := job.Remote
+	target := rd.User + "@" + rd.Host + ":" + ensureTrailingSlash(rd.Path)
+	args := []string{"-aAX", "--delete", "-e", buildRemoteSSHOpt(rd), ensureTrailingSlash(job.SourcePath), target}
+	if _, err := r.Run(ctx, "rsync", args...); err != nil {
+		return failResult(result, fmt.Errorf("remote mirror rsync failed (check the host, SSH key, and that the remote path exists): %w", err))
+	}
 	result.FinishedAt = time.Now()
 	result.Success = true
 	return result

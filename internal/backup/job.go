@@ -140,17 +140,49 @@ type RunResult struct {
 	SnapshotDir string    `json:"snapshotDir,omitempty"`
 }
 
+// RemoteDest 是「異地備份」的遠端目的地(rsync over SSH)。第六十輪產品覆核:
+// 備份套件文件自己說備份是為了防「火災/水災/失竊」,但只能備到同一台機器的
+// 另一顆碟,並不真正離線異地。設了 Remote 的 Job 改成「鏡像到遠端主機」——
+// 用 rsync 把來源同步到遠端一個目錄(含 --delete,讓遠端是來源的即時鏡像)。
+//
+// 刻意只支援金鑰認證(不收密碼):daemon 以 root 跑,把明文密碼存進 state.json
+// 風險太高;金鑰路徑指向 NAS 上一把這個 Job 專用、無密碼短語的私鑰即可。
+type RemoteDest struct {
+	Host   string `json:"host"`             // 遠端主機名/IP
+	User   string `json:"user"`             // SSH 使用者
+	Port   int    `json:"port,omitempty"`   // SSH 埠,預設 22
+	Path   string `json:"path"`             // 遠端的目的地絕對路徑
+	SSHKey string `json:"sshKey,omitempty"` // NAS 上的私鑰檔路徑(留空則用預設金鑰/agent)
+}
+
 // Job 是一份備份工作的設定:把 SourcePath 底下的內容備份到 DestPath 底下
-// 專屬於這個 Job 的子目錄,保留最近 RetentionCount 份快照。
+// 專屬於這個 Job 的子目錄,保留最近 RetentionCount 份快照。設了 Remote 時改為
+// 「異地鏡像」模式(見 RemoteDest),此時不做本機快照輪替,DestPath 不使用。
 type Job struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	SourcePath     string     `json:"sourcePath"`
-	DestPath       string     `json:"destPath"`
-	RetentionCount int        `json:"retentionCount"`
-	Enabled        bool       `json:"enabled"`
-	Schedule       Schedule   `json:"schedule"`
-	LastRun        *RunResult `json:"lastRun,omitempty"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	SourcePath     string      `json:"sourcePath"`
+	DestPath       string      `json:"destPath"`
+	RetentionCount int         `json:"retentionCount"`
+	Enabled        bool        `json:"enabled"`
+	Schedule       Schedule    `json:"schedule"`
+	Remote         *RemoteDest `json:"remote,omitempty"`
+	LastRun        *RunResult  `json:"lastRun,omitempty"`
+}
+
+// IsRemote 回報這是不是一份異地鏡像(SSH)備份。
+func (j Job) IsRemote() bool { return j.Remote != nil }
+
+// noUnsafeChars 擋掉會破壞 rsync 遠端規格 / ssh -e 字串的字元(空白、換行、
+// 控制字元、引號等)。遠端欄位最後會進 exec 參數(非 shell),但仍要擋空白,
+// 因為 rsync 的 `-e "ssh …"` 是以空白切分的,而 user@host:path 也不能有空白。
+func noUnsafeChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == ' ' || r == '\t' || r == '"' || r == '\'' || r == '`' {
+			return false
+		}
+	}
+	return true
 }
 
 // Validate 檢查一份 Job 設定是否完整、安全。特別檢查來源/目的地路徑
@@ -165,6 +197,32 @@ func (j Job) Validate() error {
 	if !filepath.IsAbs(j.SourcePath) {
 		return fmt.Errorf("source path must be an absolute path, got %q", j.SourcePath)
 	}
+	if err := j.Schedule.Validate(); err != nil {
+		return fmt.Errorf("invalid schedule: %w", err)
+	}
+
+	// 異地鏡像(SSH):驗證遠端欄位,不走本機目的地/保留份數那套。
+	if j.IsRemote() {
+		rd := j.Remote
+		if strings.TrimSpace(rd.Host) == "" || !noUnsafeChars(rd.Host) {
+			return fmt.Errorf("remote host is required and must not contain spaces or special characters")
+		}
+		if strings.TrimSpace(rd.User) == "" || !noUnsafeChars(rd.User) {
+			return fmt.Errorf("remote user is required and must not contain spaces or special characters")
+		}
+		if !strings.HasPrefix(rd.Path, "/") || !noUnsafeChars(rd.Path) {
+			return fmt.Errorf("remote path must be an absolute path with no spaces/special characters, got %q", rd.Path)
+		}
+		if rd.Port < 0 || rd.Port > 65535 {
+			return fmt.Errorf("remote port out of range: %d", rd.Port)
+		}
+		if rd.SSHKey != "" && (!filepath.IsAbs(rd.SSHKey) || !noUnsafeChars(rd.SSHKey)) {
+			return fmt.Errorf("ssh key path must be an absolute path with no spaces/special characters")
+		}
+		return nil
+	}
+
+	// 本機快照備份:原本的檢查。
 	if !filepath.IsAbs(j.DestPath) {
 		return fmt.Errorf("destination path must be an absolute path, got %q", j.DestPath)
 	}
@@ -173,9 +231,6 @@ func (j Job) Validate() error {
 	}
 	if j.RetentionCount <= 0 {
 		return fmt.Errorf("retentionCount must be positive, got %d", j.RetentionCount)
-	}
-	if err := j.Schedule.Validate(); err != nil {
-		return fmt.Errorf("invalid schedule: %w", err)
 	}
 	return nil
 }

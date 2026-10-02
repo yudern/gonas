@@ -3725,8 +3725,24 @@ async function renderBackup(el) {
       <form class="stacked" id="backup-form" style="margin-top:16px">
         <div class="field"><label>${esc(t("backup.jobName"))}</label><input type="text" name="name" placeholder="${esc(t("backup.jobNamePlaceholder"))}" required></div>
         <div class="field"><label>${esc(t("backup.sourcePath"))}</label><input type="text" name="sourcePath" placeholder="/mnt/tank/media" required></div>
-        <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required><div class="hint">${esc(t("backup.destHint"))}</div></div>
-        <div class="field"><label>${esc(t("backup.retention"))}</label><input type="number" name="retentionCount" value="7" min="1" required></div>
+        <div class="field"><label>${esc(t("backup.destType"))}</label>
+          <select name="destType" id="backup-dest-type">
+            <option value="local">${esc(t("backup.destTypeLocal"))}</option>
+            <option value="remote">${esc(t("backup.destTypeRemote"))}</option>
+          </select>
+        </div>
+        <div id="backup-local-fields">
+          <div class="field"><label>${esc(t("backup.destPath"))}</label><input type="text" name="destPath" placeholder="/mnt/backup" required><div class="hint">${esc(t("backup.destHint"))}</div></div>
+          <div class="field"><label>${esc(t("backup.retention"))}</label><input type="number" name="retentionCount" value="7" min="1" required></div>
+        </div>
+        <div id="backup-remote-fields" hidden>
+          <p class="hint">${esc(t("backup.remoteHint"))}</p>
+          <div class="field"><label>${esc(t("backup.remoteHost"))}</label><input type="text" name="remoteHost" placeholder="192.168.1.50" disabled></div>
+          <div class="field"><label>${esc(t("backup.remoteUser"))}</label><input type="text" name="remoteUser" placeholder="backup" disabled></div>
+          <div class="field"><label>${esc(t("backup.remotePort"))}</label><input type="number" name="remotePort" value="22" min="1" max="65535" disabled></div>
+          <div class="field"><label>${esc(t("backup.remotePath"))}</label><input type="text" name="remotePath" placeholder="/volume1/nas-backup" disabled></div>
+          <div class="field"><label>${esc(t("backup.remoteKey"))}</label><input type="text" name="remoteKey" placeholder="/root/.ssh/gonas_backup" disabled><div class="hint">${esc(t("backup.remoteKeyHint"))}</div></div>
+        </div>
         <div class="field"><label>${esc(t("backup.scheduleKind"))}</label>
           <select name="scheduleKind" id="backup-schedule-kind">
             <option value="interval">${esc(t("backup.scheduleKindInterval"))}</option>
@@ -3772,19 +3788,41 @@ function renderBackupJobRow(j) {
       errorMsg = msg("error", translateError(j.lastRun.error) || t("backup.unknownError"));
     }
   }
+  // 異地鏡像沒有本機快照輪替 —— 目的地顯示成 user@host:path(含「異地」標記),
+  // 也不提供「快照」按鈕(遠端沒有可列舉/還原的本機快照)。
+  const isRemote = !!j.remote;
+  let destCond;
+  if (isRemote) {
+    const r = j.remote;
+    const port = r.port && r.port !== 22 ? ":" + r.port : "";
+    destCond =
+      `<span class="pill neutral">${esc(t("backup.remoteBadge"))}</span> ` +
+      esc(`${r.user}@${r.host}${port}:${r.path}`) +
+      ` · ${esc(describeSchedule(j.schedule))}`;
+  } else {
+    destCond =
+      esc(j.sourcePath) +
+      " → " +
+      esc(j.destPath) +
+      ` · ${esc(t("backup.retention"))} ${j.retentionCount} · ${esc(describeSchedule(j.schedule))}`;
+  }
+  const sourcePrefix = isRemote ? esc(j.sourcePath) + " → " : "";
+  const snapshotsBtn = isRemote
+    ? ""
+    : `<button class="secondary" data-view-snapshots="${esc(j.id)}">${esc(t("backup.snapshots"))}</button>`;
   return `
     <div class="rule-row" data-job-row="${esc(j.id)}">
       <div class="rule-main">
         <span class="pill ${j.enabled ? "ok" : "neutral"}">${j.enabled ? esc(t("backup.jobEnabled")) : esc(t("backup.jobDisabled"))}</span>
         <div>
           <div class="rule-name">${esc(j.name)}</div>
-          <div class="rule-cond">${esc(j.sourcePath)} → ${esc(j.destPath)} · ${esc(t("backup.retention"))} ${j.retentionCount} · ${esc(describeSchedule(j.schedule))}</div>
+          <div class="rule-cond">${sourcePrefix}${destCond}</div>
         </div>
       </div>
       <div class="btn-row" style="margin:0">
         ${statusPill}
         <button class="secondary" data-run-job="${esc(j.id)}">${esc(t("backup.runNow"))}</button>
-        <button class="secondary" data-view-snapshots="${esc(j.id)}">${esc(t("backup.snapshots"))}</button>
+        ${snapshotsBtn}
         <button class="secondary" data-del-job="${esc(j.id)}">${esc(t("backup.deleteJob"))}</button>
       </div>
     </div>
@@ -3821,8 +3859,38 @@ function attachBackupScheduleKindToggle(el) {
   sync();
 }
 
+// attachBackupDestTypeToggle 切換「備份目的地」:本機快照 vs 異地 SSH 鏡像。
+// 跟排程方式的切換同理 —— 把隱藏那一組的 required/disabled 一起處理,避免瀏覽器
+// 對著看不到的 required 欄位擋下送出。異地鏡像沒有本機快照輪替,所以 destPath /
+// retentionCount 這兩欄只在本機模式才存在、才必填。
+function attachBackupDestTypeToggle(el) {
+  const select = el.querySelector("#backup-dest-type");
+  const localFields = el.querySelector("#backup-local-fields");
+  const remoteFields = el.querySelector("#backup-remote-fields");
+
+  function sync() {
+    const isRemote = select.value === "remote";
+    localFields.hidden = isRemote;
+    remoteFields.hidden = !isRemote;
+    localFields.querySelectorAll("input").forEach((input) => {
+      input.required = !isRemote;
+      input.disabled = isRemote;
+    });
+    remoteFields.querySelectorAll("input").forEach((input) => {
+      // sshKey 與 port 不是必填(port 有預設值);host/user/path 才必填。
+      const optional = input.name === "remoteKey" || input.name === "remotePort";
+      input.required = isRemote && !optional;
+      input.disabled = !isRemote;
+    });
+  }
+
+  select.addEventListener("change", sync);
+  sync();
+}
+
 function attachBackupHandlers(el) {
   attachBackupScheduleKindToggle(el);
+  attachBackupDestTypeToggle(el);
 
   el.querySelector("#backup-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -3838,14 +3906,29 @@ function attachBackupHandlers(el) {
             hourOfDay: Number(f.get("hourOfDay")),
             minuteOfHour: Number(f.get("minuteOfHour")),
           };
+    const isRemote = (f.get("destType") || "local") === "remote";
     const job = {
       name: f.get("name").trim(),
       sourcePath: f.get("sourcePath").trim(),
-      destPath: f.get("destPath").trim(),
-      retentionCount: Number(f.get("retentionCount")),
       enabled: f.get("enabled") === "on",
       schedule,
     };
+    if (isRemote) {
+      // 異地鏡像:沒有本機目的地/保留份數,改帶 remote 物件。port 用預設 22,
+      // sshKey 留空則由後端用系統預設金鑰/agent。
+      const port = Number(f.get("remotePort"));
+      job.remote = {
+        host: (f.get("remoteHost") || "").trim(),
+        user: (f.get("remoteUser") || "").trim(),
+        port: Number.isFinite(port) && port > 0 ? port : 22,
+        path: (f.get("remotePath") || "").trim(),
+      };
+      const key = (f.get("remoteKey") || "").trim();
+      if (key) job.remote.sshKey = key;
+    } else {
+      job.destPath = f.get("destPath").trim();
+      job.retentionCount = Number(f.get("retentionCount"));
+    }
     try {
       await api.createBackupJob(job);
       box.innerHTML = msg("ok", t("backup.jobAdded"));
