@@ -457,6 +457,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/storage/array/stop", s.requireAdmin(s.handleStorageArrayStop))
 	mux.HandleFunc("POST /api/v1/storage/array/sync", s.requireAdmin(s.handleStorageArraySync))
 	mux.HandleFunc("POST /api/v1/storage/array/scrub", s.requireAdmin(s.handleStorageArrayScrub))
+	mux.HandleFunc("POST /api/v1/storage/array/fix", s.requireAdmin(s.handleStorageArrayFix))
 	mux.HandleFunc("GET /api/v1/storage/parity/schedule", s.requireAuth(s.handleStorageParityScheduleGet))
 	mux.HandleFunc("PUT /api/v1/storage/parity/schedule", s.requireAdmin(s.handleStorageParityScheduleSet))
 

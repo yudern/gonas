@@ -106,6 +106,9 @@ type arrayStatusResponse struct {
 	ParitySyncing   bool       `json:"paritySyncing"`
 	ParityLastSync  *time.Time `json:"parityLastSync,omitempty"`
 	ParitySyncError string     `json:"paritySyncError,omitempty"`
+	// DataDisks 是這個 pool 的資料碟掛載點清單,給「從校驗重建某一顆資料碟」的
+	// UI 用(第六十輪壞盤重建)。只在有同位碟時才有重建的意義。
+	DataDisks []string `json:"dataDisks,omitempty"`
 }
 
 func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +125,9 @@ func (s *Server) handleStorageArrayStatus(w http.ResponseWriter, r *http.Request
 		ParitySyncing:  s.paritySyncing.Load(),
 		ParityLastSync: snap.ParityLastSync,
 		Protected:      hasParity && snap.ParityLastSync != nil,
+	}
+	if hasParity && snap.Pool != nil {
+		resp.DataDisks = append([]string(nil), snap.Pool.DataDisks...)
 	}
 	if e := s.paritySyncErr.Load(); e != nil {
 		resp.ParitySyncError = *e
@@ -245,6 +251,64 @@ func (s *Server) handleStorageArrayScrub(w http.ResponseWriter, r *http.Request)
 		s.logger.Info("parity scrub completed", "pool", pool.Name)
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scrubbing"})
+}
+
+type fixDiskRequest struct {
+	MountPoint string `json:"mountPoint"`
+}
+
+// handleStorageArrayFix 從同位資料「重建一顆資料碟」(對應 snapraid fix -d dN)。
+// 第六十輪(產品 P0:壞盤更換/校驗重建)。使用者流程:壞盤 → 換上新空碟 →
+// 用「準備磁碟」掛到「同一個掛載點」→ 對那個掛載點按「從校驗重建」。這支
+// 把掛載點換算成 snapraid 的 dN 再跑 fix。具破壞性(會覆寫該碟內容),所以
+// 前端有強確認;requireAdmin;跟 sync/scrub 共用 single-flight(背景執行)。
+func (s *Server) handleStorageArrayFix(w http.ResponseWriter, r *http.Request) {
+	var req fixDiskRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	snap := s.store.Snapshot()
+	if snap.Pool == nil {
+		writeError(w, http.StatusBadRequest, errNoPoolConfigured)
+		return
+	}
+	if len(snap.Pool.ParityDisks) == 0 {
+		// 沒有同位碟就沒有東西可以用來重建。
+		writeError(w, http.StatusBadRequest, errNoParityDisks)
+		return
+	}
+	diskName, err := storage.DataDiskNameForMount(*snap.Pool, req.MountPoint)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !s.paritySyncing.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errParitySyncInProgress)
+		return
+	}
+	s.paritySyncErr.Store(nil)
+	pool := *snap.Pool
+	go func() {
+		defer s.paritySyncing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+		defer cancel()
+		if err := s.writeSnapraidConfig(pool); err != nil {
+			msg := "writing snapraid.conf: " + err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("disk rebuild: could not write snapraid.conf", "err", err)
+			return
+		}
+		s.logger.Info("disk rebuild starting", "pool", pool.Name, "disk", diskName, "mount", req.MountPoint)
+		if out, err := storage.RunSnapraidFix(ctx, s.runner, s.snapraidCfgPath, diskName); err != nil {
+			msg := err.Error()
+			s.paritySyncErr.Store(&msg)
+			s.logger.Error("disk rebuild failed", "err", err, "disk", diskName, "out", string(out))
+			return
+		}
+		s.paritySyncErr.Store(nil)
+		s.logger.Info("disk rebuild completed", "pool", pool.Name, "disk", diskName)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "rebuilding", "disk": diskName})
 }
 
 // --- 定時同位校驗(scrub)排程 ------------------------------------------

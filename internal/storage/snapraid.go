@@ -94,16 +94,34 @@ func naturalLess(a, b string) bool {
 // 永遠得到同一份 data 行、同一組 dN↔掛載點對應,再也不會因為重存設定/重開機
 // 而漂移。(掛載點本身由 GoNAS 準備磁碟時以 UUID 寫進 fstab,是穩定的,所以
 // 依掛載點排序即等於依實體碟穩定排序。)
+// sortedDataDisks 回傳「穩定排序後」的資料碟掛載點清單。dN 的編號就是依這個
+// 順序來的(d1=第一個…)——GenerateSnapraidConfig 跟 DataDiskNameForMount 都用
+// 它,確保「產生設定」跟「依掛載點反查 dN」用的是同一套順序,不會對不上。
+func sortedDataDisks(cfg PoolConfig) []string {
+	out := append([]string(nil), cfg.DataDisks...)
+	sort.SliceStable(out, func(i, j int) bool { return naturalLess(out[i], out[j]) })
+	return out
+}
+
+// DataDiskNameForMount 依掛載點反查它在 snapraid.conf 裡的資料碟名稱(d1/d2…)。
+// 給「從校驗重建某一顆資料碟」用:使用者在 UI 選掛載點,後端換算成 snapraid
+// 認得的 dN。找不到就回錯。
+func DataDiskNameForMount(cfg PoolConfig, mountPoint string) (string, error) {
+	for i, d := range sortedDataDisks(cfg) {
+		if d == mountPoint {
+			return fmt.Sprintf("d%d", i+1), nil
+		}
+	}
+	return "", fmt.Errorf("mount point %q is not a data disk in this pool", mountPoint)
+}
+
 func GenerateSnapraidConfig(cfg PoolConfig) (string, error) {
 	if err := cfg.Validate(); err != nil {
 		return "", fmt.Errorf("refusing to generate config for invalid pool: %w", err)
 	}
 	// 對資料碟做穩定排序後再編 dN——用副本,不動呼叫端傳進來的 slice。
 	stable := cfg
-	stable.DataDisks = append([]string(nil), cfg.DataDisks...)
-	sort.SliceStable(stable.DataDisks, func(i, j int) bool {
-		return naturalLess(stable.DataDisks[i], stable.DataDisks[j])
-	})
+	stable.DataDisks = sortedDataDisks(cfg)
 	var buf bytes.Buffer
 	if err := snapraidTmpl.Execute(&buf, stable); err != nil {
 		return "", fmt.Errorf("rendering snapraid.conf: %w", err)
@@ -178,6 +196,27 @@ func RunSnapraidSync(ctx context.Context, r Runner, configPath string) (out []by
 		return out2, true, fmt.Errorf("snapraid sync --force-uuid (config=%s): %w", configPath, err2)
 	}
 	return out, false, fmt.Errorf("snapraid sync (config=%s): %w", configPath, err)
+}
+
+// RunSnapraidFix 從同位資料「重建一顆資料碟」(對應 `snapraid fix -d <dN>`)。
+// 第六十輪(產品 P0:壞盤更換/校驗重建)——先前只有 diff/sync/scrub,一顆資料碟
+// 壞掉後沒有任何在產品內恢復的路徑,等於有同位卻救不回來。流程:使用者換上新
+// 的空碟、用「準備磁碟」掛到「同一個掛載點」,再對那顆碟跑 fix,snapraid 會用
+// 同位 + 其他資料碟把它的內容重算回來。
+//
+// diskName 必須是 snapraid.conf 裡的資料碟名(d1/d2…,由 DataDiskNameForMount
+// 從掛載點換算而來)——不接受任意字串,避免把使用者輸入直接丟進指令。
+// 這是具破壞性的動作(會覆寫 diskName 那顆碟的內容),呼叫端務必已向使用者
+// 明確確認;這裡只負責正確地跑指令。
+func RunSnapraidFix(ctx context.Context, r Runner, configPath, diskName string) ([]byte, error) {
+	out, err := r.Run(ctx, "snapraid", "-c", configPath, "fix", "-d", diskName)
+	if err != nil {
+		if looksLikeMissingBinary(err) {
+			return out, ErrSnapraidNotInstalled
+		}
+		return out, fmt.Errorf("snapraid fix -d %s (config=%s): %w", diskName, configPath, err)
+	}
+	return out, nil
 }
 
 // RunSnapraid 對指定設定檔執行一個 SnapRAID 子指令,回傳 stdout 供上層記錄。

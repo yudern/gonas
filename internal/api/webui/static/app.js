@@ -1031,6 +1031,18 @@ async function renderStorage(el) {
       </form>
     </div>` : ""}
 
+    ${arrayStatus.hasParity && (arrayStatus.dataDisks && arrayStatus.dataDisks.length) ? `
+    <div class="card" style="border-color:var(--warn-border, var(--border))">
+      ${h2i("array", esc(t("storage.recoveryTitle")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.recoveryHint"))}</p>
+      <div id="recovery-msg"></div>
+      ${arrayStatus.dataDisks.map((d) => `
+        <div class="service-row">
+          <span><code>${esc(d)}</code></span>
+          <button type="button" class="danger" data-fix-disk="${esc(d)}" ${arrayStatus.paritySyncing ? "disabled" : ""}>${esc(t("storage.rebuildDisk"))}</button>
+        </div>`).join("")}
+    </div>` : ""}
+
     <div class="card">
       ${h2i("disks", esc(t("storage.disksDetected")))}
       <div class="table-wrap">
@@ -1133,6 +1145,29 @@ async function renderStorage(el) {
       }
     });
   }
+
+  el.querySelectorAll("[data-fix-disk]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const mount = btn.dataset.fixDisk;
+      // 重建是破坏性操作:会用校验数据覆写这块盘的内容。强确认 + 二次输入掛载点。
+      if (!confirm(t("storage.rebuildConfirm", { disk: mount }))) return;
+      const typed = prompt(t("storage.rebuildTypePrompt", { disk: mount }), "");
+      if (typed !== mount) {
+        if (typed !== null) el.querySelector("#recovery-msg").innerHTML = msg("error", t("storage.rebuildMismatch"));
+        return;
+      }
+      btn.disabled = true;
+      const box = el.querySelector("#recovery-msg");
+      try {
+        await api.fixDisk(mount);
+        if (box) box.innerHTML = msg("ok", t("storage.rebuildStarted"));
+        await renderStorage(el);
+      } catch (err) {
+        btn.disabled = false;
+        if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  });
 
   if (disks.length) loadSmartData(el);
 

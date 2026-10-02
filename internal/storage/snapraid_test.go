@@ -74,6 +74,54 @@ func TestGenerateSnapraidConfig_DataDiskOrderIsStable(t *testing.T) {
 	}
 }
 
+// 第六十輪:依掛載點反查 dN,要跟 GenerateSnapraidConfig 的 dN 指派一致
+//(都用排序後的順序),不管傳入順序如何。
+func TestDataDiskNameForMount(t *testing.T) {
+	cfg := PoolConfig{
+		Name:        "tank",
+		ParityDisks: []string{"/mnt/parity1"},
+		MountPoint:  "/mnt/tank",
+		// 故意亂序傳入。
+		DataDisks:    []string{"/mnt/disk3", "/mnt/disk1", "/mnt/disk2"},
+		ContentFiles: []string{"/mnt/disk1", "/mnt/parity1"},
+	}
+	cases := map[string]string{"/mnt/disk1": "d1", "/mnt/disk2": "d2", "/mnt/disk3": "d3"}
+	for mount, want := range cases {
+		got, err := DataDiskNameForMount(cfg, mount)
+		if err != nil {
+			t.Fatalf("DataDiskNameForMount(%q) error: %v", mount, err)
+		}
+		if got != want {
+			t.Errorf("DataDiskNameForMount(%q) = %q, want %q", mount, got, want)
+		}
+	}
+	// 跟產生的設定一致性:conf 裡 "data d1 /mnt/disk1" 必須存在。
+	conf, err := GenerateSnapraidConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conf, "data d1 /mnt/disk1") || !strings.Contains(conf, "data d3 /mnt/disk3") {
+		t.Errorf("config dN assignment inconsistent with DataDiskNameForMount:\n%s", conf)
+	}
+	// 不存在的掛載點要回錯。
+	if _, err := DataDiskNameForMount(cfg, "/mnt/nope"); err == nil {
+		t.Error("expected an error for a mount point that isn't a data disk")
+	}
+}
+
+func TestRunSnapraidFix_BuildsExpectedCommand(t *testing.T) {
+	r := &argRecordingRunner{plainOut: []byte("Everything OK\n")}
+	if _, err := RunSnapraidFix(context.Background(), r, "/tmp/snapraid.conf", "d2"); err != nil {
+		t.Fatalf("RunSnapraidFix error: %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("expected one call, got %v", r.calls)
+	}
+	if !r.has(r.calls[0], "fix") || !r.has(r.calls[0], "-d") || !r.has(r.calls[0], "d2") {
+		t.Errorf("expected `snapraid ... fix -d d2`, got %v", r.calls[0])
+	}
+}
+
 func TestNaturalLess(t *testing.T) {
 	cases := []struct {
 		a, b string
