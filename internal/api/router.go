@@ -196,6 +196,12 @@ type Server struct {
 	smartTestMu        sync.Mutex
 	smartTestScheduler *storage.Scheduler
 
+	// recycleCleanup 是每天一次的 SMB 回收筒清理背景排程。不像前兩個「看設定
+	// 決定要不要啟動」—— 它一律啟動,每次執行自己讀當下的共享清單,只對開了
+	// 回收筒且設了保留天數的共享動作,沒有符合的就空轉。所以不需要一個開關
+	// 設定,也不需要在共享增刪時停舊啟新。
+	recycleCleanup *storage.Scheduler
+
 	// certRenewer 是 HTTPS 啟用時,背景週期性檢查/續簽自簽 TLS 憑證的
 	// goroutine(見 internal/security.CertRenewer)。HTTPS 沒有啟用時
 	// 維持 nil,New()/Close() 都要檢查 nil 再動作。
@@ -412,6 +418,12 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	if snap := store.Snapshot(); snap.SmartTest.Enabled {
 		s.startSmartTestScheduler(snap.SmartTest)
 	}
+
+	// SMB 回收筒清理:每天凌晨 4:30 跑一次,清掉各共享回收筒裡超過保留天數的
+	// 檔案。一律啟動(每次自己讀共享清單,沒有開回收筒的就空轉),不綁任何
+	// 開關設定。
+	s.recycleCleanup = storage.NewScheduler(logger)
+	s.recycleCleanup.StartPeriodic(context.Background(), 24*time.Hour, 4, 30, "recycle-cleanup", s.runRecycleCleanup)
 
 	// UPS 監控一律啟動,但每輪自己讀設定決定要不要動作(沒啟用/沒開自動
 	// 關機時等於空轉,不查也不動)。getConfig 每輪讀當下持久化設定,所以
@@ -647,6 +659,9 @@ func (s *Server) Close() {
 	s.stopDigestScheduler()
 	s.stopParityScrubScheduler()
 	s.stopSmartTestScheduler()
+	if s.recycleCleanup != nil {
+		s.recycleCleanup.Stop()
+	}
 }
 
 // RestartRequested 回傳一個訊號 channel,self-update 成功把新版執行檔

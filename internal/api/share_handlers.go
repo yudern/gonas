@@ -5,10 +5,34 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bng147/gonas/internal/share"
 	"github.com/bng147/gonas/internal/state"
 )
+
+// runRecycleCleanup 是每天一次的 SMB 回收筒清理:對每個開了回收筒且設了保留
+// 天數(RecycleMaxDays>0)的共享,刪掉回收筒裡待超過保留天數的檔案。讀當下
+// 的共享清單,沒有符合的就什麼都不做。best-effort:個別共享清理失敗只記 log,
+// 不影響其他共享。由背景排程(recycleCleanup)呼叫。
+func (s *Server) runRecycleCleanup(_ context.Context) error {
+	now := time.Now()
+	for _, sh := range s.store.Snapshot().Shares {
+		if !sh.Recycle || sh.RecycleMaxDays <= 0 {
+			continue
+		}
+		maxAge := time.Duration(sh.RecycleMaxDays) * 24 * time.Hour
+		removed, err := share.PruneRecycleBin(sh.Path, maxAge, now)
+		if err != nil {
+			s.logger.Warn("recycle bin cleanup failed for a share", "share", sh.Name, "err", err)
+			continue
+		}
+		if removed > 0 {
+			s.logger.Info("recycle bin cleanup removed expired files", "share", sh.Name, "removed", removed, "maxDays", sh.RecycleMaxDays)
+		}
+	}
+	return nil
+}
 
 // 這兩個路徑對應 internal/share 套件文件裡說的「GoNAS 自己管理的 include
 // 檔案」。真正的系統設定(/etc/samba/smb.conf、/etc/exports)不會被寫到。

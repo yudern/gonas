@@ -31,6 +31,16 @@ type Share struct {
 	ReadOnly   bool     `json:"readOnly"`
 	GuestOK    bool     `json:"guestOk"`              // 允許匿名存取；預設應為 false，安裝精靈要讓使用者明確勾選
 	ValidUsers []string `json:"validUsers,omitempty"` // 空代表沿用 [global] 的存取控制
+
+	// Recycle 開啟 Samba 的 vfs_recycle:透過 SMB 刪除的檔案不會立刻消失,
+	// 而是移進共享根目錄下一個隱藏的 .recycle/<使用者> 子目錄(保留原本的目錄
+	// 結構),等於一個「網路芳鄰的資源回收筒」,手滑刪錯還救得回來。只對
+	// SMB 刪除有效(本機/NFS/rsync 的刪除不經過 smbd,不受影響)。
+	Recycle bool `json:"recycle,omitempty"`
+	// RecycleMaxDays 是回收筒的保留天數:進回收筒超過這麼多天的檔案由背景
+	// 清理工作刪除,避免回收筒無限長大把碟塞爆。0(預設)代表永久保留、不自動
+	// 清理(由使用者自己管理)。只有 Recycle 為 true 時才有意義。
+	RecycleMaxDays int `json:"recycleMaxDays,omitempty"`
 }
 
 func (s Share) Validate() error {
@@ -57,6 +67,9 @@ func (s Share) Validate() error {
 	}
 	if hasControlChars(s.Comment) {
 		return fmt.Errorf("share %q: comment cannot contain control characters or line breaks", s.Name)
+	}
+	if s.RecycleMaxDays < 0 {
+		return fmt.Errorf("share %q: recycle retention days cannot be negative", s.Name)
 	}
 	for _, u := range s.ValidUsers {
 		// 換行/控制字元會破壞格式;逗號是 "valid users = a, b" 的分隔符,
@@ -88,6 +101,16 @@ const sambaConfTemplate = `# 由 GoNAS 自動產生，請勿手動修改 —— 
 	browseable = yes
 {{- if .ValidUsers}}
 	valid users = {{join .ValidUsers ", "}}
+{{- end}}
+{{- if .Recycle}}
+	vfs objects = recycle
+	recycle:repository = .recycle/%U
+	recycle:keeptree = yes
+	recycle:versions = yes
+	recycle:touch = yes
+	recycle:directory_mode = 0770
+	recycle:exclude = *.tmp|*.temp|*.log|*.obj|~$*
+	recycle:exclude_dir = /tmp|/temp|/cache|/.recycle
 {{- end}}
 {{end}}`
 

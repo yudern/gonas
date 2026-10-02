@@ -2618,7 +2618,7 @@ async function renderShares(el) {
           <tbody>
             ${shares.length ? shares.map((s) => `
               <tr>
-                <td>${esc(s.name)}</td><td><code>${esc(s.path)}</code></td>
+                <td>${esc(s.name)}${s.recycle ? ` <span class="pill ok" title="${esc(s.recycleMaxDays ? t("shares.recycleBadgeDays", { n: s.recycleMaxDays }) : t("shares.recycleBadgeForever"))}">${esc(t("shares.recycleBadge"))}</span>` : ""}</td><td><code>${esc(s.path)}</code></td>
                 <td>${s.readOnly ? esc(t("shares.yes")) : esc(t("shares.no"))}</td><td>${s.guestOk ? esc(t("shares.yes")) : esc(t("shares.no"))}</td>
                 <td><button class="secondary" data-del-share="${esc(s.name)}">${esc(t("common.delete"))}</button></td>
               </tr>`).join("") : `<tr><td colspan="5" class="empty-state">${esc(t("shares.noShares"))}</td></tr>`}
@@ -2633,6 +2633,8 @@ async function renderShares(el) {
         <div class="checkbox-row"><label><input type="checkbox" name="readOnly"> ${esc(t("shares.readOnly"))}</label></div>
         <div class="checkbox-row"><label><input type="checkbox" name="guestOk"> ${esc(t("shares.guestOk"))}</label></div>
         <div class="field"><label>${esc(t("shares.validUsers"))}</label><input type="text" name="validUsers" placeholder="alice, bob"></div>
+        <div class="checkbox-row"><label><input type="checkbox" name="recycle" id="share-recycle"> ${esc(t("shares.recycle"))}</label></div>
+        <div class="field" id="share-recycle-days-field" style="display:none"><label>${esc(t("shares.recycleMaxDays"))}</label><input type="number" name="recycleMaxDays" min="0" max="3650" value="30"><div class="hint">${esc(t("shares.recycleMaxDaysHint"))}</div></div>
         <div class="btn-row"><button type="submit">${esc(t("shares.addShare"))}</button></div>
       </form>
     </div>
@@ -2677,9 +2679,19 @@ async function renderShares(el) {
     });
   });
 
+  // 勾了「回收筒」才顯示保留天數欄位。
+  const recycleChk = el.querySelector("#share-recycle");
+  if (recycleChk) {
+    const daysField = el.querySelector("#share-recycle-days-field");
+    const sync = () => { daysField.style.display = recycleChk.checked ? "" : "none"; };
+    recycleChk.addEventListener("change", sync);
+    sync();
+  }
+
   el.querySelector("#share-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
+    const recycle = f.get("recycle") === "on";
     const share = {
       name: f.get("name").trim(),
       path: f.get("path").trim(),
@@ -2687,6 +2699,8 @@ async function renderShares(el) {
       readOnly: f.get("readOnly") === "on",
       guestOk: f.get("guestOk") === "on",
       validUsers: (f.get("validUsers") || "").split(",").map((s) => s.trim()).filter(Boolean),
+      recycle,
+      recycleMaxDays: recycle ? (Number(f.get("recycleMaxDays")) || 0) : 0,
     };
     const box = el.querySelector("#share-msg");
     try {
