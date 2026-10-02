@@ -252,6 +252,10 @@ type Server struct {
 	// QA 覆核):安裝要拉映像、建容器,可能跑好幾分鐘,同一時間只允許一個,
 	// 避免兩個安裝並發撞容器命名/網路、或雙重寫入 InstalledApps。
 	appInstalling atomic.Bool
+	// appOpStatus 是目前(或剛結束)那次安裝/更新的進度,給前端輪詢顯示拉取
+	// 進度與結果(第六十輪產品覆核:安裝/更新原本是整頁阻塞幾分鐘、沒有任何
+	// 回饋)。安裝/更新改成背景執行,這個指標讓 GET /appstore/op-status 讀。
+	appOpStatus atomic.Pointer[appOpStatus]
 
 	// paritySyncing 是「SnapRAID 同位同步/校驗」的 single-flight 旗標(第五十八
 	// 輪全鏈路覆核 P1)。snapraid sync 在大陣列上可能跑很久,而且會寫同位碟,
@@ -483,6 +487,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/appstore/apps", s.requireAdmin(s.handleAppstoreInstall))
 	mux.HandleFunc("DELETE /api/v1/appstore/apps/{id}", s.requireAdmin(s.handleAppstoreUninstall))
 	mux.HandleFunc("POST /api/v1/appstore/apps/{id}/update", s.requireAdmin(s.handleAppstoreUpdate))
+	mux.HandleFunc("GET /api/v1/appstore/op-status", s.requireAuth(s.handleAppstoreOpStatus))
 
 	mux.HandleFunc("GET /api/v1/share/shares", s.requireAuth(s.handleSharesList))
 	mux.HandleFunc("POST /api/v1/share/shares", s.requireAdmin(s.handleSharesCreate))

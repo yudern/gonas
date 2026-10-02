@@ -76,6 +76,28 @@ func (s *Server) resolveInstallTemplate(req installAppRequest) (appstore.AppTemp
 	return tmpl, nil
 }
 
+// appOpStatus 是一次安裝/更新的進度快照,給前端輪詢(GET /appstore/op-status)。
+type appOpStatus struct {
+	AppID    string `json:"appId"`
+	Action   string `json:"action"`             // "install" | "update"
+	Service  string `json:"service,omitempty"`  // 目前正在拉/建哪個服務
+	Progress string `json:"progress,omitempty"` // docker 拉取進度行
+	Stage    string `json:"stage"`              // "running" | "done" | "failed"
+	Error    string `json:"error,omitempty"`
+}
+
+func (s *Server) setAppOp(st appOpStatus) { s.appOpStatus.Store(&st) }
+
+// handleAppstoreOpStatus 回傳目前(或剛結束)那次安裝/更新的進度。沒有任何
+// 進行過就回 stage:"idle"。前端據此顯示進度條、完成或失敗。requireAuth。
+func (s *Server) handleAppstoreOpStatus(w http.ResponseWriter, r *http.Request) {
+	if st := s.appOpStatus.Load(); st != nil {
+		writeJSON(w, http.StatusOK, st)
+		return
+	}
+	writeJSON(w, http.StatusOK, appOpStatus{Stage: "idle"})
+}
+
 func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 	var req installAppRequest
 	if !readJSON(w, r, &req) {
@@ -100,43 +122,47 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errAppInstallInProgress)
 		return
 	}
-	defer s.appInstalling.Store(false)
 
-	// 跟 HTTP 請求脫鉤的 context(第六十輪 QA 覆核):拉映像可能好幾分鐘,若綁
-	// r.Context(),使用者一關瀏覽器/連線一斷,安裝會被砍在半路,而且連內部的
-	// rollback 清理都會因為 context 已取消而失敗,留下半裝的容器/網路。給獨立、
-	// 30 分鐘上限的 context 讓它跑完;前端顯示「安裝中,可能需要幾分鐘」。
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	// 第六十輪產品覆核:改成「背景執行 + 回 202 + 前端輪詢進度」。原本整個安裝
+	// (拉映像可能好幾分鐘)同步擋在這支請求上,前端只能空等、沒有進度。現在
+	// 背景跑,OnPullProgress 把 docker 的拉取進度寫進 appOpStatus,前端輪詢
+	// GET /appstore/op-status 顯示。single-flight 旗標由背景 goroutine 結束時釋放。
+	s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "running"})
+	overrides := req.Overrides
+	go func() {
+		defer s.appInstalling.Store(false)
+		// 跟 HTTP 請求脫鉤的 context:拉映像可能好幾分鐘,使用者關瀏覽器也不該
+		// 把安裝砍在半路(連內部 rollback 都會被取消的 context 搞壞)。
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 
-	result, err := appstore.Install(ctx, s.docker, appstore.InstallRequest{
-		Template:         tmpl,
-		Overrides:        req.Overrides,
-		StartGracePeriod: 2 * time.Second,
-		OnRollbackError: func(svc string, rbErr error) {
-			// 安裝失敗後的回滾清理若又出錯,記下來——不然會留下沒清乾淨的
-			// 容器/網路卻無跡可尋(第三十四輪)。
-			s.logger.Warn("app install rollback cleanup failed", "app", tmpl.ID, "service", svc, "err", rbErr)
-		},
-	})
-	if err != nil {
-		s.logger.Error("installing app failed", "app", tmpl.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+		result, err := appstore.Install(ctx, s.docker, appstore.InstallRequest{
+			Template:         tmpl,
+			Overrides:        overrides,
+			StartGracePeriod: 2 * time.Second,
+			OnPullProgress: func(svc, status string) {
+				s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "running", Service: svc, Progress: status})
+			},
+			OnRollbackError: func(svc string, rbErr error) {
+				s.logger.Warn("app install rollback cleanup failed", "app", tmpl.ID, "service", svc, "err", rbErr)
+			},
+		})
+		if err != nil {
+			s.logger.Error("installing app failed", "app", tmpl.ID, "err", err)
+			s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "failed", Error: err.Error()})
+			return
+		}
+		installed := state.InstalledApp{Template: tmpl, Result: result, Overrides: overrides}
+		if err := s.store.Update(func(st *state.State) error {
+			st.InstalledApps = append(st.InstalledApps, installed)
+			return nil
+		}); err != nil {
+			s.logger.Error("app installed but persisting installed-app record failed", "app", tmpl.ID, "err", err)
+		}
+		s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "done"})
+	}()
 
-	installed := state.InstalledApp{Template: tmpl, Result: result, Overrides: req.Overrides}
-	if err := s.store.Update(func(st *state.State) error {
-		st.InstalledApps = append(st.InstalledApps, installed)
-		return nil
-	}); err != nil {
-		// 容器已經真的裝起來了，只是記錄沒寫進去 —— 回傳成功但把這個問題記進
-		// log,好過因為記錄失敗就假裝安裝沒發生（那樣使用者會裝出孤兒容器,
-		// 之後靠 Uninstall 的標籤掃描還是找得回來，只是列表暫時看不到)。
-		s.logger.Error("app installed but persisting installed-app record failed", "app", tmpl.ID, "err", err)
-	}
-
-	writeJSON(w, http.StatusOK, installed)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "installing", "appId": tmpl.ID})
 }
 
 // handleAppstoreUpdate 更新一個已安裝的 App:重拉映像、用原本的設定重建容器
@@ -154,7 +180,6 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errAppInstallInProgress)
 		return
 	}
-	defer s.appInstalling.Store(false)
 
 	var app *state.InstalledApp
 	for _, a := range s.store.Snapshot().InstalledApps {
@@ -165,75 +190,80 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if app == nil {
+		s.appInstalling.Store(false)
 		writeError(w, http.StatusNotFound, errAppNotFound)
 		return
 	}
 
-	// 跟安裝一樣脫鉤的背景 context:重拉映像可能好幾分鐘。
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	// 跟安裝一樣:背景執行 + 進度 + 回 202(更新也會拉映像,可能好幾分鐘)。
+	s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running"})
+	appCopy := *app
+	go func() {
+		defer s.appInstalling.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
 
-	s.logger.Info("updating app", "app", id)
-	result, err := appstore.Update(ctx, s.docker, appstore.InstallRequest{
-		Template:         app.Template,
-		Overrides:        app.Overrides,
-		StartGracePeriod: 2 * time.Second,
-		OnRollbackError: func(svc string, rbErr error) {
-			s.logger.Warn("app update rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
-		},
-	})
-	if err != nil {
-		s.logger.Error("updating app failed", "app", id, "err", err)
-		// 第六十輪複審:Update 是「先拉、再移除舊容器、再重建」。若在「移除舊的
-		// 之後、重建失敗」才出錯,舊容器已經不在了,但狀態記錄還指著那些已消失的
-		// 容器——UI 會顯示成「已安裝」卻處處 404。偵測這種情況(容器真的不見了)
-		// 就把記錄移除,讓使用者看到它已經不在、可以重裝,而不是卡在殭屍狀態。
-		// 用 label 掃描判斷:這個 app 還有沒有任何容器存活。
-		stillThere := false
-		if cs, lerr := s.docker.ListContainers(ctx, true); lerr == nil {
-			for _, c := range cs {
-				if c.Labels["com.gonas.app"] == id {
-					stillThere = true
-					break
-				}
-			}
-		} else {
-			stillThere = true // 查不到就保守保留記錄,不要誤刪
-		}
-		if !stillThere {
-			if uerr := s.store.Update(func(st *state.State) error {
-				kept := st.InstalledApps[:0]
-				for _, a := range st.InstalledApps {
-					if a.Template.ID != id {
-						kept = append(kept, a)
+		s.logger.Info("updating app", "app", id)
+		result, err := appstore.Update(ctx, s.docker, appstore.InstallRequest{
+			Template:         appCopy.Template,
+			Overrides:        appCopy.Overrides,
+			StartGracePeriod: 2 * time.Second,
+			OnPullProgress: func(svc, status string) {
+				s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running", Service: svc, Progress: status})
+			},
+			OnRollbackError: func(svc string, rbErr error) {
+				s.logger.Warn("app update rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
+			},
+		})
+		if err != nil {
+			s.logger.Error("updating app failed", "app", id, "err", err)
+			// 若「移除舊容器之後、重建失敗」:舊容器已不在,記錄卻還指著它們。
+			// 用 label 掃描判斷容器是否真的沒了,沒了就移除殭屍記錄。
+			stillThere := false
+			if cs, lerr := s.docker.ListContainers(ctx, true); lerr == nil {
+				for _, c := range cs {
+					if c.Labels["com.gonas.app"] == id {
+						stillThere = true
+						break
 					}
 				}
-				st.InstalledApps = kept
-				return nil
-			}); uerr != nil {
-				s.logger.Error("failed to remove the stale app record after a failed update", "app", id, "err", uerr)
+			} else {
+				stillThere = true
 			}
+			if !stillThere {
+				if uerr := s.store.Update(func(st *state.State) error {
+					kept := st.InstalledApps[:0]
+					for _, a := range st.InstalledApps {
+						if a.Template.ID != id {
+							kept = append(kept, a)
+						}
+					}
+					st.InstalledApps = kept
+					return nil
+				}); uerr != nil {
+					s.logger.Error("failed to remove the stale app record after a failed update", "app", id, "err", uerr)
+				}
+			}
+			s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "failed", Error: err.Error()})
+			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+		updated := state.InstalledApp{Template: appCopy.Template, Result: result, Overrides: appCopy.Overrides}
+		if err := s.store.Update(func(st *state.State) error {
+			for i := range st.InstalledApps {
+				if st.InstalledApps[i].Template.ID == id {
+					st.InstalledApps[i] = updated
+					return nil
+				}
+			}
+			st.InstalledApps = append(st.InstalledApps, updated)
+			return nil
+		}); err != nil {
+			s.logger.Error("app updated but persisting the new record failed", "app", id, "err", err)
+		}
+		s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "done"})
+	}()
 
-	// 更新成功:換掉這個 App 的 Result(容器 ID 變了),Template/Overrides 不變。
-	updated := state.InstalledApp{Template: app.Template, Result: result, Overrides: app.Overrides}
-	if err := s.store.Update(func(st *state.State) error {
-		for i := range st.InstalledApps {
-			if st.InstalledApps[i].Template.ID == id {
-				st.InstalledApps[i] = updated
-				return nil
-			}
-		}
-		// 理論上不會走到(上面已確認存在),保險起見補一筆。
-		st.InstalledApps = append(st.InstalledApps, updated)
-		return nil
-	}); err != nil {
-		s.logger.Error("app updated but persisting the new record failed", "app", id, "err", err)
-	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "updating", "appId": id})
 }
 
 func (s *Server) handleAppstoreUninstall(w http.ResponseWriter, r *http.Request) {

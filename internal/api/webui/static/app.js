@@ -1782,6 +1782,27 @@ function containerStatePill(st) {
   return `<span class="pill warn">${esc(st)}</span>`;
 }
 
+// pollAppOp 輪詢安裝/更新進度,把 docker 拉取進度顯示到 box,直到完成或失敗。
+// 完成回 true、失敗回 false(呼叫端據此顯示成功/失敗並重整)。第六十輪產品
+// 覆核:安裝/更新改成背景執行,這裡讓使用者看到「正在拉取 xxx」而不是空等。
+async function pollAppOp(box, labelKey) {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let st;
+    try {
+      st = await api.appOpStatus();
+    } catch {
+      continue; // 暫時讀不到就再試
+    }
+    if (st.stage === "running") {
+      const detail = st.service ? `${st.service}: ${st.progress || ""}` : (st.progress || "");
+      if (box) box.innerHTML = msg("warn", t(labelKey) + (detail ? " — " + esc(detail) : ""));
+      continue;
+    }
+    return st; // done / failed / idle — 呼叫端據此在重整後顯示結果
+  }
+}
+
 async function renderApps(el) {
   const [installed, catalog, dockerStatus, containers, arrayStatus, images] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
@@ -1937,15 +1958,19 @@ async function renderApps(el) {
       if (!confirm(t("apps.updateConfirm", { name }))) return;
       btn.disabled = true;
       btn.textContent = t("apps.updating");
-      // 更新会先拉镜像(可能几分钟),期间保持提示。
-      el.insertAdjacentHTML("afterbegin", msg("warn", t("apps.updatingLong", { name })));
+      // 顶部放一个会随进度更新的提示框;后台拉镜像时显示拉取进度。
+      el.insertAdjacentHTML("afterbegin", `<div id="app-op-msg">${msg("warn", t("apps.updatingLong", { name }))}</div>`);
+      const box = el.querySelector("#app-op-msg");
       try {
-        await api.updateApp(btn.dataset.update);
-        await renderApps(el);
-        el.insertAdjacentHTML("afterbegin", msg("ok", t("apps.updateOk", { name })));
+        await api.updateApp(btn.dataset.update); // 202,立即返回
+        const st = await pollAppOp(box, "apps.updatingLong");
+        await reRenderAppsKeepingScroll(el);
+        const done = st.stage !== "failed";
+        el.insertAdjacentHTML("afterbegin", done
+          ? msg("ok", t("apps.updateOk", { name }))
+          : msg("error", translateError(st.error || "")));
       } catch (err) {
-        await renderApps(el);
-        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+        if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
   });
@@ -2055,9 +2080,15 @@ async function renderApps(el) {
       }
       const box = form.querySelector(".install-msg");
       try {
-        await api.installApp(templateId, overrides);
+        box.innerHTML = msg("warn", t("apps.installing"));
+        await api.installApp(templateId, overrides); // 202,背景安裝
+        const st = await pollAppOp(box, "apps.installing");
+        if (st.stage === "failed") {
+          box.innerHTML = msg("error", translateError(st.error || ""));
+          return;
+        }
         box.innerHTML = msg("ok", t("apps.installSuccess"));
-        setTimeout(() => renderApps(el), 600);
+        setTimeout(() => reRenderAppsKeepingScroll(el), 600);
       } catch (err) {
         box.innerHTML = msg("error", translateError(err.message));
       }
@@ -2105,9 +2136,15 @@ async function renderApps(el) {
         return;
       }
       try {
-        await api.installCustomApp(template);
+        box.innerHTML = msg("warn", t("apps.installing"));
+        await api.installCustomApp(template); // 202,背景安裝
+        const st = await pollAppOp(box, "apps.installing");
+        if (st.stage === "failed") {
+          box.innerHTML = msg("error", translateError(st.error || ""));
+          return;
+        }
         box.innerHTML = msg("ok", t("apps.installSuccess"));
-        setTimeout(() => renderApps(el), 600);
+        setTimeout(() => reRenderAppsKeepingScroll(el), 600);
       } catch (err) {
         box.innerHTML = msg("error", translateError(err.message));
       }

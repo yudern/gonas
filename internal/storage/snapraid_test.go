@@ -75,7 +75,7 @@ func TestGenerateSnapraidConfig_DataDiskOrderIsStable(t *testing.T) {
 }
 
 // 第六十輪:依掛載點反查 dN,要跟 GenerateSnapraidConfig 的 dN 指派一致
-//(都用排序後的順序),不管傳入順序如何。
+// (都用排序後的順序),不管傳入順序如何。
 func TestDataDiskNameForMount(t *testing.T) {
 	cfg := PoolConfig{
 		Name:        "tank",

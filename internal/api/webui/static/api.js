@@ -93,6 +93,7 @@ export const api = {
   installCustomApp: (template) => request("POST", "/api/v1/appstore/apps", { template }),
   uninstallApp: (id) => request("DELETE", `/api/v1/appstore/apps/${encodeURIComponent(id)}`),
   updateApp: (id) => request("POST", `/api/v1/appstore/apps/${encodeURIComponent(id)}/update`),
+  appOpStatus: () => request("GET", "/api/v1/appstore/op-status"),
 
   shares: () => request("GET", "/api/v1/share/shares"),
   createShare: (share) => request("POST", "/api/v1/share/shares", share),

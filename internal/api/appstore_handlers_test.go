@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -66,6 +68,29 @@ func TestResolveInstallTemplate_UnknownCatalogID(t *testing.T) {
 
 // 第六十輪 QA 覆核:重複安裝同一個目錄 App 要提前擋成 409(errAppIDAlreadyInstalled),
 // 而不是一路跑到 docker 才以「容器名稱已存在」爆 500。
+func TestAppstoreOpStatus_IdleThenReflectsSet(t *testing.T) {
+	s := newTestServer(t)
+	// 沒有任何安裝進行過 → idle。
+	req := httptest.NewRequest("GET", "/api/v1/appstore/op-status", nil)
+	rec := httptest.NewRecorder()
+	s.handleAppstoreOpStatus(rec, req)
+	var st appOpStatus
+	if err := json.NewDecoder(rec.Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Stage != "idle" {
+		t.Errorf("expected idle, got %q", st.Stage)
+	}
+	// 設一個進行中的狀態後應讀得到。
+	s.setAppOp(appOpStatus{AppID: "portainer", Action: "install", Stage: "running", Service: "app", Progress: "Downloading"})
+	rec = httptest.NewRecorder()
+	s.handleAppstoreOpStatus(rec, req)
+	_ = json.NewDecoder(rec.Body).Decode(&st)
+	if st.Stage != "running" || st.AppID != "portainer" || st.Progress != "Downloading" {
+		t.Errorf("unexpected status: %+v", st)
+	}
+}
+
 func TestResolveInstallTemplate_CatalogAlreadyInstalled(t *testing.T) {
 	s := newTestServer(t)
 	want := builtinCatalog[0]
