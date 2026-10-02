@@ -195,28 +195,36 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 跟安裝一樣:背景執行 + 進度 + 回 202(更新也會拉映像,可能好幾分鐘)。
+	// 背景執行 + 進度 + 回 202。更新沿用安裝當下存下的 overrides。
+	s.recreateAppInBackground(id, app.Template, app.Overrides)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "updating", "appId": id})
+}
+
+// recreateAppInBackground 用給定的 template + overrides「重拉映像並重建容器」
+// (保留 bind 掛載的資料),背景執行、進度寫入 appOpStatus、結束時釋放
+// single-flight 旗標。update(沿用舊 overrides)與 edit(用新 overrides)共用這段。
+// 呼叫前必須已經 CompareAndSwap(appInstalling)成功。
+func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, overrides map[string]appstore.ServiceOverride) {
 	s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running"})
-	appCopy := *app
 	go func() {
 		defer s.appInstalling.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 
-		s.logger.Info("updating app", "app", id)
+		s.logger.Info("recreating app", "app", id)
 		result, err := appstore.Update(ctx, s.docker, appstore.InstallRequest{
-			Template:         appCopy.Template,
-			Overrides:        appCopy.Overrides,
+			Template:         tmpl,
+			Overrides:        overrides,
 			StartGracePeriod: 2 * time.Second,
 			OnPullProgress: func(svc, status string) {
 				s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running", Service: svc, Progress: status})
 			},
 			OnRollbackError: func(svc string, rbErr error) {
-				s.logger.Warn("app update rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
+				s.logger.Warn("app recreate rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
 			},
 		})
 		if err != nil {
-			s.logger.Error("updating app failed", "app", id, "err", err)
+			s.logger.Error("recreating app failed", "app", id, "err", err)
 			// 若「移除舊容器之後、重建失敗」:舊容器已不在,記錄卻還指著它們。
 			// 用 label 掃描判斷容器是否真的沒了,沒了就移除殭屍記錄。
 			stillThere := false
@@ -241,13 +249,13 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 					st.InstalledApps = kept
 					return nil
 				}); uerr != nil {
-					s.logger.Error("failed to remove the stale app record after a failed update", "app", id, "err", uerr)
+					s.logger.Error("failed to remove the stale app record after a failed recreate", "app", id, "err", uerr)
 				}
 			}
 			s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "failed", Error: err.Error()})
 			return
 		}
-		updated := state.InstalledApp{Template: appCopy.Template, Result: result, Overrides: appCopy.Overrides}
+		updated := state.InstalledApp{Template: tmpl, Result: result, Overrides: overrides}
 		if err := s.store.Update(func(st *state.State) error {
 			for i := range st.InstalledApps {
 				if st.InstalledApps[i].Template.ID == id {
@@ -258,11 +266,46 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 			st.InstalledApps = append(st.InstalledApps, updated)
 			return nil
 		}); err != nil {
-			s.logger.Error("app updated but persisting the new record failed", "app", id, "err", err)
+			s.logger.Error("app recreated but persisting the new record failed", "app", id, "err", err)
 		}
 		s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "done"})
 	}()
+}
 
+// handleAppstoreEdit 用使用者新填的設定(env / 掛載路徑 / 埠)重建一個已安裝的
+// App——跟更新同一條「重拉+重建、保留資料」的路,差別只在 overrides 來自請求
+// 而非既有記錄(第六十輪產品覆核:原本裝好就不能改設定,改個密碼/埠都得解除
+// 安裝重裝)。requireAdmin。
+func (s *Server) handleAppstoreEdit(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req installAppRequest // 只用它的 Overrides 欄位
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, errAppInstallInProgress)
+		return
+	}
+	var app *state.InstalledApp
+	for _, a := range s.store.Snapshot().InstalledApps {
+		if a.Template.ID == id {
+			ac := a
+			app = &ac
+			break
+		}
+	}
+	if app == nil {
+		s.appInstalling.Store(false)
+		writeError(w, http.StatusNotFound, errAppNotFound)
+		return
+	}
+	// 先驗證新設定裝得起來(必填 env/掛載齊全),不齊就別動正在跑的 App。
+	if err := appstore.ValidateInstallable(app.Template, req.Overrides); err != nil {
+		s.appInstalling.Store(false)
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.recreateAppInBackground(id, app.Template, req.Overrides)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "updating", "appId": id})
 }
 

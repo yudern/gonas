@@ -1845,10 +1845,16 @@ async function renderApps(el) {
               <p>${esc(translateNotice(app.template.description || ""))}</p>
             </div>
             <div class="btn-row" style="margin:0">
+              <button class="secondary" data-edit-app="${esc(app.template.id)}">${esc(t("apps.edit"))}</button>
               <button class="secondary" data-update="${esc(app.template.id)}">${esc(t("apps.update"))}</button>
               <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
             </div>
           </div>
+          <form class="install-form" id="edit-form-${esc(app.template.id)}" data-edit="${esc(app.template.id)}">
+            <div class="install-msg"></div>
+            ${renderEditFields(app)}
+            <div class="btn-row"><button type="submit">${esc(t("apps.saveChanges"))}</button></div>
+          </form>
           <div class="services">
             ${Object.entries(app.result.containerIds || {}).map(([svc, id]) => {
               const st = stateById[id];
@@ -1971,6 +1977,45 @@ async function renderApps(el) {
           : msg("error", translateError(st.error || "")));
       } catch (err) {
         if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  });
+
+  // 「编辑」:展开/收起该应用的编辑表单。
+  el.querySelectorAll("[data-edit-app]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const form = el.querySelector(`#edit-form-${CSS.escape(btn.dataset.editApp)}`);
+      if (form) form.classList.toggle("open");
+    });
+  });
+  // 编辑表单提交:用新 overrides 重建(与安装同一套字段解析 + 进度轮询)。
+  el.querySelectorAll("form[data-edit]").forEach((form) => {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const id = form.dataset.edit;
+      const f = new FormData(form);
+      const overrides = {};
+      for (const [key, value] of f.entries()) {
+        const m = key.match(/^(.+?)\.(env|volume|port)\.(.+)$/);
+        if (!m) continue;
+        const [, svc, kind, name] = m;
+        overrides[svc] = overrides[svc] || { env: {}, volumeHostPaths: {}, portHostOverrides: {} };
+        if (kind === "env" && value) overrides[svc].env[name] = value;
+        if (kind === "volume" && value) overrides[svc].volumeHostPaths[name] = value;
+        if (kind === "port" && value) overrides[svc].portHostOverrides[Number(name)] = Number(value);
+      }
+      const box = form.querySelector(".install-msg");
+      if (!confirm(t("apps.editConfirm"))) return;
+      try {
+        box.innerHTML = msg("warn", t("apps.updating"));
+        await api.editApp(id, overrides); // 202,背景重建
+        const st = await pollAppOp(box, "apps.updating");
+        await reRenderAppsKeepingScroll(el);
+        el.insertAdjacentHTML("afterbegin", st.stage === "failed"
+          ? msg("error", translateError(st.error || ""))
+          : msg("ok", t("apps.editOk")));
+      } catch (err) {
+        box.innerHTML = msg("error", translateError(err.message));
       }
     });
   });
@@ -2336,6 +2381,45 @@ function customServiceBlock(idx) {
       <div class="field"><label>${esc(t("apps.volumes"))}</label><textarea class="svc-volumes" rows="2" placeholder="/mnt/tank/appdata/my-app:/data"></textarea></div>
       <div class="field"><label>${esc(t("apps.env"))}</label><textarea class="svc-env" rows="2" placeholder="TZ=Asia/Taipei"></textarea></div>
     </div>`;
+}
+
+// renderEditFields 为「编辑已安装应用」生成预填当前值的字段(env/挂载/端口),
+// 字段命名与 renderCatalogEntry 一致,这样提交解析可以共用同一套逻辑。预填值
+// 来自 app.overrides(用户安装时填的),没有就退回模板默认。
+function renderEditFields(app) {
+  const tmpl = app.template;
+  const ov = app.overrides || {};
+  return (tmpl.services || []).map((svc) => {
+    const so = ov[svc.name] || {};
+    const envVals = so.env || {};
+    const volVals = so.volumeHostPaths || {};
+    const portVals = so.portHostOverrides || {};
+    const env = (svc.env || []).map((e) => {
+      const cur = envVals[e.key] !== undefined ? envVals[e.key] : "";
+      return `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? esc(t("apps.required")) : ""}</label>
+        <input type="${/pass/i.test(e.key) ? "password" : "text"}" name="${esc(svc.name)}.env.${esc(e.key)}" value="${esc(cur)}" placeholder="${esc(e.default || "")}" ${e.required ? "required" : ""}>
+      </div>`;
+    });
+    const vol = (svc.volumes || []).map((v) => {
+      const cur = volVals[v.containerPath] !== undefined ? volVals[v.containerPath] : "";
+      return `
+      <div class="field">
+        <label>${t("apps.volumeLabel", { svc: esc(svc.name), path: esc(v.containerPath) })}</label>
+        <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" value="${esc(cur)}" required>
+      </div>`;
+    });
+    const port = (svc.ports || []).map((p) => {
+      const cur = portVals[p.containerPort] !== undefined ? portVals[p.containerPort] : (p.hostPort || "");
+      return `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(t("apps.ports"))} (${esc(String(p.containerPort))})</label>
+        <input type="number" name="${esc(svc.name)}.port.${esc(String(p.containerPort))}" value="${esc(String(cur))}">
+      </div>`;
+    });
+    return [...env, ...vol, ...port].join("");
+  }).join("");
 }
 
 function renderCatalogEntry(tmpl, appdataBase) {

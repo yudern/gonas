@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -88,6 +90,39 @@ func TestAppstoreOpStatus_IdleThenReflectsSet(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&st)
 	if st.Stage != "running" || st.AppID != "portainer" || st.Progress != "Downloading" {
 		t.Errorf("unexpected status: %+v", st)
+	}
+}
+
+// 編輯已安裝 App:新設定若缺必填 env,應回 400 且不動正在跑的 App、也要釋放
+// single-flight 旗標(否則之後的操作都會卡在 409)。
+func TestAppstoreEdit_RejectsMissingRequiredEnvAndReleasesFlag(t *testing.T) {
+	s := newTestServer(t)
+	tmpl := appstore.AppTemplate{
+		ID:   "code-server",
+		Name: "code-server",
+		Services: []appstore.ServiceTemplate{
+			{Name: "app", Image: "lscr.io/linuxserver/code-server:latest",
+				Env: []appstore.EnvVar{{Key: "PASSWORD", Required: true}}},
+		},
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		st.InstalledApps = append(st.InstalledApps, state.InstalledApp{Template: tmpl})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"overrides":{"app":{"env":{}}}}`) // 缺 PASSWORD
+	req := httptest.NewRequest("PUT", "/api/v1/appstore/apps/code-server", bytes.NewReader(body))
+	req.SetPathValue("id", "code-server")
+	rec := httptest.NewRecorder()
+	s.handleAppstoreEdit(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing required env, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if s.appInstalling.Load() {
+		t.Error("single-flight flag must be released after a rejected edit")
 	}
 }
 

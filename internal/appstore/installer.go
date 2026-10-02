@@ -13,10 +13,13 @@ import (
 // ServiceOverride 是使用者在安裝精靈裡針對某個服務實際填的值,
 // 用來覆蓋/補齊範本裡沒有預設值的部分(尤其是 VolumeHostPaths —— 範本
 // 刻意不預設資料要落在哪顆碟,詳見 template.go 的說明)。
+// json tag 明確用小寫 —— 前端送上來的就是 env/volumeHostPaths/portHostOverrides,
+// 讀回來(GET installedApps 的 overrides)也要是同樣的小寫 key,前端編輯表單才
+// 讀得到既有值(第六十輪:無 tag 時 Go 會以欄位名大寫輸出,造成讀寫 key 不一致)。
 type ServiceOverride struct {
-	Env               map[string]string // env key -> 使用者填的值
-	VolumeHostPaths   map[string]string // containerPath -> 使用者選的陣列路徑
-	PortHostOverrides map[int]int       // containerPort -> 使用者改過的 hostPort
+	Env               map[string]string `json:"env,omitempty"`               // env key -> 使用者填的值
+	VolumeHostPaths   map[string]string `json:"volumeHostPaths,omitempty"`   // containerPath -> 使用者選的陣列路徑
+	PortHostOverrides map[int]int       `json:"portHostOverrides,omitempty"` // containerPort -> 使用者改過的 hostPort
 }
 
 // InstallRequest 是安裝一個 App 所需的完整輸入。
