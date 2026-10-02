@@ -5,7 +5,52 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
+
+// DeviceForSmart 把一個「池裡的項目」解析成 smartctl 真正能開啟的整顆磁碟
+// 區塊裝置節點。池設定裡的 DataDisks/ParityDisks 存的是「掛載點」(例如
+// /mnt/disk1,見 PoolConfig 說明),而 smartctl 只能開裝置節點(/dev/sdX)
+// —— 直接把掛載點丟給 smartctl 會以「打不開裝置」失敗。這個函式補上中間那層
+// 解析:
+//   - path 已經是 /dev/... 就原樣回傳(防禦性:有些呼叫點本來就拿到裝置節點,
+//     測試也常直接餵 /dev/sdX)。
+//   - 否則用 findmnt 找出掛載點背後的來源裝置(可能是分割區 /dev/sda1),再用
+//     lsblk 的 PKNAME 往上找到整顆磁碟(/dev/sda)—— SMART 要對整顆碟下,不是
+//     對分割區。拿不到 PKNAME(來源本身就是整碟、或 LVM/md 這類沒有單一父裝置
+//     的情況)就退回用來源本身。
+//
+// 之所以做這層而不是「叫使用者在池設定裡填裝置節點」:GoNAS 的池刻意以掛載點
+// 為單位(mergerfs 合併的是已掛載的檔案系統),裝置節點(/dev/sdX)還會因為
+// 重開機、換插槽而改變,掛載點才是穩定的識別。
+func DeviceForSmart(ctx context.Context, r Runner, path string) (string, error) {
+	if strings.HasPrefix(path, "/dev/") {
+		return path, nil
+	}
+	out, err := r.Run(ctx, "findmnt", "-n", "-o", "SOURCE", "--target", path)
+	if err != nil {
+		return "", fmt.Errorf("resolving block device for mount %s: %w", path, err)
+	}
+	source := strings.TrimSpace(string(out))
+	// findmnt 對 btrfs 之類可能回 "/dev/sda1[/subvol]";只取裝置節點本體。
+	if i := strings.IndexByte(source, '['); i >= 0 {
+		source = strings.TrimSpace(source[:i])
+	}
+	if source == "" {
+		return "", fmt.Errorf("no block device is mounted at %s", path)
+	}
+	// 往上找整顆磁碟。PKNAME 為空代表 source 本身就是整碟。
+	if pk, err := r.Run(ctx, "lsblk", "-n", "-o", "PKNAME", source); err == nil {
+		name := strings.TrimSpace(string(pk))
+		if i := strings.IndexByte(name, '\n'); i >= 0 {
+			name = strings.TrimSpace(name[:i]) // 多行時取第一行
+		}
+		if name != "" {
+			return "/dev/" + name, nil
+		}
+	}
+	return source, nil
+}
 
 // SmartHealth 是單顆硬碟的簡化 SMART 狀態,足夠讓 Web UI 畫出「健康 / 需注意 / 故障」
 // 這種燈號,細部完整 attribute 表格留給之後有真正需求時再擴充。

@@ -35,6 +35,8 @@ var (
 	errPeerAllowedIPsEmpty    = errors.New("at least one allowed IP/CIDR is required")
 
 	errBackupJobNotFound = errors.New("no backup job with that id")
+	// 異地鏡像備份沒有本機快照,不能列快照/還原(見 backup.Job.IsRemote)。
+	errRemoteJobNoSnapshots = errors.New("this is an off-site mirror job, which keeps no local snapshots to list or restore")
 
 	// Phase 9.1：自訂 App 安裝(不透過內建目錄範本)共用的 sentinel 錯誤。
 	errAppInstallNeedsExactlyOne = errors.New("provide exactly one of templateId or template")

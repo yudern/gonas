@@ -343,9 +343,10 @@ func (s *Server) probeSmartFailed(ctx context.Context, pool *storage.PoolConfig)
 		return false
 	}
 
-	devices := make([]string, 0, len(pool.DataDisks)+len(pool.ParityDisks))
-	devices = append(devices, pool.DataDisks...)
-	devices = append(devices, pool.ParityDisks...)
+	// pool 裡存的是掛載點(/mnt/diskN),smartctl 只能開裝置節點(/dev/sdX)——
+	// 直接拿掛載點查會永遠「打不開」而靜默略過,等於告警從不觸發。先解析成裝置
+	// 節點(見 storage.DeviceForSmart;會去重同一顆碟的多個分割區)再查。
+	devices := s.resolveSmartDevices(ctx, pool)
 
 	for _, dev := range devices {
 		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

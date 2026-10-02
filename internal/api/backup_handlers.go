@@ -247,6 +247,12 @@ func (s *Server) handleBackupJobsRestore(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusNotFound, errBackupJobNotFound)
 		return
 	}
+	if job.IsRemote() {
+		// 異地鏡像沒有本機快照可還原(前端也不顯示還原按鈕,這裡是 API 層的
+		// 防線,避免直接打端點時走進以空 DestPath 組出的錯誤路徑)。
+		writeError(w, http.StatusBadRequest, errRemoteJobNoSnapshots)
+		return
+	}
 
 	var req restoreRequest
 	if !readJSON(w, r, &req) {
@@ -287,6 +293,12 @@ func (s *Server) handleBackupJobsSnapshots(w http.ResponseWriter, r *http.Reques
 	}
 	if job == nil {
 		writeError(w, http.StatusNotFound, errBackupJobNotFound)
+		return
+	}
+	if job.IsRemote() {
+		// 異地鏡像沒有本機快照目錄;回空清單(200)而不是去 ReadDir 一個以空
+		// DestPath 組出的相對路徑。
+		writeJSON(w, http.StatusOK, []backup.SnapshotInfo{})
 		return
 	}
 

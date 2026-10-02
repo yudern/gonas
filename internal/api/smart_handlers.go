@@ -39,15 +39,39 @@ func (s *Server) stopSmartTestScheduler() {
 	}
 }
 
-// smartTestDevices 回傳要跑自我測試的裝置清單 —— 跟被動 SMART 監控
-// (probeSmartFailed)完全一樣:pool 的資料碟 + 同位碟,確保兩者看的是同一批碟。
-func smartTestDevices(pool *storage.PoolConfig) []string {
+// smartTestMounts 回傳 pool 裡所有「掛載點」(資料碟 + 同位碟),跟被動 SMART
+// 監控(probeSmartFailed)看的是同一批碟。這些是掛載點,不是 smartctl 能直接
+// 開的裝置節點 —— 要經過 resolveSmartDevices 解析,見該函式。
+func smartTestMounts(pool *storage.PoolConfig) []string {
 	if pool == nil {
 		return nil
 	}
-	devices := make([]string, 0, len(pool.DataDisks)+len(pool.ParityDisks))
-	devices = append(devices, pool.DataDisks...)
-	devices = append(devices, pool.ParityDisks...)
+	mounts := make([]string, 0, len(pool.DataDisks)+len(pool.ParityDisks))
+	mounts = append(mounts, pool.DataDisks...)
+	mounts = append(mounts, pool.ParityDisks...)
+	return mounts
+}
+
+// resolveSmartDevices 把 pool 的掛載點逐一解析成 smartctl 能開的整碟裝置節點
+// (見 storage.DeviceForSmart),去重(兩個掛載點可能是同一顆碟上的不同分割區,
+// 只需要對那顆碟測一次)。解析不出來的掛載點(例如陣列還沒掛)只記 log、略過,
+// 不讓其他碟跟著不測。
+func (s *Server) resolveSmartDevices(ctx context.Context, pool *storage.PoolConfig) []string {
+	var devices []string
+	seen := make(map[string]bool)
+	for _, m := range smartTestMounts(pool) {
+		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		dev, err := storage.DeviceForSmart(dctx, s.runner, m)
+		cancel()
+		if err != nil {
+			s.logger.Warn("could not resolve a pool mount to a block device for SMART", "mount", m, "err", err)
+			continue
+		}
+		if !seen[dev] {
+			seen[dev] = true
+			devices = append(devices, dev)
+		}
+	}
 	return devices
 }
 
@@ -56,7 +80,7 @@ func smartTestDevices(pool *storage.PoolConfig) []string {
 // best-effort:個別碟觸發失敗只記 log,不讓其他碟跟著不測。
 func (s *Server) runScheduledSmartTest(ctx context.Context) error {
 	snap := s.store.Snapshot()
-	devices := smartTestDevices(snap.Pool)
+	devices := s.resolveSmartDevices(ctx, snap.Pool)
 	if len(devices) == 0 {
 		return nil
 	}
@@ -131,7 +155,7 @@ func (s *Server) handleStorageSmartTestRun(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	snap := s.store.Snapshot()
-	devices := smartTestDevices(snap.Pool)
+	devices := s.resolveSmartDevices(r.Context(), snap.Pool)
 	if len(devices) == 0 {
 		writeError(w, http.StatusBadRequest, errNoPoolConfigured)
 		return
@@ -154,6 +178,17 @@ func (s *Server) handleStorageSmartTestRun(w http.ResponseWriter, r *http.Reques
 		}
 		cancel()
 	}
+	// 手動觸發也更新「上次觸發」時間(跟排程觸發一致,否則使用者手動測一次,
+	// 介面上的時間卻不動,會以為沒生效)。best-effort。
+	if len(failed) < len(devices) {
+		now := time.Now()
+		if err := s.store.Update(func(st *state.State) error {
+			st.SmartTest.LastRunAt = &now
+			return nil
+		}); err != nil {
+			s.logger.Warn("persisting SMART self-test last-run time failed", "err", err)
+		}
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"kind":    string(kind),
 		"devices": devices,
@@ -170,9 +205,10 @@ func (s *Server) handleStorageSmartSelfTestLog(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, errSmartDeviceRequired)
 		return
 	}
-	// 只允許查目前 pool 裡的碟 —— 不讓這個端點變成「對任意路徑 fork smartctl」。
+	// 只允許查目前 pool 裡的碟(解析後的裝置節點)—— 不讓這個端點變成「對任意
+	// 路徑 fork smartctl」。
 	allowed := false
-	for _, d := range smartTestDevices(s.store.Snapshot().Pool) {
+	for _, d := range s.resolveSmartDevices(r.Context(), s.store.Snapshot().Pool) {
 		if d == device {
 			allowed = true
 			break

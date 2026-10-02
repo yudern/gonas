@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bng147/gonas/internal/backup"
+	"github.com/bng147/gonas/internal/state"
 )
 
 // TestHandleBackupJobsCreate_AcceptsCronKindSchedule 驗證 Phase 15 新增的
@@ -197,4 +198,50 @@ func TestHandleBackupJobsCreate_EnabledCronJob_SchedulerStartsAndStops(t *testin
 	}
 
 	s.stopBackupScheduler(created.ID) // must return promptly, not hang
+}
+
+// TestBackupRemoteJob_RestoreAndSnapshotsGuarded 覆核(第 N 輪全鏈路)異地鏡像
+// 備份沒有本機快照:直接打還原端點要回 400(而不是走進以空 DestPath 組出的
+// 相對路徑);列快照回 200 空清單。前端已隱藏這兩個按鈕,這是 API 層的防線。
+func TestBackupRemoteJob_RestoreAndSnapshotsGuarded(t *testing.T) {
+	s := newTestServer(t)
+	job := backup.Job{
+		ID:         "rem1",
+		Name:       "offsite",
+		SourcePath: "/mnt/tank/media",
+		Schedule:   backup.Schedule{EveryHours: 24},
+		Remote:     &backup.RemoteDest{Host: "nas2", User: "backup", Path: "/vol/bak"},
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		st.BackupJobs = append(st.BackupJobs, job)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// restore → 400
+	body, _ := json.Marshal(restoreRequest{Snapshot: "whatever", TargetPath: "/mnt/tank/restore"})
+	req := httptest.NewRequest("POST", "/api/v1/backup/jobs/rem1/restore", bytes.NewReader(body))
+	req.SetPathValue("id", "rem1")
+	rec := httptest.NewRecorder()
+	s.handleBackupJobsRestore(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("restore on a remote job should be 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// snapshots → 200 空清单
+	req2 := httptest.NewRequest("GET", "/api/v1/backup/jobs/rem1/snapshots", nil)
+	req2.SetPathValue("id", "rem1")
+	rec2 := httptest.NewRecorder()
+	s.handleBackupJobsSnapshots(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("snapshots on a remote job should be 200, got %d", rec2.Code)
+	}
+	var snaps []backup.SnapshotInfo
+	if err := json.Unmarshal(rec2.Body.Bytes(), &snaps); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 0 {
+		t.Errorf("expected no snapshots for a remote job, got %d", len(snaps))
+	}
 }
