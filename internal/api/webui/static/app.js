@@ -2633,6 +2633,8 @@ async function renderShares(el) {
         <div class="checkbox-row"><label><input type="checkbox" name="readOnly"> ${esc(t("shares.readOnly"))}</label></div>
         <div class="checkbox-row"><label><input type="checkbox" name="guestOk"> ${esc(t("shares.guestOk"))}</label></div>
         <div class="field"><label>${esc(t("shares.validUsers"))}</label><input type="text" name="validUsers" placeholder="alice, bob"></div>
+        <div class="field"><label>${esc(t("shares.writeList"))}</label><input type="text" name="writeList" placeholder="alice"><div class="hint">${esc(t("shares.writeListHint"))}</div></div>
+        <div class="field"><label>${esc(t("shares.readList"))}</label><input type="text" name="readList" placeholder="guest"><div class="hint">${esc(t("shares.readListHint"))}</div></div>
         <div class="checkbox-row"><label><input type="checkbox" name="recycle" id="share-recycle"> ${esc(t("shares.recycle"))}</label></div>
         <div class="field" id="share-recycle-days-field" style="display:none"><label>${esc(t("shares.recycleMaxDays"))}</label><input type="number" name="recycleMaxDays" min="0" max="3650" value="30"><div class="hint">${esc(t("shares.recycleMaxDaysHint"))}</div></div>
         <div class="btn-row"><button type="submit">${esc(t("shares.addShare"))}</button></div>
@@ -2699,6 +2701,8 @@ async function renderShares(el) {
       readOnly: f.get("readOnly") === "on",
       guestOk: f.get("guestOk") === "on",
       validUsers: (f.get("validUsers") || "").split(",").map((s) => s.trim()).filter(Boolean),
+      writeList: (f.get("writeList") || "").split(",").map((s) => s.trim()).filter(Boolean),
+      readList: (f.get("readList") || "").split(",").map((s) => s.trim()).filter(Boolean),
       recycle,
       recycleMaxDays: recycle ? (Number(f.get("recycleMaxDays")) || 0) : 0,
     };

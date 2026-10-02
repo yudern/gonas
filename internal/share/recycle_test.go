@@ -44,6 +44,52 @@ func TestShareValidate_RejectsNegativeRecycleDays(t *testing.T) {
 	}
 }
 
+// TestGenerateSambaConfig_WriteReadLists 驗證 write list / read list 會分別產生
+// 對應的 smb.conf 行,空名單則不產生。
+func TestGenerateSambaConfig_WriteReadLists(t *testing.T) {
+	shares := []Share{
+		{Name: "media", Path: "/mnt/tank/media", ReadOnly: true, WriteList: []string{"alice", "bob"}},
+		{Name: "drop", Path: "/mnt/tank/drop", ReadList: []string{"guest"}},
+		{Name: "plain", Path: "/mnt/tank/plain"},
+	}
+	out, err := GenerateSambaConfig(shares, "/etc/samba/gonas-shares.conf")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mediaIdx := strings.Index(out, "[media]")
+	dropIdx := strings.Index(out, "[drop]")
+	plainIdx := strings.Index(out, "[plain]")
+	mediaSec := out[mediaIdx:dropIdx]
+	dropSec := out[dropIdx:plainIdx]
+	plainSec := out[plainIdx:]
+
+	if !strings.Contains(mediaSec, "write list = alice, bob") {
+		t.Errorf("media section missing write list:\n%s", mediaSec)
+	}
+	if strings.Contains(mediaSec, "read list =") {
+		t.Errorf("media section should not have a read list:\n%s", mediaSec)
+	}
+	if !strings.Contains(dropSec, "read list = guest") {
+		t.Errorf("drop section missing read list:\n%s", dropSec)
+	}
+	if strings.Contains(plainSec, "write list =") || strings.Contains(plainSec, "read list =") {
+		t.Errorf("plain section should have neither list:\n%s", plainSec)
+	}
+}
+
+func TestShareValidate_RejectsUnsafeWriteListEntry(t *testing.T) {
+	// 含逗號的名字會被 smbd 拆成多個使用者(注入),必須擋。
+	sh := Share{Name: "x", Path: "/mnt/x", WriteList: []string{"alice,bob"}}
+	if err := sh.Validate(); err == nil {
+		t.Error("expected a comma in a write-list entry to be rejected")
+	}
+	// 含空白同理。
+	sh2 := Share{Name: "x", Path: "/mnt/x", ReadList: []string{"bad name"}}
+	if err := sh2.Validate(); err == nil {
+		t.Error("expected a space in a read-list entry to be rejected")
+	}
+}
+
 func TestPruneRecycleBin_RemovesOldKeepsRecent(t *testing.T) {
 	sharePath := t.TempDir()
 	recycleDir := filepath.Join(sharePath, RecycleDirName, "alice", "sub")

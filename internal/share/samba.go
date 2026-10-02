@@ -32,6 +32,17 @@ type Share struct {
 	GuestOK    bool     `json:"guestOk"`              // 允許匿名存取；預設應為 false，安裝精靈要讓使用者明確勾選
 	ValidUsers []string `json:"validUsers,omitempty"` // 空代表沿用 [global] 的存取控制
 
+	// WriteList / ReadList 是「逐使用者」的讀寫權限覆寫,對應 smb.conf 的
+	// write list / read list。比 ReadOnly 這個全共享開關更細:
+	//   - WriteList 裡的使用者「即使共享是唯讀(ReadOnly=true)也能寫」。
+	//   - ReadList 裡的使用者「即使共享是可寫(ReadOnly=false)也只能讀」。
+	// 典型用法:ReadOnly=true + WriteList=[alice] = 全部人唯讀、只有 alice 能寫
+	// (家庭媒體庫常見);ReadOnly=false + ReadList=[guest] = 全部人可寫、guest
+	// 唯讀。兩份名單都是 ValidUsers 的子集語意上才有意義,但 smbd 自己會處理
+	// 交集,GoNAS 不強制(留彈性)。空名單不產生對應的設定行。
+	WriteList []string `json:"writeList,omitempty"`
+	ReadList  []string `json:"readList,omitempty"`
+
 	// Recycle 開啟 Samba 的 vfs_recycle:透過 SMB 刪除的檔案不會立刻消失,
 	// 而是移進共享根目錄下一個隱藏的 .recycle/<使用者> 子目錄(保留原本的目錄
 	// 結構),等於一個「網路芳鄰的資源回收筒」,手滑刪錯還救得回來。只對
@@ -71,13 +82,23 @@ func (s Share) Validate() error {
 	if s.RecycleMaxDays < 0 {
 		return fmt.Errorf("share %q: recycle retention days cannot be negative", s.Name)
 	}
-	for _, u := range s.ValidUsers {
-		// 換行/控制字元會破壞格式;逗號是 "valid users = a, b" 的分隔符,
-		// 一個含逗號的「使用者名稱」會被 smbd 當成多個使用者(注入)。第五十六輪
-		// 覆核(QA6):空白也一樣——"valid users = alice bob" 會被當成兩個使用者,
-		// 一個含空白的名字會被靜默拆成兩個,所以空白也擋掉。
-		if hasControlChars(u) || strings.ContainsAny(u, ", \t") {
-			return fmt.Errorf("share %q: valid-user entry %q cannot contain a comma, space, line break, or control character", s.Name, u)
+	// 換行/控制字元會破壞格式;逗號是 "... = a, b" 的分隔符,一個含逗號的
+	// 「使用者名稱」會被 smbd 當成多個使用者(注入)。第五十六輪覆核(QA6):
+	// 空白也一樣——"valid users = alice bob" 會被當成兩個使用者,一個含空白的
+	// 名字會被靜默拆成兩個,所以空白也擋掉。write list / read list 跟 valid users
+	// 是同一種「逗號分隔的使用者名單」格式,套用同一套檢查。
+	for _, list := range []struct {
+		label string
+		users []string
+	}{
+		{"valid-user", s.ValidUsers},
+		{"write-list", s.WriteList},
+		{"read-list", s.ReadList},
+	} {
+		for _, u := range list.users {
+			if hasControlChars(u) || strings.ContainsAny(u, ", \t") {
+				return fmt.Errorf("share %q: %s entry %q cannot contain a comma, space, line break, or control character", s.Name, list.label, u)
+			}
 		}
 	}
 	return nil
@@ -101,6 +122,12 @@ const sambaConfTemplate = `# 由 GoNAS 自動產生，請勿手動修改 —— 
 	browseable = yes
 {{- if .ValidUsers}}
 	valid users = {{join .ValidUsers ", "}}
+{{- end}}
+{{- if .WriteList}}
+	write list = {{join .WriteList ", "}}
+{{- end}}
+{{- if .ReadList}}
+	read list = {{join .ReadList ", "}}
 {{- end}}
 {{- if .Recycle}}
 	vfs objects = recycle
