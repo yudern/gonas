@@ -990,9 +990,10 @@ function wizardDone(el) {
 }
 
 async function renderStorage(el) {
-  const [disks, arrayStatus, scrubSchedule] = await Promise.all([
+  const [disks, arrayStatus, scrubSchedule, smartSchedule] = await Promise.all([
     api.disks().catch(() => []), api.arrayStatus().catch(() => ({ state: "unconfigured" })),
     api.paritySchedule().catch(() => ({ enabled: false, everyDays: 7, hour: 3, minute: 0 })),
+    api.smartSchedule().catch(() => ({ enabled: false, everyDays: 7, hour: 4, minute: 0, kind: "short" })),
   ]);
 
   el.innerHTML = `
@@ -1028,6 +1029,32 @@ async function renderStorage(el) {
           <div class="field"><label>${esc(t("storage.scrubMinute"))}</label><input type="number" name="minute" min="0" max="59" value="${esc(String(scrubSchedule.minute || 0))}"></div>
         </div>
         <div class="btn-row"><button type="submit">${esc(t("common.save"))}</button></div>
+      </form>
+    </div>` : ""}
+
+    ${arrayStatus.state !== "unconfigured" ? `
+    <div class="card">
+      ${h2i("stethoscope", esc(t("storage.smartTitle")))}
+      <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.smartHint"))}</p>
+      ${smartSchedule.lastRunAt ? `<p style="margin:0 0 10px"><span class="pill neutral">${esc(t("storage.smartLastRun", { time: formatDateTime(smartSchedule.lastRunAt) }))}</span></p>` : ""}
+      <div id="smart-sched-msg"></div>
+      <form class="stacked" id="smart-sched-form">
+        <label class="checkbox-row"><input type="checkbox" name="enabled" ${smartSchedule.enabled ? "checked" : ""}> ${esc(t("storage.smartScheduleEnable"))}</label>
+        <div class="field-row">
+          <div class="field"><label>${esc(t("storage.smartKind"))}</label>
+            <select name="kind">
+              <option value="short" ${smartSchedule.kind !== "long" ? "selected" : ""}>${esc(t("storage.smartKindShort"))}</option>
+              <option value="long" ${smartSchedule.kind === "long" ? "selected" : ""}>${esc(t("storage.smartKindLong"))}</option>
+            </select>
+          </div>
+          <div class="field"><label>${esc(t("storage.scrubEveryDays"))}</label><input type="number" name="everyDays" min="1" max="365" value="${esc(String(smartSchedule.everyDays || 7))}"></div>
+          <div class="field"><label>${esc(t("storage.scrubHour"))}</label><input type="number" name="hour" min="0" max="23" value="${esc(String(smartSchedule.hour || 0))}"></div>
+          <div class="field"><label>${esc(t("storage.scrubMinute"))}</label><input type="number" name="minute" min="0" max="59" value="${esc(String(smartSchedule.minute || 0))}"></div>
+        </div>
+        <div class="btn-row">
+          <button type="submit">${esc(t("common.save"))}</button>
+          <button type="button" id="smart-run-now" class="secondary">${esc(t("storage.smartRunNow"))}</button>
+        </div>
       </form>
     </div>` : ""}
 
@@ -1144,6 +1171,45 @@ async function renderStorage(el) {
         if (box) box.innerHTML = msg("error", translateError(err.message));
       }
     });
+  }
+
+  const smartSchedForm = el.querySelector("#smart-sched-form");
+  if (smartSchedForm) {
+    const box = el.querySelector("#smart-sched-msg");
+    smartSchedForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const cfg = {
+        enabled: f.get("enabled") === "on",
+        kind: f.get("kind") || "short",
+        everyDays: Number(f.get("everyDays")) || 7,
+        hour: Number(f.get("hour")) || 0,
+        minute: Number(f.get("minute")) || 0,
+      };
+      try {
+        await api.setSmartSchedule(cfg);
+        if (box) box.innerHTML = msg("ok", t("storage.scrubScheduleSaved"));
+      } catch (err) {
+        if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+    const runBtn = el.querySelector("#smart-run-now");
+    if (runBtn) {
+      runBtn.addEventListener("click", async () => {
+        const kind = smartSchedForm.querySelector('select[name="kind"]').value || "short";
+        runBtn.disabled = true;
+        runBtn.textContent = t("storage.smartRunning");
+        try {
+          const res = await api.runSmartTest(kind);
+          if (box) box.innerHTML = msg("ok", t("storage.smartRunStarted", { n: res.started }));
+        } catch (err) {
+          if (box) box.innerHTML = msg("error", translateError(err.message));
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = t("storage.smartRunNow");
+        }
+      });
+    }
   }
 
   el.querySelectorAll("[data-fix-disk]").forEach((btn) => {

@@ -72,6 +72,10 @@ export const api = {
   fixDisk: (mountPoint) => request("POST", "/api/v1/storage/array/fix", { mountPoint }),
   paritySchedule: () => request("GET", "/api/v1/storage/parity/schedule"),
   setParitySchedule: (cfg) => request("PUT", "/api/v1/storage/parity/schedule", cfg),
+  smartSchedule: () => request("GET", "/api/v1/storage/smart/schedule"),
+  setSmartSchedule: (cfg) => request("PUT", "/api/v1/storage/smart/schedule", cfg),
+  runSmartTest: (kind) => request("POST", "/api/v1/storage/smart/test", { kind }),
+  smartSelfTestLog: (device) => request("GET", "/api/v1/storage/smart/selftest-log?device=" + encodeURIComponent(device)),
 
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
   containers: () => request("GET", "/api/v1/docker/containers"),

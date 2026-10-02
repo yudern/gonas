@@ -52,7 +52,7 @@ func TestScheduler_RunLoop_TriggersAndStopsCleanly(t *testing.T) {
 	}
 
 	// 用極短的 initialDelay/every,不等真正排程算出來的時刻。
-	s.runLoop(context.Background(), time.Millisecond, 5*time.Millisecond, SnapraidScrub, runOnce)
+	s.runLoop(context.Background(), time.Millisecond, 5*time.Millisecond, string(SnapraidScrub), runOnce)
 
 	// 等到至少跑了 2 次(證明「跑完一次之後還會再跑」的迴圈邏輯正確)。
 	deadline := time.After(2 * time.Second)

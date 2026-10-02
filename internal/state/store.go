@@ -59,6 +59,24 @@ type State struct {
 	// Digest.CronExpr 同一種「預設不做任何背景網路動作」的隱私/最小驚訝設計。
 	// 實際抓到的範本清單不持久化(每次啟動/重新整理時重抓),只存這個網址。
 	AppCatalogURL string `json:"appCatalogUrl,omitempty"`
+	// SmartTest 是「定時 SMART 自我測試」的設定。跟 ParityScrub 同一種「每隔
+	// 幾天、在一天中某個時刻、預設停用」的簡化排程設計 —— 被動讀 SMART 健康值
+	// 只能看到硬碟自己已經標記的問題,主動定時跑 smartctl 自我測試(尤其是 long
+	// 全表面掃描)才能提前揪出「平常沒被讀到、但其實已經壞掉」的磁區。
+	SmartTest SmartTestConfig `json:"smartTest"`
+}
+
+// SmartTestConfig 設定定時 SMART 自我測試。Kind 是 "short"(幾分鐘)或 "long"
+// (完整表面掃描,數小時)。Enabled 預設 false —— 跟其他背景功能一樣「預設不做
+// 任何動作」。LastRunAt 是最近一次「觸發」自我測試的時間(不是完成時間,測試
+// 由硬碟自己在背景跑),給 Web UI 顯示用。
+type SmartTestConfig struct {
+	Enabled   bool       `json:"enabled"`
+	EveryDays int        `json:"everyDays"` // 每隔幾天(>=1)
+	Hour      int        `json:"hour"`      // 0-23
+	Minute    int        `json:"minute"`    // 0-59
+	Kind      string     `json:"kind"`      // "short" 或 "long"
+	LastRunAt *time.Time `json:"lastRunAt,omitempty"`
 }
 
 // ParityScrubConfig 是「定時同位校驗(scrub)」的設定。第六十輪產品覆核:

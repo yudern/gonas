@@ -44,12 +44,21 @@ func NewScheduler(logger *slog.Logger) *Scheduler {
 // 知道要對哪個 pool 做什麼。
 func (s *Scheduler) Start(ctx context.Context, sched ParitySchedule, runOnce func(context.Context) error) {
 	initialDelay := nextRunDelay(time.Now(), sched)
-	s.runLoop(ctx, initialDelay, sched.Every, sched.Action, runOnce)
+	s.runLoop(ctx, initialDelay, sched.Every, string(sched.Action), runOnce)
+}
+
+// StartPeriodic 是不綁 SnapRAID 動作的通用週期排程入口:每隔 every、在一天中
+// hour:minute 觸發一次 runOnce,label 只用於日誌。給 SMART 定時自我測試這類
+// 「跟同位校驗無關、但一樣是『每隔 N 天在某時刻跑一次』」的背景工作共用同一套
+// 已驗證過的排程迴圈,不必各自複製一份 timer/goroutine/Stop 的管理。
+func (s *Scheduler) StartPeriodic(ctx context.Context, every time.Duration, hour, minute int, label string, runOnce func(context.Context) error) {
+	initialDelay := nextRunDelay(time.Now(), ParitySchedule{HourOfDay: hour, MinuteOfHr: minute})
+	s.runLoop(ctx, initialDelay, every, label, runOnce)
 }
 
 // runLoop 是實際的排程迴圈，被拆成獨立方法主要是讓測試能直接餵極短的
 // initialDelay/every,不必真的等到排程算出來的凌晨時刻才能驗證行為。
-func (s *Scheduler) runLoop(ctx context.Context, initialDelay, every time.Duration, action SnapraidAction, runOnce func(context.Context) error) {
+func (s *Scheduler) runLoop(ctx context.Context, initialDelay, every time.Duration, label string, runOnce func(context.Context) error) {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.done = make(chan struct{})
@@ -66,10 +75,10 @@ func (s *Scheduler) runLoop(ctx context.Context, initialDelay, every time.Durati
 			case <-timer.C:
 			}
 
-			s.logger.Info("running scheduled parity action", "action", action)
-			safe.Run(s.logger, "parity-scheduler", func() {
+			s.logger.Info("running scheduled task", "task", label)
+			safe.Run(s.logger, "scheduler:"+label, func() {
 				if err := runOnce(ctx); err != nil {
-					s.logger.Error("scheduled parity action failed", "action", action, "err", err)
+					s.logger.Error("scheduled task failed", "task", label, "err", err)
 				}
 			})
 
