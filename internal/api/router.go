@@ -6,14 +6,17 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/bng147/gonas/internal/appstore"
 	"github.com/bng147/gonas/internal/backup"
 	"github.com/bng147/gonas/internal/docker"
 	"github.com/bng147/gonas/internal/monitor"
@@ -95,6 +98,9 @@ const auditLogCapacity = 500
 const (
 	updateCheckInterval = 6 * time.Hour
 	updateHTTPTimeout   = 5 * time.Minute
+	// catalogHTTPTimeout 是抓遠端 App 目錄的逾時。目錄是一份小 JSON,30 秒
+	// 對正常網路綽綽有餘,又擋得住遠端掛住不回應讓請求無限期卡住。
+	catalogHTTPTimeout = 30 * time.Second
 )
 
 // Server 持有建立路由所需的共用依賴。
@@ -263,6 +269,18 @@ type Server struct {
 	// 後到的請求直接回 409。狀態(進行中/上次結果)給 array 狀態端點回報。
 	paritySyncing atomic.Bool
 	paritySyncErr atomic.Pointer[string] // 上次同步的錯誤訊息(nil=上次成功或還沒跑過)
+
+	// catalogMu 保護底下這組「遠端 App 目錄」的記憶體快取。遠端目錄抓回來的
+	// 範本清單刻意不持久化(state.json 只存網址),每次啟動或使用者按「重新
+	// 整理」時重抓 —— 範本是會在遠端更新的東西,快取在磁碟上反而容易過期。
+	// 背景啟動時會抓一次(若有設定網址),之後 GET /appstore/catalog 直接讀
+	// 這份記憶體快取,不會每次開頁都同步阻塞去連遠端。
+	catalogMu         sync.RWMutex
+	remoteCatalog     []appstore.AppTemplate
+	catalogFetchedAt  time.Time
+	catalogFetchErr   string
+	catalogSkipped    []string // 上次抓取時被跳過的範本原因(格式錯誤/ID 重複等)
+	catalogHTTPClient *http.Client
 }
 
 // New 建立一個 Server,從 dataDir/state.json 載入既有狀態,並回傳已掛好
@@ -346,6 +364,23 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	// 才會帶上 secureRedirect —— 擋掉「https 起手、302 降級到 http」的
 	// 重導向 MITM,requireHTTPS 只驗初始 URL 不夠(見 secureRedirect)。
 	s.updateHTTPClient = selfupdate.NewHTTPClient(updateHTTPTimeout)
+	// 遠端 App 目錄用自己的 HTTP client(不共用 updateHTTPClient 的
+	// secureRedirect:自我更新一定要 HTTPS,但自架的區網目錄常是純 http,
+	// FetchCatalog 自己擋 scheme/大小/數量,不強制 HTTPS)。帶一個合理逾時
+	// 與重導向上限即可。啟動時若已設定目錄網址,在背景抓一次 —— best-effort,
+	// 抓不到只記在 catalogFetchErr,絕不擋 daemon 啟動。
+	s.catalogHTTPClient = &http.Client{
+		Timeout: catalogHTTPTimeout,
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("app catalog: stopped after 5 redirects")
+			}
+			return nil
+		},
+	}
+	if strings.TrimSpace(store.Snapshot().AppCatalogURL) != "" {
+		go s.refreshRemoteCatalog(context.Background())
+	}
 	s.restartRequested = make(chan string, 1)
 	s.updateChecker = selfupdate.NewChecker(logger)
 	s.updateChecker.Start(context.Background(), updateCheckInterval, version.Version, func() string {
@@ -483,6 +518,9 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/docker/containers/{id}", s.requireAdmin(s.handleContainerRemove))
 
 	mux.HandleFunc("GET /api/v1/appstore/catalog", s.requireAuth(s.handleAppstoreCatalog))
+	mux.HandleFunc("GET /api/v1/appstore/catalog/source", s.requireAuth(s.handleAppstoreCatalogSourceGet))
+	mux.HandleFunc("PUT /api/v1/appstore/catalog/source", s.requireAdmin(s.handleAppstoreCatalogSourceSet))
+	mux.HandleFunc("POST /api/v1/appstore/catalog/refresh", s.requireAdmin(s.handleAppstoreCatalogRefresh))
 	mux.HandleFunc("GET /api/v1/appstore/apps", s.requireAuth(s.handleAppstoreListInstalled))
 	mux.HandleFunc("POST /api/v1/appstore/apps", s.requireAdmin(s.handleAppstoreInstall))
 	mux.HandleFunc("DELETE /api/v1/appstore/apps/{id}", s.requireAdmin(s.handleAppstoreUninstall))

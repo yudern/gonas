@@ -1804,12 +1804,13 @@ async function pollAppOp(box, labelKey) {
 }
 
 async function renderApps(el) {
-  const [installed, catalog, dockerStatus, containers, arrayStatus, images] = await Promise.all([
+  const [installed, catalog, dockerStatus, containers, arrayStatus, images, catalogSource] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
     api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.containers().catch(() => []),
     api.arrayStatus().catch(() => ({})),
     api.images().catch(() => []),
+    api.catalogSource().catch(() => ({ url: "", remoteCount: 0 })),
   ]);
   // 容器目前狀態(id -> "running"/"exited"/…),給每個服務顯示狀態燈與決定
   // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
@@ -1928,6 +1929,7 @@ async function renderApps(el) {
 
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
+      ${renderCatalogSource(catalogSource)}
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase)).join("")}
     </div>
 
@@ -2139,6 +2141,42 @@ async function renderApps(el) {
       }
     });
   });
+
+  // 遠端 App 目錄:儲存網址(同步抓一次)與手動重新整理。兩者都用整頁重畫
+  // 來反映新的目錄內容(抓回來的範本會直接出現在下方清單)。
+  const sourceForm = el.querySelector("#catalog-source-form");
+  if (sourceForm) {
+    const srcBox = el.querySelector("#catalog-source-msg");
+    sourceForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const url = new FormData(ev.target).get("url").trim();
+      const btn = ev.target.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      srcBox.innerHTML = msg("warn", t("apps.catalogSaving"));
+      try {
+        await api.setCatalogSource(url);
+        await renderApps(el);
+      } catch (err) {
+        btn.disabled = false;
+        srcBox.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+    const refreshBtn = el.querySelector("#catalog-refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = t("apps.catalogRefreshing");
+        try {
+          await api.refreshCatalog();
+          await renderApps(el);
+        } catch (err) {
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = t("apps.catalogRefresh");
+          srcBox.innerHTML = msg("error", translateError(err.message));
+        }
+      });
+    }
+  }
 
   const customForm = el.querySelector("#custom-install-form");
   if (customForm) {
@@ -2422,6 +2460,40 @@ function renderEditFields(app) {
   }).join("");
 }
 
+// renderCatalogSource 畫出「遠端 App 目錄」的設定區:網址輸入 + 儲存 + 重新整理,
+// 以及上次抓取的狀態(時間、抓到幾個、錯誤、被跳過的範本數)。摺疊在一個
+// <details> 裡,預設只在已設定網址時展開,避免佔據一般使用者的視線。
+function renderCatalogSource(src) {
+  src = src || { url: "", remoteCount: 0 };
+  let status = "";
+  if (src.error) {
+    status = msg("error", t("apps.catalogSourceError", { err: translateError(src.error) }));
+  } else if (src.fetchedAt) {
+    status = msg("ok", t("apps.catalogSourceOk", { n: src.remoteCount, time: formatDateTime(src.fetchedAt) }));
+  }
+  let skipped = "";
+  if (src.skipped && src.skipped.length) {
+    skipped = msg("warn", t("apps.catalogSkipped", { n: src.skipped.length }) + " " + src.skipped.slice(0, 3).join("; "));
+  }
+  return `
+    <details class="catalog-source" ${src.url ? "open" : ""}>
+      <summary>${esc(t("apps.catalogSourceTitle"))}</summary>
+      <p class="hint">${esc(t("apps.catalogSourceHint"))}</p>
+      <div id="catalog-source-msg">${status}${skipped}</div>
+      <form class="stacked" id="catalog-source-form" style="margin-top:8px">
+        <div class="field">
+          <label>${esc(t("apps.catalogSourceUrl"))}</label>
+          <input type="text" name="url" value="${esc(src.url || "")}" placeholder="https://example.com/gonas-catalog.json">
+        </div>
+        <div class="btn-row">
+          <button type="submit">${esc(t("common.save"))}</button>
+          <button type="button" id="catalog-refresh" class="secondary"${src.url ? "" : " disabled"}>${esc(t("apps.catalogRefresh"))}</button>
+        </div>
+      </form>
+    </details>
+  `;
+}
+
 function renderCatalogEntry(tmpl, appdataBase) {
   const base = appdataBase || "/mnt/tank";
   const fields = tmpl.services.flatMap((svc) => {
@@ -2445,10 +2517,11 @@ function renderCatalogEntry(tmpl, appdataBase) {
     return [...env, ...vol];
   });
 
+  const sourceBadge = tmpl.source === "remote" ? ` <span class="pill neutral">${esc(t("apps.catalogRemoteBadge"))}</span>` : "";
   return `
     <div class="app-card">
       <div>
-        <h3>${esc(tmpl.name)}</h3>
+        <h3>${esc(tmpl.name)}${sourceBadge}</h3>
         <p>${esc(translateNotice(tmpl.description || ""))}</p>
         <div class="services">${tmpl.services.map((s) => esc(s.image)).join(" · ")}</div>
       </div>

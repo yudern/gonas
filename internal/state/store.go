@@ -53,6 +53,12 @@ type State struct {
 	Digest         DigestConfig            `json:"digest"`
 	UPS            UPSConfig               `json:"ups"`
 	ParityScrub    ParityScrubConfig       `json:"parityScrub"`
+	// AppCatalogURL 是使用者設定的「遠端 App 目錄」網址(一個回傳 AppTemplate
+	// JSON 陣列的 http/https 端點,類似 Unraid Community Applications)。空字串
+	// (預設)代表只用內建目錄、完全不連任何外部伺服器 —— 跟 Update.ManifestURL、
+	// Digest.CronExpr 同一種「預設不做任何背景網路動作」的隱私/最小驚訝設計。
+	// 實際抓到的範本清單不持久化(每次啟動/重新整理時重抓),只存這個網址。
+	AppCatalogURL string `json:"appCatalogUrl,omitempty"`
 }
 
 // ParityScrubConfig 是「定時同位校驗(scrub)」的設定。第六十輪產品覆核:

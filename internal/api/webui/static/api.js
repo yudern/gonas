@@ -88,6 +88,9 @@ export const api = {
   containerRemove: (id) => request("DELETE", `/api/v1/docker/containers/${encodeURIComponent(id)}`),
 
   catalog: () => request("GET", "/api/v1/appstore/catalog"),
+  catalogSource: () => request("GET", "/api/v1/appstore/catalog/source"),
+  setCatalogSource: (url) => request("PUT", "/api/v1/appstore/catalog/source", { url }),
+  refreshCatalog: () => request("POST", "/api/v1/appstore/catalog/refresh"),
   installedApps: () => request("GET", "/api/v1/appstore/apps"),
   installApp: (templateId, overrides) => request("POST", "/api/v1/appstore/apps", { templateId, overrides }),
   installCustomApp: (template) => request("POST", "/api/v1/appstore/apps", { template }),

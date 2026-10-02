@@ -9,10 +9,6 @@ import (
 	"github.com/bng147/gonas/internal/state"
 )
 
-func (s *Server) handleAppstoreCatalog(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, builtinCatalog)
-}
-
 func (s *Server) handleAppstoreListInstalled(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.store.Snapshot().InstalledApps)
 }
@@ -46,20 +42,21 @@ func (s *Server) resolveInstallTemplate(req installAppRequest) (appstore.AppTemp
 	}
 
 	if hasID {
-		for i := range builtinCatalog {
-			if builtinCatalog[i].ID == req.TemplateID {
-				// 第六十輪 QA 覆核:目錄範本也要擋「已經裝過同一個」——原本只對
-				// 自訂範本檢查,結果重複安裝目錄 App(或手殘點兩下)會一路跑到
-				// docker 才以「容器名稱已存在」爆成 500。提前回可讀的 409。
-				for _, installed := range s.store.Snapshot().InstalledApps {
-					if installed.Template.ID == builtinCatalog[i].ID {
-						return appstore.AppTemplate{}, errAppIDAlreadyInstalled
-					}
-				}
-				return builtinCatalog[i], nil
+		// 先在內建目錄找,再找遠端目錄快取 —— 內建優先,讓遠端目錄無法「shadow」
+		// 一個同 ID 的內建範本(見 mergedCatalog 的說明)。
+		tmpl, ok := s.templateByID(req.TemplateID)
+		if !ok {
+			return appstore.AppTemplate{}, errAppNotFound
+		}
+		// 第六十輪 QA 覆核:目錄範本也要擋「已經裝過同一個」——原本只對
+		// 自訂範本檢查,結果重複安裝目錄 App(或手殘點兩下)會一路跑到
+		// docker 才以「容器名稱已存在」爆成 500。提前回可讀的 409。
+		for _, installed := range s.store.Snapshot().InstalledApps {
+			if installed.Template.ID == tmpl.ID {
+				return appstore.AppTemplate{}, errAppIDAlreadyInstalled
 			}
 		}
-		return appstore.AppTemplate{}, errAppNotFound
+		return tmpl, nil
 	}
 
 	tmpl := *req.Template
