@@ -13,8 +13,9 @@
 #      並把 uninstall.sh 留一份在系統上（見下面 1.6 節），因為
 #      appliance 這條路徑裝完之後安裝媒體會被退出，不像「軟體版」
 #      安裝路徑那樣使用者手上自然留著一份 release tarball。
-#   2. 佈署 tty1 狀態主控台（gonas-console.service）取代預設的登入
-#      提示，這是使用者選的「開機後精簡狀態畫面」路線。
+#   2. 佈署 tty1 登入橫幅（gonas-issue.service 把版本/IP/網址寫進
+#      /etc/issue）——tty1 保留標準 getty 登入，開機不用按鍵就能看到
+#      橫幅並直接登入（v0.1.54 使用者要求,取代舊的全螢幕狀態畫面）。
 #   3. 品牌化：主機名稱、/etc/motd、/etc/issue、/etc/os-release 的
 #      PRETTY_NAME、GRUB 開機選單標題。
 #   4. 強制 gonas 這組緊急備援帳號的預設密碼在第一次登入時就要
@@ -138,8 +139,8 @@ fi
 # unit 而言,純粹是在檔案系統上建立/移除 symlink,不需要真的連上一個
 # 在跑的 systemd 執行個體(deb-systemd-helper、dpkg 套件安裝腳本在
 # chroot 環境裡設定服務開機啟動,靠的就是同一個機制)——下面對
-# `getty@tty1.service`/`gonas-console.service` 做的 disable/mask/
-# enable 也是同一個道理,這裡只是把同樣的處理方式也套用在
+# `getty@tty1.service`/`gonas-issue.service` 做的 enable 也是同一個
+# 道理,這裡只是把同樣的處理方式也套用在
 # gonas.service 上,確保跟 install.sh 本身的行為不衝突、又補上它在
 # 這個特定執行環境下漏掉的一步。
 GONAS_UNIT_SRC="$RELEASE_DIR/gonas.service"
@@ -279,42 +280,40 @@ else
     log "WARNING: gonasd not on PATH — could not seed default web admin"
 fi
 
-# --- 2. tty1 狀態主控台 -------------------------------------------
+# --- 2. tty1 登入橫幅 ---------------------------------------------
+# v0.1.54:改成「tty1 保留標準 getty 登入 + /etc/issue 橫幅顯示版本/IP/網址」
+# (使用者要求:開機不用按鍵就能直接登入,像 Unraid/一般伺服器那樣 banner +
+# login:)。不再用 gonas-console 霸佔 tty1 畫全螢幕狀態畫面(那會蓋掉登入提示、
+# 要切 tty2 才能登入)。資訊改由背景的 gonas-issue.service 寫進 /etc/issue,
+# agetty 印 login: 之前會先秀出來。
 OVERLAY_DIR="$GONAS_DIR/overlay"
 if [ -d "$OVERLAY_DIR" ]; then
     log "applying appliance overlay from $OVERLAY_DIR"
-    cp -a "$OVERLAY_DIR/usr/local/sbin/gonas-console" /usr/local/sbin/gonas-console
-    chmod 0755 /usr/local/sbin/gonas-console
-    cp -a "$OVERLAY_DIR/etc/systemd/system/gonas-console.service" /etc/systemd/system/gonas-console.service
+    cp -a "$OVERLAY_DIR/usr/local/sbin/gonas-issue" /usr/local/sbin/gonas-issue
+    chmod 0755 /usr/local/sbin/gonas-issue
+    cp -a "$OVERLAY_DIR/etc/systemd/system/gonas-issue.service" /etc/systemd/system/gonas-issue.service
     cp -a "$OVERLAY_DIR/etc/motd" /etc/motd
     cp -a "$OVERLAY_DIR/etc/issue" /etc/issue
 else
     log "WARNING: overlay directory $OVERLAY_DIR not found — skipping console/branding files. This ISO was built incorrectly."
 fi
 
-# 停用/遮罩預設的 tty1 登入提示，換成我們的狀態主控台——tty2 以後
-# 維持系統原本的 getty 登入，保留一個「找一台真機除錯」的正常管道，
-# 見 gonas-console.service 的說明。這三個 systemctl 呼叫原本用
-# `2>/dev/null || true` 完全吞掉結果——跟前面 gonas.service 那個真的
-# 踩到的坑一樣的道理:如果這幾個呼叫在某個 Debian 版本的 in-target
-# chroot 環境裡也一樣悄悄失敗,原本的寫法會讓人完全看不出來、只會在
-# 開機後發現 tty1 還是一般登入畫面才回頭猜是哪裡的問題。改成明確記錄
-# 每一步的成功/失敗,第一次真機/VM 測試時直接看這份 log 就知道是不是
-# 也踩到同一類問題,不用用猜的。
-if systemctl disable getty@tty1.service 2>/dev/null; then
-    log "getty@tty1.service disabled"
-else
-    log "WARNING: 'systemctl disable getty@tty1.service' failed — tty1 may still show the normal login prompt"
+# tty1 維持標準 getty 登入(不再 disable/mask)——這正是「開機直接進登入
+# 介面」的關鍵。確保它沒有被遮罩(全新安裝本來就是 enabled,這裡保險),
+# 再啟用 gonas-issue.service 讓它開機就把橫幅寫進 /etc/issue。明確記錄每步
+# 成敗,第一次真機/VM 測試直接看 log 就知道有沒有踩到 in-target chroot 的坑。
+if systemctl unmask getty@tty1.service 2>/dev/null; then
+    log "getty@tty1.service unmasked (standard login kept on tty1)"
 fi
-if systemctl mask getty@tty1.service 2>/dev/null; then
-    log "getty@tty1.service masked"
+if systemctl enable getty@tty1.service 2>/dev/null; then
+    log "getty@tty1.service enabled"
 else
-    log "WARNING: 'systemctl mask getty@tty1.service' failed"
+    log "WARNING: 'systemctl enable getty@tty1.service' failed — tty1 may not show a login prompt"
 fi
-if systemctl enable gonas-console.service 2>/dev/null; then
-    log "gonas-console.service enabled"
+if systemctl enable gonas-issue.service 2>/dev/null; then
+    log "gonas-issue.service enabled (login banner on tty1)"
 else
-    log "WARNING: 'systemctl enable gonas-console.service' failed — tty1 status console will NOT appear after reboot"
+    log "WARNING: 'systemctl enable gonas-issue.service' failed — tty1 will still log in but without the GoNAS banner"
 fi
 
 # 第六十輪(安全/構建覆核):如果 DVD 上剛好帶了 samba / nfs 等服務、被

@@ -1,3 +1,13 @@
-GoNAS \n (tty\l) — dedicated NAS appliance, powered by Debian GNU/Linux.
-Web UI 網址請見 tty1 的狀態畫面 / see the tty1 status screen for the web UI address.
+
+  ██████╗  ██████╗ ███╗   ██╗ █████╗ ███████╗
+ ██╔════╝ ██╔═══██╗████╗  ██║██╔══██╗██╔════╝
+ ██║  ███╗██║   ██║██╔██╗ ██║███████║███████╗
+ ██║   ██║██║   ██║██║╚██╗██║██╔══██║╚════██║
+ ╚██████╔╝╚██████╔╝██║ ╚████║██║  ██║███████║
+  ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝
+
+  GoNAS appliance (Debian GNU/Linux)
+  Web UI:  http://\4:8291
+  ------------------------------------------------------------
+  Log in below for a shell; all setup is done in the web UI.
 

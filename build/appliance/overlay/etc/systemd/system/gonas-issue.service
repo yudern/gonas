@@ -1,0 +1,19 @@
+[Unit]
+Description=GoNAS login banner updater (writes /etc/issue for tty1)
+Documentation=https://github.com/bng147/gonas
+# 這支服務「不」霸佔 tty1——它只是在背景把版本/IP/網址/服務狀態寫進
+# /etc/issue,讓 tty1 保留標準 getty 登入(agetty 印 login: 之前會先秀
+# /etc/issue 的橫幅)。所以這裡不需要、也不該 Conflicts=getty@tty1,反而
+# 要排在它之前跑一次,確保 getty 第一次顯示登入提示時 /etc/issue 已經有
+# 內容(至少是 logo + 版本;IP 之後拿到會自動刷新,見腳本說明)。
+Before=getty@tty1.service
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/gonas-issue
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

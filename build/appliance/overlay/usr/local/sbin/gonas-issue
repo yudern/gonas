@@ -1,0 +1,144 @@
+#!/bin/sh
+# gonas-issue 是「開機就是 GoNAS、而且可以直接登入」這個體驗的核心(第
+# v0.1.54 批次:使用者要求 tty1 開機後不用按鍵就能看到登入提示,像
+# Unraid/一般伺服器那樣「一段品牌/連線資訊橫幅 + login: 提示」)。
+#
+# 做法跟舊的 gonas-console 不同:不再自己霸佔 tty1 畫一個全螢幕狀態畫面
+# (那會蓋掉登入提示,要按 Ctrl+Alt+F2 切 tty2 才能登入),而是把同樣的
+# 資訊(版本、本機 IP、要連的網址、服務狀態)寫進 /etc/issue —— agetty
+# 在印出 "login:" 之前會先把 /etc/issue 的內容顯示出來,所以 tty1 保留
+# 標準 getty 登入(開機直接可登入),又照樣看得到連線資訊。
+#
+# 這支程式只負責「產生 /etc/issue 的內容」,不碰終端機繪圖。每 30 秒重算
+# 一次,只有在內容真的變了(例如開機後才拿到 DHCP 位址)才覆寫檔案;而且
+# 只有在「目前沒有人登入 tty1」時才順手 restart getty@tty1 讓畫面上的橫幅
+# 跟著更新 —— 有人正在那個畫面上操作就不打擾他。
+#
+# 刻意維持 POSIX /bin/sh + 標準工具(hostname/ip/ss/systemctl),不引入
+# 額外相依;偵測邏輯沿用舊 gonas-console 驗證過的那幾個函式。
+
+GONAS_ENV_FILE=/etc/gonas/gonas.env
+ISSUE_FILE=/etc/issue
+TMP_FILE=/etc/issue.gonas.tmp
+
+get_version() {
+    if command -v gonasd >/dev/null 2>&1; then
+        gonasd -version 2>/dev/null | awk '{print $2}'
+    else
+        echo "unknown"
+    fi
+}
+
+get_listen_addr() {
+    addr=":8291"
+    if [ -r "$GONAS_ENV_FILE" ]; then
+        val=$(grep -E '^GONAS_LISTEN_ADDR=' "$GONAS_ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-)
+        [ -n "$val" ] && addr="$val"
+    fi
+    echo "$addr"
+}
+
+get_port() {
+    case "$1" in
+        *:*) echo "${1##*:}" ;;
+        *) echo "8291" ;;
+    esac
+}
+
+list_ipv4_addrs() {
+    if command -v ip >/dev/null 2>&1; then
+        ip -4 -o addr show up scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+    fi
+}
+
+get_service_state() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl is-active gonas.service 2>/dev/null || true
+    else
+        echo "unknown"
+    fi
+}
+
+ssh_installed() {
+    [ -x /usr/sbin/sshd ] || command -v sshd >/dev/null 2>&1
+}
+
+get_ssh_state() {
+    if command -v systemctl >/dev/null 2>&1; then
+        _s=$(systemctl is-active ssh.service 2>/dev/null || true)
+        [ "$_s" = "active" ] && { echo active; return; }
+        _s2=$(systemctl is-active sshd.service 2>/dev/null || true)
+        [ "$_s2" = "active" ] && { echo active; return; }
+        echo "${_s:-unknown}"
+    else
+        echo "unknown"
+    fi
+}
+
+# render_issue 產生要寫進 /etc/issue 的橫幅內容。全程純 ASCII + CP437 方塊字
+# logo(主控台字型有字模,實機顯示正常;理由見舊 gonas-console 註解),不用
+# 任何反斜線——agetty 會把反斜線當 escape 序列解讀,我們的內容沒有反斜線,
+# 所以會原樣顯示。結尾不印 login:(那是 agetty 自己接著印的)。
+render_issue() {
+    version=$(get_version)
+    addr=$(get_listen_addr)
+    port=$(get_port "$addr")
+    hostname_val=$(hostname 2>/dev/null || echo gonas)
+    svc_state=$(get_service_state)
+
+    echo ""
+    echo "  ██████╗  ██████╗ ███╗   ██╗ █████╗ ███████╗"
+    echo " ██╔════╝ ██╔═══██╗████╗  ██║██╔══██╗██╔════╝"
+    echo " ██║  ███╗██║   ██║██╔██╗ ██║███████║███████╗"
+    echo " ██║   ██║██║   ██║██║╚██╗██║██╔══██║╚════██║"
+    echo " ╚██████╔╝╚██████╔╝██║ ╚████║██║  ██║███████║"
+    echo "  ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝"
+    echo ""
+    echo "  Version: ${version}     Host: ${hostname_val}"
+
+    have_addr=0
+    for ip in $(list_ipv4_addrs); do
+        have_addr=1
+        echo "  Web UI:  http://${ip}:${port}"
+    done
+    if [ "$have_addr" -eq 0 ]; then
+        echo "  Web UI:  (waiting for network - NIC or DHCP not ready yet)"
+    fi
+
+    if [ "$svc_state" = "active" ]; then
+        echo "  Service: [OK] gonas running"
+    elif [ "$svc_state" = "activating" ]; then
+        echo "  Service: [..] gonas starting up"
+    else
+        echo "  Service: [X] gonas NOT running (state: ${svc_state:-unknown}) - journalctl -u gonas"
+    fi
+
+    if ssh_installed; then
+        [ "$(get_ssh_state)" = "active" ] && echo "  SSH:     [OK] available on port 22"
+    fi
+
+    echo "  ------------------------------------------------------------"
+    echo "  Log in below for a shell; all setup is done in the web UI."
+    echo ""
+}
+
+# someone_on_tty1 回報目前是否有人登入在 tty1(有的話就不要 restart getty
+# 去打擾他半打到一半的操作)。
+someone_on_tty1() {
+    command -v who >/dev/null 2>&1 && who 2>/dev/null | grep -q '[[:space:]]tty1[[:space:]]'
+}
+
+prev=""
+while true; do
+    new=$(render_issue)
+    if [ "$new" != "$prev" ]; then
+        printf '%s\n' "$new" > "$TMP_FILE" 2>/dev/null && mv "$TMP_FILE" "$ISSUE_FILE" 2>/dev/null
+        # 內容變了(最常見:開機後才拿到 IP)——若沒人在 tty1 操作,重啟
+        # getty 讓畫面上的橫幅立刻刷新;有人在就讓它下次登入循環自然更新。
+        if [ -n "$prev" ] && ! someone_on_tty1; then
+            systemctl restart getty@tty1.service 2>/dev/null || true
+        fi
+        prev="$new"
+    fi
+    sleep 30
+done
