@@ -1945,6 +1945,7 @@ async function renderApps(el) {
                 <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
                 <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
                 <button type="button" data-exec-toggle="${esc(id)}">${esc(t("apps.execCmd"))}</button>
+                <button type="button" data-term-toggle="${esc(id)}">${esc(t("apps.terminal"))}</button>
                 <button type="button" data-inspect-toggle="${esc(id)}">${esc(t("apps.details"))}</button>
               </div>
               <div class="service-panel" id="panel-${esc(id)}" hidden></div>
@@ -1975,6 +1976,7 @@ async function renderApps(el) {
               : `<button type="button" data-ctr-start="${esc(id)}">${esc(t("apps.start"))}</button>`}
             <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
             <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
+            <button type="button" data-term-toggle="${esc(id)}">${esc(t("apps.terminal"))}</button>
             <button type="button" data-inspect-toggle="${esc(id)}">${esc(t("apps.details"))}</button>
             <button type="button" data-ctr-rename="${esc(id)}" data-ctr-name="${esc(name)}">${esc(t("apps.rename"))}</button>
             <button type="button" data-ctr-remove="${esc(id)}" class="danger">${esc(t("apps.removeContainer"))}</button>
@@ -2142,6 +2144,9 @@ async function renderApps(el) {
   });
   el.querySelectorAll("[data-inspect-toggle]").forEach((btn) => {
     btn.addEventListener("click", () => showContainerInspectPanel(el, btn.dataset.inspectToggle));
+  });
+  el.querySelectorAll("[data-term-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => showContainerTerminalPanel(el, btn.dataset.termToggle));
   });
   el.querySelectorAll("[data-ctr-rename]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -2511,6 +2516,116 @@ async function showContainerInspectPanel(el, containerID) {
     body.innerHTML = html || esc(t("apps.detNone"));
   } catch (err) {
     body.textContent = translateError(err.message);
+  }
+}
+
+// xtermLoader 懶載入 xterm.js(+ fit addon + css),只在使用者第一次打開終端機
+// 時載入。回傳一個 Promise,成功 resolve、失敗 reject(通常是 vendor 檔沒打包
+// 進來)。快取 Promise,多個終端機共用同一次載入。
+let _xtermLoad = null;
+function ensureXterm() {
+  if (_xtermLoad) return _xtermLoad;
+  _xtermLoad = new Promise((resolve, reject) => {
+    // CSS(xterm 需要它的樣式;放 /vendor/ 下,同源,CSP 允許)。
+    if (!document.querySelector('link[data-xterm-css]')) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "vendor/xterm.min.css";
+      link.setAttribute("data-xterm-css", "1");
+      document.head.appendChild(link);
+    }
+    const loadScript = (src) => new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = res;
+      s.onerror = () => rej(new Error("load failed: " + src));
+      document.head.appendChild(s);
+    });
+    loadScript("vendor/xterm.min.js")
+      .then(() => loadScript("vendor/xterm-addon-fit.min.js").catch(() => {})) // fit addon 可選
+      .then(() => {
+        if (!window.Terminal) return reject(new Error("xterm not available"));
+        resolve();
+      })
+      .catch(reject);
+  });
+  return _xtermLoad;
+}
+
+// showContainerTerminalPanel 打開一個 xterm 互動式終端機,透過 WebSocket 連到
+// 容器裡一個帶 TTY 的 shell(等同 docker exec -it)。
+async function showContainerTerminalPanel(el, containerID) {
+  const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="panel-header">
+      <strong>${esc(t("apps.terminalTitle"))}</strong>
+      <span class="panel-tools"><button type="button" data-panel-close>${esc(t("common.close"))}</button></span>
+    </div>
+    <div class="term-host" style="height:360px"></div>`;
+  wirePanelClose(panel);
+  const host = panel.querySelector(".term-host");
+
+  try {
+    await ensureXterm();
+  } catch (e) {
+    host.innerHTML = msg("warn", t("apps.terminalNoLib"));
+    return;
+  }
+
+  const term = new window.Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+    theme: { background: "#0b0f0e" },
+  });
+  let fit = null;
+  if (window.FitAddon && window.FitAddon.FitAddon) {
+    fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+  }
+  term.open(host);
+  try { if (fit) fit.fit(); } catch (e) {}
+
+  // WebSocket:同源,ws/wss 跟著頁面的 http/https。
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(`${scheme}//${location.host}/api/v1/docker/containers/${encodeURIComponent(containerID)}/terminal`);
+  ws.binaryType = "arraybuffer";
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  const sendResize = () => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    }
+  };
+  ws.onopen = () => {
+    term.focus();
+    sendResize();
+  };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") term.write(ev.data);
+    else term.write(dec.decode(new Uint8Array(ev.data)));
+  };
+  ws.onclose = () => { try { term.write("\r\n[GoNAS] " + t("apps.terminalClosed") + "\r\n"); } catch (e) {} };
+  ws.onerror = () => { try { term.write("\r\n[GoNAS] " + t("apps.terminalError") + "\r\n"); } catch (e) {} };
+
+  // 鍵盤輸入 → 容器 stdin(二進位 frame)。
+  term.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(enc.encode(data));
+  });
+
+  // 視窗/面板大小變化時重新 fit + 通知遠端。面板關閉時斷線 + 卸掉 listener。
+  const onWinResize = () => { try { if (fit) fit.fit(); } catch (e) {} sendResize(); };
+  window.addEventListener("resize", onWinResize);
+  const closeBtn = panel.querySelector("[data-panel-close]");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      window.removeEventListener("resize", onWinResize);
+      try { ws.close(); } catch (e) {}
+      try { term.dispose(); } catch (e) {}
+    });
   }
 }
 

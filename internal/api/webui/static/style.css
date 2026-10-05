@@ -323,6 +323,7 @@ textarea:focus-visible {
 .msg.warn { background: var(--warn-soft); color: var(--warn); }
 .msg.ok { background: var(--ok-soft); color: var(--ok); }
 
+.term-host { width: 100%; background: #0b0f0e; border-radius: 6px; padding: 6px; overflow: hidden; }
 .inspect-body { font-size: 13px; }
 .inspect-group { margin-top: 10px; }
 .inspect-group-h { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin-bottom: 4px; }
