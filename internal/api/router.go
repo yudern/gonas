@@ -546,6 +546,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/docker/containers/{id}/logs", s.requireAdmin(s.handleContainerLogs))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/exec", s.requireAdmin(s.handleContainerExec))
 	mux.HandleFunc("GET /api/v1/docker/containers/{id}/inspect", s.requireAdmin(s.handleContainerInspect))
+	mux.HandleFunc("GET /api/v1/docker/containers/{id}/terminal", s.requireAdmin(s.handleContainerTerminal))
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/rename", s.requireAdmin(s.handleContainerRename))
 	// 第六十輪:容器啟動/停止/重啟(應用程式頁每個服務的開關按鈕)。requireAdmin。
 	mux.HandleFunc("POST /api/v1/docker/containers/{id}/start", s.requireAdmin(s.handleContainerStart))

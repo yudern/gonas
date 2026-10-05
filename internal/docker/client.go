@@ -33,6 +33,10 @@ type Client struct {
 	// 留空的話直接打未帶版本的路徑，daemon 會用它自己支援的最新版本回應 —— 這對
 	// 「不確定使用者機器上是哪個 Docker 版本」的情境最保險，所以設成預設值。
 	apiVersion string
+	// socketPath 是 Unix socket 路徑,給需要「原始雙向串流」(互動式終端機的
+	// exec attach,見 exec_attach.go)自己直接 dial socket 用 —— 那種 hijack 連線
+	// 沒辦法走 httpClient 的一般請求/回應模型。一般 REST 呼叫仍走 httpClient。
+	socketPath string
 }
 
 // Option 是建立 Client 時的選用設定。
@@ -84,6 +88,7 @@ func NewClient(socketPath string, opts ...Option) *Client {
 		// daemon 卡死」這兩種真正該快速失敗的情況。
 		httpClient: &http.Client{Transport: transport},
 		baseURL:    "http://docker",
+		socketPath: socketPath,
 	}
 	for _, opt := range opts {
 		opt(c)
