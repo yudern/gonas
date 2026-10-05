@@ -66,6 +66,11 @@ type CreateContainerRequest struct {
 	RestartPolicy string // "no" / "on-failure" / "unless-stopped" / "always"
 	NetworkMode   string // 留空則用預設 bridge；App 商店的多容器應用會傳自建網路名稱
 	Labels        map[string]string
+	// MemoryBytes 是記憶體硬上限(bytes),0 = 不限制。NanoCPUs 是 CPU 上限,
+	// 單位是十億分之一顆 CPU(1 顆 = 1_000_000_000),0 = 不限制。對應 docker run
+	// 的 --memory / --cpus,讓單一容器不會吃光整台 NAS 的資源。
+	MemoryBytes int64
+	NanoCPUs    int64
 }
 
 // dockerCreateBody 是實際送給 Docker Engine API 的 JSON 結構(駝峰字首大寫是
@@ -84,6 +89,8 @@ type dockerHostConfig struct {
 	PortBindings  map[string][]portBinding `json:"PortBindings,omitempty"`
 	RestartPolicy dockerRestartPolicy      `json:"RestartPolicy,omitempty"`
 	NetworkMode   string                   `json:"NetworkMode,omitempty"`
+	Memory        int64                    `json:"Memory,omitempty"`   // bytes,0=不限
+	NanoCpus      int64                    `json:"NanoCpus,omitempty"` // 十億分之一 CPU,0=不限
 }
 
 type portBinding struct {
@@ -113,6 +120,8 @@ func (c *Client) CreateContainer(ctx context.Context, req CreateContainerRequest
 			RestartPolicy: dockerRestartPolicy{
 				Name: normalizeRestartPolicy(req.RestartPolicy),
 			},
+			Memory:   req.MemoryBytes,
+			NanoCpus: req.NanoCPUs,
 		},
 	}
 
@@ -228,4 +237,67 @@ func (c *Client) InspectContainer(ctx context.Context, id string) (ContainerInsp
 		return ContainerInspect{}, fmt.Errorf("inspecting container %s: %w", id, err)
 	}
 	return out, nil
+}
+
+// ContainerDetail 是給 Web UI「容器詳情」面板用的較完整 inspect 結果 —— 比
+// ContainerInspect 多帶映像、建立時間、環境變數、掛載、埠、網路、重啟策略與
+// 資源上限。欄位名對齊 Docker Engine API 的 inspect 回應(大寫駝峰)。只挑 UI
+// 會顯示的欄位,不是完整 inspect(那有上百個欄位),多出來的 Docker 欄位會被
+// json 解碼器安靜忽略。
+type ContainerDetail struct {
+	ID      string `json:"Id"`
+	Name    string `json:"Name"`
+	Created string `json:"Created"`
+	State   struct {
+		Status    string `json:"Status"`
+		Running   bool   `json:"Running"`
+		ExitCode  int    `json:"ExitCode"`
+		StartedAt string `json:"StartedAt"`
+		Error     string `json:"Error"`
+	} `json:"State"`
+	RestartCount int `json:"RestartCount"`
+	Config       struct {
+		Image  string            `json:"Image"`
+		Env    []string          `json:"Env"`
+		Cmd    []string          `json:"Cmd"`
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
+	HostConfig struct {
+		Memory        int64  `json:"Memory"`
+		NanoCpus      int64  `json:"NanoCpus"`
+		NetworkMode   string `json:"NetworkMode"`
+		RestartPolicy struct {
+			Name string `json:"Name"`
+		} `json:"RestartPolicy"`
+	} `json:"HostConfig"`
+	Mounts []struct {
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
+	NetworkSettings struct {
+		Networks map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		} `json:"Networks"`
+	} `json:"NetworkSettings"`
+}
+
+// InspectContainerDetail 查詢一個容器較完整的詳情(給 Web UI 詳情面板)。
+func (c *Client) InspectContainerDetail(ctx context.Context, id string) (ContainerDetail, error) {
+	var out ContainerDetail
+	if err := c.doJSON(ctx, "GET", "/containers/"+url.PathEscape(id)+"/json", nil, &out); err != nil {
+		return ContainerDetail{}, fmt.Errorf("inspecting container %s: %w", id, err)
+	}
+	return out, nil
+}
+
+// RenameContainer 幫容器改名(對應 `docker rename`)。GoNAS 自己安裝的 App 容器
+// 靠 com.gonas.app 標籤(不是名稱)管理,所以改名不會影響解除安裝/狀態查詢;
+// 這主要給「非 App 商店安裝的其他容器」一個方便的整理手段。
+func (c *Client) RenameContainer(ctx context.Context, id, newName string) error {
+	q := url.Values{"name": {newName}}.Encode()
+	if err := c.doJSON(ctx, "POST", "/containers/"+url.PathEscape(id)+"/rename?"+q, nil, nil); err != nil {
+		return fmt.Errorf("renaming container %s to %q: %w", id, newName, err)
+	}
+	return nil
 }

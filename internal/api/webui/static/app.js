@@ -1943,6 +1943,7 @@ async function renderApps(el) {
                 <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
                 <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
                 <button type="button" data-exec-toggle="${esc(id)}">${esc(t("apps.execCmd"))}</button>
+                <button type="button" data-inspect-toggle="${esc(id)}">${esc(t("apps.details"))}</button>
               </div>
               <div class="service-panel" id="panel-${esc(id)}" hidden></div>
             `;}).join("")}
@@ -1972,6 +1973,8 @@ async function renderApps(el) {
               : `<button type="button" data-ctr-start="${esc(id)}">${esc(t("apps.start"))}</button>`}
             <button type="button" data-logs-toggle="${esc(id)}">${esc(t("apps.viewLogs"))}</button>
             <button type="button" data-stats-toggle="${esc(id)}">${esc(t("apps.stats"))}</button>
+            <button type="button" data-inspect-toggle="${esc(id)}">${esc(t("apps.details"))}</button>
+            <button type="button" data-ctr-rename="${esc(id)}" data-ctr-name="${esc(name)}">${esc(t("apps.rename"))}</button>
             <button type="button" data-ctr-remove="${esc(id)}" class="danger">${esc(t("apps.removeContainer"))}</button>
           </div>
           <div class="service-panel" id="panel-${esc(id)}" hidden></div>`;
@@ -2070,6 +2073,10 @@ async function renderApps(el) {
       for (const [key, value] of f.entries()) {
         const im = key.match(/^(.+?)\.image$/);
         if (im) { ensure(im[1]); if (value && value.trim()) overrides[im[1]].image = value.trim(); continue; }
+        const rm = key.match(/^(.+?)\.mem$/);
+        if (rm) { ensure(rm[1]); if (Number(value) > 0) overrides[rm[1]].memoryMB = Number(value); continue; }
+        const rc = key.match(/^(.+?)\.cpu$/);
+        if (rc) { ensure(rc[1]); if (Number(value) > 0) overrides[rc[1]].cpus = Number(value); continue; }
         const m = key.match(/^(.+?)\.(env|volume|port)\.(.+)$/);
         if (!m) continue;
         const [, svc, kind, name] = m;
@@ -2102,6 +2109,23 @@ async function renderApps(el) {
   });
   el.querySelectorAll("[data-stats-toggle]").forEach((btn) => {
     btn.addEventListener("click", () => showContainerStatsPanel(el, btn.dataset.statsToggle));
+  });
+  el.querySelectorAll("[data-inspect-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => showContainerInspectPanel(el, btn.dataset.inspectToggle));
+  });
+  el.querySelectorAll("[data-ctr-rename]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.ctrRename;
+      const cur = btn.dataset.ctrName || "";
+      const name = prompt(t("apps.renamePrompt"), cur);
+      if (name === null || name.trim() === "" || name.trim() === cur) return;
+      try {
+        await api.renameContainer(id, name.trim());
+        await reRenderAppsKeepingScroll(el);
+      } catch (err) {
+        el.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+      }
+    });
   });
 
   // 第六十輪:容器啟動/停止/重啟。按完重畫整頁,狀態燈與按鈕跟著更新。
@@ -2192,6 +2216,10 @@ async function renderApps(el) {
       for (const [key, value] of f.entries()) {
         const im = key.match(/^(.+?)\.image$/);
         if (im) { ensure(im[1]); if (value && value.trim()) overrides[im[1]].image = value.trim(); continue; }
+        const rm = key.match(/^(.+?)\.mem$/);
+        if (rm) { ensure(rm[1]); if (Number(value) > 0) overrides[rm[1]].memoryMB = Number(value); continue; }
+        const rc = key.match(/^(.+?)\.cpu$/);
+        if (rc) { ensure(rc[1]); if (Number(value) > 0) overrides[rc[1]].cpus = Number(value); continue; }
         const m = key.match(/^(.+?)\.(env|volume|port)\.(.+)$/);
         if (!m) continue;
         const [, svc, kind, name] = m;
@@ -2410,6 +2438,52 @@ async function showContainerStatsPanel(el, containerID) {
   await load();
 }
 
+// showContainerInspectPanel 顯示容器完整詳情:映像、建立時間、狀態、重啟策略、
+// 資源上限、網路/IP、掛載、環境變數。requireAdmin 的端點(含環境變數)。
+async function showContainerInspectPanel(el, containerID) {
+  const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="panel-header">
+      <strong>${esc(t("apps.detailsTitle"))}</strong>
+      <span class="panel-tools"><button type="button" data-panel-close>${esc(t("common.close"))}</button></span>
+    </div>
+    <div class="inspect-body">${esc(t("common.loading"))}</div>`;
+  wirePanelClose(panel);
+  const body = panel.querySelector(".inspect-body");
+  try {
+    const d = await api.containerInspect(containerID);
+    const row = (label, val) => val ? `<div class="stat-line"><span>${esc(label)}</span><strong>${esc(val)}</strong></div>` : "";
+    const mem = d.hostConfig && d.hostConfig.Memory ? formatBytes(d.hostConfig.Memory) : t("apps.resUnlimited");
+    const cpus = d.hostConfig && d.hostConfig.NanoCpus ? (d.hostConfig.NanoCpus / 1e9) + " " + t("apps.cpuCores") : t("apps.resUnlimited");
+    const rp = (d.hostConfig && d.hostConfig.RestartPolicy && d.hostConfig.RestartPolicy.Name) || "-";
+    const nets = d.networkSettings && d.networkSettings.Networks ? d.networkSettings.Networks : {};
+    const netLines = Object.entries(nets).map(([n, v]) => `${n}${v && v.IPAddress ? " (" + v.IPAddress + ")" : ""}`).join(", ");
+    const mounts = (d.mounts || []).map((m) => `${m.Source} → ${m.Destination}${m.RW ? "" : " (ro)"}`);
+    const env = (d.config && d.config.Env) || [];
+    let html = "";
+    html += row(t("apps.detImage"), (d.config && d.config.Image) || "");
+    html += row(t("apps.detState"), (d.state ? d.state.Status : "") + (d.state && d.state.Error ? " — " + d.state.Error : ""));
+    html += row(t("apps.detCreated"), d.created ? formatDateTime(d.created) : "");
+    html += row(t("apps.detRestartPolicy"), rp + (d.restartCount ? " (×" + d.restartCount + ")" : ""));
+    html += row(t("apps.detMem"), mem);
+    html += row(t("apps.detCpu"), cpus);
+    html += row(t("apps.detNetwork"), netLines);
+    if (mounts.length) {
+      html += `<div class="inspect-group"><div class="inspect-group-h">${esc(t("apps.detMounts"))}</div>` +
+        mounts.map((m) => `<div class="inspect-kv"><code>${esc(m)}</code></div>`).join("") + `</div>`;
+    }
+    if (env.length) {
+      html += `<div class="inspect-group"><div class="inspect-group-h">${esc(t("apps.detEnv"))}</div>` +
+        env.map((e) => `<div class="inspect-kv"><code>${esc(e)}</code></div>`).join("") + `</div>`;
+    }
+    body.innerHTML = html || esc(t("apps.detNone"));
+  } catch (err) {
+    body.textContent = translateError(err.message);
+  }
+}
+
 function showContainerExecPanel(el, containerID) {
   const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
   if (!panel) return;
@@ -2536,6 +2610,15 @@ function renderEditFields(app) {
         <input type="text" name="${esc(svc.name)}.image" value="${esc(so.image || svc.image)}">
         <div class="hint">${esc(t("apps.imageHint"))}</div>
       </div>`;
+    const resField = `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(t("apps.resLimits"))}</label>
+        <div style="display:flex;gap:8px">
+          <input type="number" name="${esc(svc.name)}.mem" min="0" step="1" value="${esc(so.memoryMB ? String(so.memoryMB) : "")}" placeholder="${esc(t("apps.memPlaceholder"))}" style="width:50%">
+          <input type="number" name="${esc(svc.name)}.cpu" min="0" step="0.1" value="${esc(so.cpus ? String(so.cpus) : "")}" placeholder="${esc(t("apps.cpuPlaceholder"))}" style="width:50%">
+        </div>
+        <div class="hint">${esc(t("apps.resLimitsHint"))}</div>
+      </div>`;
     const env = (svc.env || []).map((e) => {
       const cur = envVals[e.key] !== undefined ? envVals[e.key] : "";
       return `
@@ -2560,7 +2643,7 @@ function renderEditFields(app) {
         <input type="number" name="${esc(svc.name)}.port.${esc(String(p.containerPort))}" value="${esc(String(cur))}">
       </div>`;
     });
-    return [imageField, ...env, ...vol, ...port].join("");
+    return [imageField, resField, ...env, ...vol, ...port].join("");
   }).join("");
 }
 
@@ -2638,6 +2721,15 @@ function renderCatalogEntry(tmpl, appdataBase) {
         <input type="text" name="${esc(svc.name)}.image" value="${esc(svc.image)}">
         <div class="hint">${esc(t("apps.imageHint"))}</div>
       </div>`;
+    const resField = `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(t("apps.resLimits"))}</label>
+        <div style="display:flex;gap:8px">
+          <input type="number" name="${esc(svc.name)}.mem" min="0" step="1" placeholder="${esc(t("apps.memPlaceholder"))}" style="width:50%">
+          <input type="number" name="${esc(svc.name)}.cpu" min="0" step="0.1" placeholder="${esc(t("apps.cpuPlaceholder"))}" style="width:50%">
+        </div>
+        <div class="hint">${esc(t("apps.resLimitsHint"))}</div>
+      </div>`;
     const env = (svc.env || []).map((e) => `
       <div class="field">
         <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? esc(t("apps.required")) : ""}</label>
@@ -2655,7 +2747,7 @@ function renderCatalogEntry(tmpl, appdataBase) {
         <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" value="${esc(base + "/appdata/" + subdir)}" required>
         <div class="hint">${esc(t("apps.volumeAutocreateHint"))}</div>
       </div>`);
-    return [imageField, ...env, ...vol];
+    return [imageField, resField, ...env, ...vol];
   });
 
   const sourceBadge = tmpl.source === "remote" ? ` <span class="pill neutral">${esc(t("apps.catalogRemoteBadge"))}</span>` : "";

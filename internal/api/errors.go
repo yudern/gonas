@@ -50,6 +50,8 @@ var (
 	errInvalidSmartSchedule = errors.New("smart self-test schedule hour must be 0-23 and minute 0-59")
 	errSmartDeviceRequired  = errors.New("a device query parameter is required")
 	errSmartDeviceUnknown   = errors.New("that device is not part of the current storage pool")
+	// 容器改名時名稱不合 Docker 規則。
+	errInvalidContainerName = errors.New("container name must start with a letter or digit and contain only letters, digits, '_', '.', '-'")
 
 	// Phase 9：登入節流、panic 復原共用的 sentinel 錯誤。
 	errTooManyLoginAttempts = errors.New("too many failed login attempts, please try again later")

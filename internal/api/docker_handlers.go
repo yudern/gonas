@@ -230,3 +230,61 @@ func (s *Server) handleContainerExec(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, containerExecResponse{Output: result.Output, ExitCode: result.ExitCode})
 }
+
+// handleContainerInspect 回傳一個容器的較完整詳情(映像、建立時間、狀態、環境
+// 變數、掛載、埠/網路、重啟策略、資源上限),給「容器詳情」面板。requireAdmin
+// (詳情含環境變數,可能有密碼之類的敏感值)。
+func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	detail, err := s.docker.InspectContainerDetail(r.Context(), id)
+	if err != nil {
+		s.logger.Error("inspecting container failed", "err", err, "containerId", id)
+		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// containerRenameRequest 是 POST .../rename 的 body。
+type containerRenameRequest struct {
+	Name string `json:"name"`
+}
+
+// handleContainerRename 幫容器改名。requireAdmin。名稱做基本合法性檢查(Docker
+// 容器名只允許 [a-zA-Z0-9][a-zA-Z0-9_.-]+)。
+func (s *Server) handleContainerRename(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req containerRenameRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !validContainerName(name) {
+		writeError(w, http.StatusBadRequest, errInvalidContainerName)
+		return
+	}
+	if err := s.docker.RenameContainer(r.Context(), id, name); err != nil {
+		s.logger.Warn("renaming container failed", "err", err, "containerId", id)
+		writeError(w, dockerErrStatus(err, http.StatusConflict), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "renamed", "name": name})
+}
+
+// validContainerName 比照 Docker 對容器名的規則:開頭是英數,其餘可含
+// 英數與 _ . -,至少一個字元,長度上限給個合理值擋亂填。
+func validContainerName(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	for i, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if i > 0 {
+			ok = ok || r == '_' || r == '.' || r == '-'
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}

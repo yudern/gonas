@@ -26,6 +26,26 @@ type ServiceOverride struct {
 	// docker.m.daocloud.io/library/nginx:latest),對 Docker Hub 連不上/很慢的
 	// 網路環境(中國)很實用。留空則用範本原本的 Image。
 	Image string `json:"image,omitempty"`
+	// MemoryMB / CPUs 是這個服務的資源上限:記憶體(MB)與 CPU 核數(可小數,
+	// 例如 1.5)。0 代表不限制(預設)。防單一容器吃光整台 NAS 的資源。
+	MemoryMB int     `json:"memoryMB,omitempty"`
+	CPUs     float64 `json:"cpus,omitempty"`
+}
+
+// MemoryBytes 把 MemoryMB 換成 bytes(給 docker HostConfig.Memory)。0=不限。
+func (o ServiceOverride) MemoryBytes() int64 {
+	if o.MemoryMB <= 0 {
+		return 0
+	}
+	return int64(o.MemoryMB) * 1024 * 1024
+}
+
+// NanoCPUs 把 CPUs 換成十億分之一 CPU(給 docker HostConfig.NanoCpus)。0=不限。
+func (o ServiceOverride) NanoCPUs() int64 {
+	if o.CPUs <= 0 {
+		return 0
+	}
+	return int64(o.CPUs * 1e9)
 }
 
 // EffectiveImage 回傳這個服務實際要用的映像位址:有覆寫就用覆寫的,否則用
@@ -195,6 +215,8 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 			Env:           env,
 			Ports:         ports,
 			Mounts:        mounts,
+			MemoryBytes:   override.MemoryBytes(),
+			NanoCPUs:      override.NanoCPUs(),
 			RestartPolicy: svc.RestartPolicy,
 			NetworkMode:   networkMode,
 			Labels: map[string]string{
