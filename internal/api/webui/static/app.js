@@ -1913,11 +1913,13 @@ async function renderApps(el) {
               <p>${esc(translateNotice(app.template.description || ""))}</p>
             </div>
             <div class="btn-row" style="margin:0">
+              <button class="secondary" data-check-update="${esc(app.template.id)}">${esc(t("apps.checkUpdate"))}</button>
               <button class="secondary" data-edit-app="${esc(app.template.id)}">${esc(t("apps.edit"))}</button>
               <button class="secondary" data-update="${esc(app.template.id)}">${esc(t("apps.update"))}</button>
               <button class="danger" data-uninstall="${esc(app.template.id)}">${esc(t("apps.uninstall"))}</button>
             </div>
           </div>
+          <div class="check-update-msg" id="checkupd-${esc(app.template.id)}"></div>
           <form class="install-form" id="edit-form-${esc(app.template.id)}" data-edit="${esc(app.template.id)}">
             <div class="install-msg"></div>
             ${renderEditFields(app)}
@@ -2051,6 +2053,34 @@ async function renderApps(el) {
           : msg("error", translateError(st.error || "")));
       } catch (err) {
         if (box) box.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  });
+
+  // 「检查更新」:比对 registry 摘要,显示有无新版(不下载);有新版再点「更新」。
+  el.querySelectorAll("[data-check-update]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.checkUpdate;
+      const box = el.querySelector(`#checkupd-${cssEscape(id)}`);
+      btn.disabled = true;
+      const label = btn.textContent;
+      btn.textContent = t("apps.checkingUpdate");
+      try {
+        const res = await api.checkAppUpdate(id);
+        if (res.updateAvailable) {
+          box.innerHTML = msg("warn", t("apps.updateAvail"));
+        } else if (res.checked) {
+          box.innerHTML = msg("ok", t("apps.upToDate"));
+        } else {
+          // 全部服务都没查成功(通常是连不上 registry)。
+          const firstErr = (res.services || []).map((s) => s.error).filter(Boolean)[0] || "";
+          box.innerHTML = msg("warn", t("apps.checkFailed") + (firstErr ? " " + esc(translateError(firstErr)) : ""));
+        }
+      } catch (err) {
+        box.innerHTML = msg("error", translateError(err.message));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
       }
     });
   });

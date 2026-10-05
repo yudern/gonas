@@ -103,6 +103,7 @@ export const api = {
   installApp: (templateId, overrides) => request("POST", "/api/v1/appstore/apps", { templateId, overrides }),
   installCustomApp: (template) => request("POST", "/api/v1/appstore/apps", { template }),
   uninstallApp: (id) => request("DELETE", `/api/v1/appstore/apps/${encodeURIComponent(id)}`),
+  checkAppUpdate: (id) => request("POST", `/api/v1/appstore/apps/${encodeURIComponent(id)}/check-update`),
   updateApp: (id) => request("POST", `/api/v1/appstore/apps/${encodeURIComponent(id)}/update`),
   editApp: (id, overrides) => request("PUT", `/api/v1/appstore/apps/${encodeURIComponent(id)}`, { overrides }),
   appOpStatus: () => request("GET", "/api/v1/appstore/op-status"),

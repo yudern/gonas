@@ -561,6 +561,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("GET /api/v1/appstore/apps", s.requireAuth(s.handleAppstoreListInstalled))
 	mux.HandleFunc("POST /api/v1/appstore/apps", s.requireAdmin(s.handleAppstoreInstall))
 	mux.HandleFunc("DELETE /api/v1/appstore/apps/{id}", s.requireAdmin(s.handleAppstoreUninstall))
+	mux.HandleFunc("POST /api/v1/appstore/apps/{id}/check-update", s.requireAdmin(s.handleAppstoreCheckUpdate))
 	mux.HandleFunc("POST /api/v1/appstore/apps/{id}/update", s.requireAdmin(s.handleAppstoreUpdate))
 	mux.HandleFunc("PUT /api/v1/appstore/apps/{id}", s.requireAdmin(s.handleAppstoreEdit))
 	mux.HandleFunc("GET /api/v1/appstore/op-status", s.requireAuth(s.handleAppstoreOpStatus))
