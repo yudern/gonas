@@ -582,3 +582,18 @@ func TestUninstall_RemovesLabeledContainersAndNetwork(t *testing.T) {
 		t.Errorf("expected app network to be removed, got: %v", daemon.networks)
 	}
 }
+
+func TestServiceOverride_EffectiveImage(t *testing.T) {
+	// 沒覆寫 → 用範本預設。
+	if got := (ServiceOverride{}).EffectiveImage("nginx:latest"); got != "nginx:latest" {
+		t.Errorf("no override should use template image, got %q", got)
+	}
+	// 空白覆寫視同沒覆寫。
+	if got := (ServiceOverride{Image: "   "}).EffectiveImage("nginx:latest"); got != "nginx:latest" {
+		t.Errorf("blank override should fall back, got %q", got)
+	}
+	// 有覆寫 → 用覆寫值(去前後空白)。
+	if got := (ServiceOverride{Image: " docker.m.daocloud.io/library/nginx:latest "}).EffectiveImage("nginx:latest"); got != "docker.m.daocloud.io/library/nginx:latest" {
+		t.Errorf("override should win and be trimmed, got %q", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bng147/gonas/internal/docker"
@@ -20,6 +21,20 @@ type ServiceOverride struct {
 	Env               map[string]string `json:"env,omitempty"`               // env key -> 使用者填的值
 	VolumeHostPaths   map[string]string `json:"volumeHostPaths,omitempty"`   // containerPath -> 使用者選的陣列路徑
 	PortHostOverrides map[int]int       `json:"portHostOverrides,omitempty"` // containerPort -> 使用者改過的 hostPort
+	// Image 讓使用者在安裝時改掉這個服務要拉的映像位址 —— 最常見用途是把
+	// docker.io 的映像換成國內鏡像源(例如把 nginx:latest 改成
+	// docker.m.daocloud.io/library/nginx:latest),對 Docker Hub 連不上/很慢的
+	// 網路環境(中國)很實用。留空則用範本原本的 Image。
+	Image string `json:"image,omitempty"`
+}
+
+// EffectiveImage 回傳這個服務實際要用的映像位址:有覆寫就用覆寫的,否則用
+// 範本預設。集中在一處,避免 Install/Update 各自判斷不一致。
+func (o ServiceOverride) EffectiveImage(templateImage string) string {
+	if strings.TrimSpace(o.Image) != "" {
+		return strings.TrimSpace(o.Image)
+	}
+	return templateImage
 }
 
 // InstallRequest 是安裝一個 App 所需的完整輸入。
@@ -109,6 +124,7 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 
 	for _, svc := range req.Template.Services {
 		override := req.Overrides[svc.Name]
+		image := override.EffectiveImage(svc.Image) // 可能被使用者改成國內鏡像源
 
 		env, err := ResolveEnv(svc, override.Env)
 		if err != nil {
@@ -149,7 +165,7 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		exists := false
 		if !req.ForcePull {
 			var err error
-			exists, err = client.ImageExists(ctx, svc.Image)
+			exists, err = client.ImageExists(ctx, image)
 			if err != nil {
 				rollback()
 				return InstallResult{}, fmt.Errorf("service %q: %w", svc.Name, err)
@@ -165,16 +181,16 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 					req.OnPullProgress(svc.Name, status)
 				}
 			}
-			if err := client.PullImage(ctx, svc.Image, progress); err != nil {
+			if err := client.PullImage(ctx, image, progress); err != nil {
 				rollback()
-				return InstallResult{}, fmt.Errorf("service %q: pulling image %q: %w", svc.Name, svc.Image, err)
+				return InstallResult{}, fmt.Errorf("service %q: pulling image %q: %w", svc.Name, image, err)
 			}
 		}
 
 		containerName := req.Template.ID + "-" + svc.Name
 		id, _, err := client.CreateContainer(ctx, docker.CreateContainerRequest{
 			Name:          containerName,
-			Image:         svc.Image,
+			Image:         image,
 			Cmd:           svc.Command,
 			Env:           env,
 			Ports:         ports,
@@ -254,13 +270,14 @@ func Update(ctx context.Context, client *docker.Client, req InstallRequest) (Ins
 		return InstallResult{}, err
 	}
 	for _, svc := range req.Template.Services {
+		image := req.Overrides[svc.Name].EffectiveImage(svc.Image)
 		progress := func(status string) {
 			if req.OnPullProgress != nil {
 				req.OnPullProgress(svc.Name, status)
 			}
 		}
-		if err := client.PullImage(ctx, svc.Image, progress); err != nil {
-			return InstallResult{}, fmt.Errorf("pulling new image for service %q (%s): %w — the app was left running on its current version", svc.Name, svc.Image, err)
+		if err := client.PullImage(ctx, image, progress); err != nil {
+			return InstallResult{}, fmt.Errorf("pulling new image for service %q (%s): %w — the app was left running on its current version", svc.Name, image, err)
 		}
 	}
 	if err := Uninstall(ctx, client, req.Template.ID); err != nil {

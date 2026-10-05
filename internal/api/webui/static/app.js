@@ -1870,13 +1870,14 @@ async function pollAppOp(box, labelKey) {
 }
 
 async function renderApps(el) {
-  const [installed, catalog, dockerStatus, containers, arrayStatus, images, catalogSource] = await Promise.all([
+  const [installed, catalog, dockerStatus, containers, arrayStatus, images, catalogSource, registryConfig] = await Promise.all([
     api.installedApps().catch(() => []), api.catalog().catch(() => []),
     api.dockerPing().catch((e) => ({ available: false, error: e.message })),
     api.containers().catch(() => []),
     api.arrayStatus().catch(() => ({})),
     api.images().catch(() => []),
     api.catalogSource().catch(() => ({ url: "", remoteCount: 0 })),
+    api.registryConfig().catch(() => ({ registryMirrors: [], insecureRegistries: [] })),
   ]);
   // 容器目前狀態(id -> "running"/"exited"/…),給每個服務顯示狀態燈與決定
   // 啟動/停止按鈕怎麼呈現。ListContainers 回的是完整 64 字元 id,跟安裝時
@@ -1993,6 +1994,8 @@ async function renderApps(el) {
       }).join("")}
     </div>` : ""}
 
+    ${renderRegistryConfigCard(registryConfig)}
+
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
       ${renderCatalogSource(catalogSource)}
@@ -2063,11 +2066,14 @@ async function renderApps(el) {
       const id = form.dataset.edit;
       const f = new FormData(form);
       const overrides = {};
+      const ensure = (svc) => (overrides[svc] = overrides[svc] || { env: {}, volumeHostPaths: {}, portHostOverrides: {} });
       for (const [key, value] of f.entries()) {
+        const im = key.match(/^(.+?)\.image$/);
+        if (im) { ensure(im[1]); if (value && value.trim()) overrides[im[1]].image = value.trim(); continue; }
         const m = key.match(/^(.+?)\.(env|volume|port)\.(.+)$/);
         if (!m) continue;
         const [, svc, kind, name] = m;
-        overrides[svc] = overrides[svc] || { env: {}, volumeHostPaths: {}, portHostOverrides: {} };
+        ensure(svc);
         if (kind === "env" && value) overrides[svc].env[name] = value;
         if (kind === "volume" && value) overrides[svc].volumeHostPaths[name] = value;
         if (kind === "port" && value) overrides[svc].portHostOverrides[Number(name)] = Number(value);
@@ -2182,11 +2188,14 @@ async function renderApps(el) {
       const f = new FormData(form);
       const templateId = form.dataset.install;
       const overrides = {};
+      const ensure = (svc) => (overrides[svc] = overrides[svc] || { env: {}, volumeHostPaths: {}, portHostOverrides: {} });
       for (const [key, value] of f.entries()) {
+        const im = key.match(/^(.+?)\.image$/);
+        if (im) { ensure(im[1]); if (value && value.trim()) overrides[im[1]].image = value.trim(); continue; }
         const m = key.match(/^(.+?)\.(env|volume|port)\.(.+)$/);
         if (!m) continue;
         const [, svc, kind, name] = m;
-        overrides[svc] = overrides[svc] || { env: {}, volumeHostPaths: {}, portHostOverrides: {} };
+        ensure(svc);
         if (kind === "env" && value) overrides[svc].env[name] = value;
         if (kind === "volume" && value) overrides[svc].volumeHostPaths[name] = value;
         if (kind === "port" && value) overrides[svc].portHostOverrides[Number(name)] = Number(value);
@@ -2210,6 +2219,29 @@ async function renderApps(el) {
 
   // 遠端 App 目錄:儲存網址(同步抓一次)與手動重新整理。兩者都用整頁重畫
   // 來反映新的目錄內容(抓回來的範本會直接出現在下方清單)。
+  const registryForm = el.querySelector("#registry-cfg-form");
+  if (registryForm) {
+    const rBox = el.querySelector("#registry-cfg-msg");
+    registryForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const f = new FormData(ev.target);
+      const split = (s) => (s || "").split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+      const btn = ev.target.querySelector('button[type="submit"]');
+      btn.disabled = true;
+      rBox.innerHTML = msg("warn", t("apps.registrySaving"));
+      try {
+        const res = await api.setRegistryConfig(split(f.get("mirrors")), split(f.get("insecure")));
+        rBox.innerHTML = res.applied
+          ? msg("ok", t("apps.registrySaved"))
+          : msg("warn", translateNotice(res.warning) || t("apps.registrySavedNoReload"));
+      } catch (err) {
+        rBox.innerHTML = msg("error", translateError(err.message));
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   const sourceForm = el.querySelector("#catalog-source-form");
   if (sourceForm) {
     const srcBox = el.querySelector("#catalog-source-msg");
@@ -2498,6 +2530,12 @@ function renderEditFields(app) {
     const envVals = so.env || {};
     const volVals = so.volumeHostPaths || {};
     const portVals = so.portHostOverrides || {};
+    const imageField = `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(t("apps.image"))}</label>
+        <input type="text" name="${esc(svc.name)}.image" value="${esc(so.image || svc.image)}">
+        <div class="hint">${esc(t("apps.imageHint"))}</div>
+      </div>`;
     const env = (svc.env || []).map((e) => {
       const cur = envVals[e.key] !== undefined ? envVals[e.key] : "";
       return `
@@ -2522,8 +2560,38 @@ function renderEditFields(app) {
         <input type="number" name="${esc(svc.name)}.port.${esc(String(p.containerPort))}" value="${esc(String(cur))}">
       </div>`;
     });
-    return [...env, ...vol, ...port].join("");
+    return [imageField, ...env, ...vol, ...port].join("");
   }).join("");
+}
+
+// renderRegistryConfigCard 畫出「Docker 鏡像加速」設定(可摺疊)。一行一個加速
+// 地址 / insecure registry。給 Docker Hub 連不上/很慢的網路(中國)用。
+function renderRegistryConfigCard(cfg) {
+  cfg = cfg || { registryMirrors: [], insecureRegistries: [] };
+  const mirrors = (cfg.registryMirrors || []).join("\n");
+  const insecure = (cfg.insecureRegistries || []).join("\n");
+  const hasAny = (cfg.registryMirrors || []).length || (cfg.insecureRegistries || []).length;
+  return `
+    <div class="card">
+      <details class="catalog-source" ${hasAny ? "open" : ""}>
+        <summary>${esc(t("apps.registryTitle"))}</summary>
+        <p class="hint">${esc(t("apps.registryHint"))}</p>
+        <div id="registry-cfg-msg"></div>
+        <form class="stacked" id="registry-cfg-form" style="margin-top:8px">
+          <div class="field">
+            <label>${esc(t("apps.registryMirrors"))}</label>
+            <textarea name="mirrors" rows="2" placeholder="https://docker.m.daocloud.io">${esc(mirrors)}</textarea>
+            <div class="hint">${esc(t("apps.registryMirrorsHint"))}</div>
+          </div>
+          <div class="field">
+            <label>${esc(t("apps.insecureRegistries"))}</label>
+            <textarea name="insecure" rows="1" placeholder="192.168.1.10:5000">${esc(insecure)}</textarea>
+            <div class="hint">${esc(t("apps.insecureRegistriesHint"))}</div>
+          </div>
+          <div class="btn-row"><button type="submit">${esc(t("common.save"))}</button></div>
+        </form>
+      </details>
+    </div>`;
 }
 
 // renderCatalogSource 畫出「遠端 App 目錄」的設定區:網址輸入 + 儲存 + 重新整理,
@@ -2563,6 +2631,13 @@ function renderCatalogSource(src) {
 function renderCatalogEntry(tmpl, appdataBase) {
   const base = appdataBase || "/mnt/tank";
   const fields = tmpl.services.flatMap((svc) => {
+    // 鏡像位址預填成範本預設,使用者可改成國內鏡像源(例如換掉 registry 前綴)。
+    const imageField = `
+      <div class="field">
+        <label>${esc(svc.name)} · ${esc(t("apps.image"))}</label>
+        <input type="text" name="${esc(svc.name)}.image" value="${esc(svc.image)}">
+        <div class="hint">${esc(t("apps.imageHint"))}</div>
+      </div>`;
     const env = (svc.env || []).map((e) => `
       <div class="field">
         <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? esc(t("apps.required")) : ""}</label>
@@ -2580,7 +2655,7 @@ function renderCatalogEntry(tmpl, appdataBase) {
         <input type="text" name="${esc(svc.name)}.volume.${esc(v.containerPath)}" value="${esc(base + "/appdata/" + subdir)}" required>
         <div class="hint">${esc(t("apps.volumeAutocreateHint"))}</div>
       </div>`);
-    return [...env, ...vol];
+    return [imageField, ...env, ...vol];
   });
 
   const sourceBadge = tmpl.source === "remote" ? ` <span class="pill neutral">${esc(t("apps.catalogRemoteBadge"))}</span>` : "";

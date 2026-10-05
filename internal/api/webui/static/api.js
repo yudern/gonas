@@ -78,6 +78,8 @@ export const api = {
   smartSelfTestLog: (device) => request("GET", "/api/v1/storage/smart/selftest-log?device=" + encodeURIComponent(device)),
 
   dockerPing: () => request("GET", "/api/v1/docker/ping"),
+  registryConfig: () => request("GET", "/api/v1/docker/registry-config"),
+  setRegistryConfig: (registryMirrors, insecureRegistries) => request("PUT", "/api/v1/docker/registry-config", { registryMirrors, insecureRegistries }),
   containers: () => request("GET", "/api/v1/docker/containers"),
   images: () => request("GET", "/api/v1/docker/images"),
   removeImage: (id) => request("DELETE", `/api/v1/docker/images/${encodeURIComponent(id)}`),

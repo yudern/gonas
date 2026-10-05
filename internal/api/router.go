@@ -114,8 +114,12 @@ type Server struct {
 	// snapraidCfgPath 是 GoNAS 管理的 snapraid.conf 位置;抽成欄位(跟
 	// fstabPath 同理)是為了讓測試指到暫存檔,不去動真的 /etc/gonas/snapraid.conf。
 	snapraidCfgPath string
-	docker          *docker.Client
-	store           *state.Store
+	// dockerDaemonJSONPath 是 Docker daemon 設定檔位置(鏡像加速/insecure
+	// registry 設定寫在這),抽成欄位是為了讓測試指到暫存檔,不動真的
+	// /etc/docker/daemon.json。
+	dockerDaemonJSONPath string
+	docker               *docker.Client
+	store                *state.Store
 
 	// dataDir 是 state.json 所在的目錄,同時也是 TLS 憑證(tls/)、
 	// WireGuard 設定檔(wireguard/)這些「GoNAS 自己產生、不是使用者
@@ -304,17 +308,18 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	}
 
 	s := &Server{
-		logger:           logger,
-		startedAt:        time.Now(),
-		runner:           storage.NewExecRunner(),
-		fstabPath:        storage.DefaultFstabPath,
-		snapraidCfgPath:  defaultSnapraidConfigPath,
-		docker:           docker.NewClient(""),
-		store:            store,
-		dataDir:          dataDir,
-		sessions:         security.NewSessionManager(sessionTTL),
-		loginLimiter:     security.NewLoginLimiter(loginRateLimitMaxFailures, loginRateLimitLockout),
-		backupSchedulers: make(map[string]*backup.JobScheduler),
+		logger:               logger,
+		startedAt:            time.Now(),
+		runner:               storage.NewExecRunner(),
+		fstabPath:            storage.DefaultFstabPath,
+		snapraidCfgPath:      defaultSnapraidConfigPath,
+		dockerDaemonJSONPath: docker.DefaultDaemonJSONPath,
+		docker:               docker.NewClient(""),
+		store:                store,
+		dataDir:              dataDir,
+		sessions:             security.NewSessionManager(sessionTTL),
+		loginLimiter:         security.NewLoginLimiter(loginRateLimitMaxFailures, loginRateLimitLockout),
+		backupSchedulers:     make(map[string]*backup.JobScheduler),
 	}
 
 	// 監控用的磁碟路徑預設是 "/"(還沒設定 pool 前至少能看到系統碟的
@@ -528,6 +533,8 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/storage/smart/test", s.requireAdmin(s.handleStorageSmartTestRun))
 	mux.HandleFunc("GET /api/v1/storage/smart/selftest-log", s.requireAuth(s.handleStorageSmartSelfTestLog))
 
+	mux.HandleFunc("GET /api/v1/docker/registry-config", s.requireAuth(s.handleDockerRegistryConfigGet))
+	mux.HandleFunc("PUT /api/v1/docker/registry-config", s.requireAdmin(s.handleDockerRegistryConfigSet))
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))
 	mux.HandleFunc("GET /api/v1/docker/images", s.requireAuth(s.handleDockerImages))
