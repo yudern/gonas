@@ -8,8 +8,10 @@
 - `xterm-addon-fit.min.js` (xterm-addon-fit 0.8.0)
 
 這些檔案由 `//go:embed webui/static` 一併打包進 gonasd,執行期以 `/vendor/...`
-提供給 Web UI。沒有這三個檔案時,終端機按鈕會顯示「終端組件未打包」提示,
-其餘功能(含一次性「執行指令」)不受影響。
+提供給 Web UI。**不是必須的**:沒有這三個檔案時,互動式終端機會自動改用 GonasNAS
+內建的輕量終端機模擬器(見 app.js 的 GonasTerminal,純原生 JS、零依賴),一樣能用
+——放進這三個檔案只是把渲染升級成 xterm.js 的完整實作(更完整的 VT 相容性)。
+放進去後重新 `make build`,前端會自動偵測並優先使用 xterm。
 
 來源(擇一):
 - cdnjs:https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js 等

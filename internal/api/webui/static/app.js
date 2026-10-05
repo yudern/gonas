@@ -2552,8 +2552,328 @@ function ensureXterm() {
   return _xtermLoad;
 }
 
-// showContainerTerminalPanel 打開一個 xterm 互動式終端機,透過 WebSocket 連到
-// 容器裡一個帶 TTY 的 shell(等同 docker exec -it)。
+// ───────────────────────────────────────────────────────────────────────────
+// GonasTerminal:內建的輕量終端機模擬器(零依賴、永久離線)。當 xterm.js 沒有被
+// 打包進來時,互動式容器終端機改用這個 —— 支援常見的 VT100/ANSI 子集:可列印
+// 字元與自動換行、CR/LF/BS/TAB、游標移動與定位、清行/清屏、SGR 顏色(16 色 +
+// 256 色 + truecolor + 粗體/反白)、捲動區(DECSTBM)、插入/刪除行與字元、以及
+// 替代畫面緩衝區(alt screen,讓 vim/top 這類全螢幕程式能正確運作)。對外介面
+// 刻意跟 xterm 的用法對齊(open/write/onData/focus/dispose + cols/rows/fit),
+// 讓上層 showContainerTerminalPanel 兩種後端共用同一套 WebSocket 橋接邏輯。
+class GonasTerminal {
+  constructor() {
+    this.cols = 80; this.rows = 24;
+    this.fg = null; this.bg = null; this.bold = false; this.inverse = false;
+    this._dataCb = null;
+    this.state = "normal"; this.params = ""; this.osc = "";
+    this.appCursor = false;
+    this.cursorVisible = true;
+    this._raf = 0;
+    this._initBuffers();
+  }
+  _blankCell() { return { c: " ", fg: null, bg: null, bold: false, inverse: false }; }
+  _blankRow(cols) { const r = new Array(cols); for (let i = 0; i < cols; i++) r[i] = this._blankCell(); return r; }
+  _newGrid(rows, cols) { const g = new Array(rows); for (let y = 0; y < rows; y++) g[y] = this._blankRow(cols); return g; }
+  _initBuffers() {
+    this.main = { grid: this._newGrid(this.rows, this.cols), x: 0, y: 0, savedX: 0, savedY: 0, top: 0, bottom: this.rows - 1 };
+    this.alt = { grid: this._newGrid(this.rows, this.cols), x: 0, y: 0, savedX: 0, savedY: 0, top: 0, bottom: this.rows - 1 };
+    this.buf = this.main; this.usingAlt = false;
+  }
+
+  open(host) {
+    this.host = host;
+    host.classList.add("gterm");
+    host.innerHTML = `<div class="gterm-screen" tabindex="0"></div><textarea class="gterm-input" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"></textarea>`;
+    this.screen = host.querySelector(".gterm-screen");
+    this.input = host.querySelector(".gterm-input");
+    this._measure();
+    this.fit();
+    this._wireInput();
+    this.render();
+  }
+  focus() { if (this.input) this.input.focus(); }
+
+  _measure() {
+    const probe = document.createElement("span");
+    probe.textContent = "0".repeat(10);
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font:13px ui-monospace,Menlo,Consolas,monospace";
+    this.host.appendChild(probe);
+    this.cw = Math.max(6, probe.getBoundingClientRect().width / 10);
+    this.ch = Math.max(12, probe.getBoundingClientRect().height);
+    probe.remove();
+  }
+  fit() {
+    if (!this.host) return;
+    const rect = this.host.getBoundingClientRect();
+    const cols = Math.max(20, Math.floor((rect.width - 12) / this.cw) || 80);
+    const rows = Math.max(6, Math.floor((rect.height - 12) / this.ch) || 24);
+    this.resize(cols, rows);
+  }
+  resize(cols, rows) {
+    if (cols === this.cols && rows === this.rows) return;
+    for (const b of [this.main, this.alt]) {
+      const ng = this._newGrid(rows, cols);
+      for (let y = 0; y < Math.min(rows, b.grid.length); y++)
+        for (let x = 0; x < Math.min(cols, b.grid[y].length); x++) ng[y][x] = b.grid[y][x];
+      b.grid = ng;
+      b.x = Math.min(b.x, cols - 1); b.y = Math.min(b.y, rows - 1);
+      b.top = 0; b.bottom = rows - 1;
+    }
+    this.cols = cols; this.rows = rows;
+    this.render();
+  }
+
+  onData(cb) { this._dataCb = cb; }
+  _send(s) { if (this._dataCb) this._dataCb(s); }
+
+  write(data) {
+    let s;
+    if (typeof data === "string") s = data;
+    else { if (!this._dec) this._dec = new TextDecoder(); s = this._dec.decode(data, { stream: true }); }
+    for (const ch of s) this._putByte(ch);
+    this.scheduleRender();
+  }
+
+  _putByte(ch) {
+    const code = ch.codePointAt(0);
+    switch (this.state) {
+      case "normal": this._normal(ch, code); break;
+      case "esc": this._esc(ch); break;
+      case "csi":
+        if (code >= 0x40 && code <= 0x7e) { this._csi(ch); this.state = "normal"; }
+        else this.params += ch;
+        break;
+      case "osc":
+        if (code === 0x07) this.state = "normal";
+        else if (ch === "\\" && this.osc.endsWith("\x1b")) this.state = "normal";
+        else this.osc += ch;
+        break;
+    }
+  }
+  _normal(ch, code) {
+    if (code === 0x1b) { this.state = "esc"; return; }
+    if (code === 0x0a) { this._lineFeed(); return; }
+    if (code === 0x0d) { this.buf.x = 0; return; }
+    if (code === 0x08) { this.buf.x = Math.max(0, this.buf.x - 1); return; }
+    if (code === 0x09) { this.buf.x = Math.min(this.cols - 1, (Math.floor(this.buf.x / 8) + 1) * 8); return; }
+    if (code === 0x07) return;
+    if (code < 0x20) return;
+    this._putChar(ch);
+  }
+  _esc(ch) {
+    switch (ch) {
+      case "[": this.params = ""; this.state = "csi"; return;
+      case "]": this.osc = ""; this.state = "osc"; return;
+      case "7": this.buf.savedX = this.buf.x; this.buf.savedY = this.buf.y; this.state = "normal"; return;
+      case "8": this.buf.x = this.buf.savedX; this.buf.y = this.buf.savedY; this.state = "normal"; return;
+      case "M": if (this.buf.y <= this.buf.top) this._scrollDown(1); else this.buf.y--; this.state = "normal"; return;
+      case "c": this._reset(); this.state = "normal"; return;
+      case "(": case ")": case "*": case "+": this.state = "escCharset"; return;
+      default: this.state = "normal"; return;
+    }
+  }
+  _putChar(ch) {
+    if (this.buf.x >= this.cols) { this.buf.x = 0; this._lineFeed(); }
+    const cell = this.buf.grid[this.buf.y][this.buf.x];
+    cell.c = ch; cell.fg = this.fg; cell.bg = this.bg; cell.bold = this.bold; cell.inverse = this.inverse;
+    this.buf.x++;
+  }
+  _lineFeed() {
+    if (this.buf.y >= this.buf.bottom) this._scrollUp(1);
+    else this.buf.y++;
+  }
+  _scrollUp(n) {
+    for (let i = 0; i < n; i++) {
+      this.buf.grid.splice(this.buf.top, 1);
+      this.buf.grid.splice(this.buf.bottom, 0, this._blankRow(this.cols));
+    }
+  }
+  _scrollDown(n) {
+    for (let i = 0; i < n; i++) {
+      this.buf.grid.splice(this.buf.bottom, 1);
+      this.buf.grid.splice(this.buf.top, 0, this._blankRow(this.cols));
+    }
+  }
+  _p(i, def) { const parts = this.params.replace("?", "").split(";"); const v = parseInt(parts[i], 10); return isNaN(v) ? def : v; }
+  _csi(final) {
+    const priv = this.params.startsWith("?");
+    const b = this.buf;
+    switch (final) {
+      case "A": b.y = Math.max(this.buf.top, b.y - this._p(0, 1)); break;
+      case "B": b.y = Math.min(this.buf.bottom, b.y + this._p(0, 1)); break;
+      case "C": b.x = Math.min(this.cols - 1, b.x + this._p(0, 1)); break;
+      case "D": b.x = Math.max(0, b.x - this._p(0, 1)); break;
+      case "E": b.x = 0; b.y = Math.min(this.rows - 1, b.y + this._p(0, 1)); break;
+      case "F": b.x = 0; b.y = Math.max(0, b.y - this._p(0, 1)); break;
+      case "G": b.x = Math.min(this.cols - 1, Math.max(0, this._p(0, 1) - 1)); break;
+      case "d": b.y = Math.min(this.rows - 1, Math.max(0, this._p(0, 1) - 1)); break;
+      case "H": case "f": b.y = Math.min(this.rows - 1, Math.max(0, this._p(0, 1) - 1)); b.x = Math.min(this.cols - 1, Math.max(0, this._p(1, 1) - 1)); break;
+      case "J": this._eraseDisplay(this._p(0, 0)); break;
+      case "K": this._eraseLine(this._p(0, 0)); break;
+      case "m": this._sgr(); break;
+      case "r": b.top = Math.max(0, this._p(0, 1) - 1); b.bottom = Math.min(this.rows - 1, this._p(1, this.rows) - 1); b.x = 0; b.y = b.top; break;
+      case "L": this._insertLines(this._p(0, 1)); break;
+      case "M": this._deleteLines(this._p(0, 1)); break;
+      case "P": this._deleteChars(this._p(0, 1)); break;
+      case "X": this._eraseChars(this._p(0, 1)); break;
+      case "@": this._insertChars(this._p(0, 1)); break;
+      case "S": this._scrollUp(this._p(0, 1)); break;
+      case "T": this._scrollDown(this._p(0, 1)); break;
+      case "s": b.savedX = b.x; b.savedY = b.y; break;
+      case "u": b.x = b.savedX; b.y = b.savedY; break;
+      case "h": case "l": if (priv) this._privMode(this._p(0, 0), final === "h"); break;
+    }
+  }
+  _privMode(n, on) {
+    if (n === 25) this.cursorVisible = on;
+    else if (n === 1) this.appCursor = on;
+    else if (n === 1049 || n === 47 || n === 1047) this._switchAlt(on);
+  }
+  _switchAlt(on) {
+    if (on && !this.usingAlt) {
+      this.alt.grid = this._newGrid(this.rows, this.cols);
+      this.alt.x = 0; this.alt.y = 0; this.alt.top = 0; this.alt.bottom = this.rows - 1;
+      this.buf = this.alt; this.usingAlt = true;
+    } else if (!on && this.usingAlt) {
+      this.buf = this.main; this.usingAlt = false;
+    }
+  }
+  _eraseDisplay(n) {
+    const b = this.buf;
+    if (n === 0) { this._eraseLine(0); for (let y = b.y + 1; y < this.rows; y++) b.grid[y] = this._blankRow(this.cols); }
+    else if (n === 1) { this._eraseLine(1); for (let y = 0; y < b.y; y++) b.grid[y] = this._blankRow(this.cols); }
+    else { for (let y = 0; y < this.rows; y++) b.grid[y] = this._blankRow(this.cols); }
+  }
+  _eraseLine(n) {
+    const row = this.buf.grid[this.buf.y];
+    const from = n === 0 ? this.buf.x : 0;
+    const to = n === 1 ? this.buf.x : this.cols - 1;
+    for (let x = from; x <= to && x < this.cols; x++) row[x] = this._blankCell();
+  }
+  _insertLines(n) { const b = this.buf; if (b.y < b.top || b.y > b.bottom) return; for (let i = 0; i < n; i++) { b.grid.splice(b.bottom, 1); b.grid.splice(b.y, 0, this._blankRow(this.cols)); } }
+  _deleteLines(n) { const b = this.buf; if (b.y < b.top || b.y > b.bottom) return; for (let i = 0; i < n; i++) { b.grid.splice(b.y, 1); b.grid.splice(b.bottom, 0, this._blankRow(this.cols)); } }
+  _deleteChars(n) { const row = this.buf.grid[this.buf.y]; for (let i = 0; i < n; i++) { row.splice(this.buf.x, 1); row.push(this._blankCell()); } }
+  _insertChars(n) { const row = this.buf.grid[this.buf.y]; for (let i = 0; i < n; i++) { row.splice(this.buf.x, 0, this._blankCell()); row.pop(); } }
+  _eraseChars(n) { const row = this.buf.grid[this.buf.y]; for (let x = this.buf.x; x < this.buf.x + n && x < this.cols; x++) row[x] = this._blankCell(); }
+  _reset() { this.fg = this.bg = null; this.bold = this.inverse = false; this._initBuffers(); }
+  _sgr() {
+    const parts = this.params.split(";");
+    for (let i = 0; i < parts.length; i++) {
+      const n = parseInt(parts[i] || "0", 10);
+      if (n === 0) { this.fg = this.bg = null; this.bold = this.inverse = false; }
+      else if (n === 1) this.bold = true;
+      else if (n === 22) this.bold = false;
+      else if (n === 7) this.inverse = true;
+      else if (n === 27) this.inverse = false;
+      else if (n >= 30 && n <= 37) this.fg = n - 30;
+      else if (n >= 90 && n <= 97) this.fg = n - 90 + 8;
+      else if (n >= 40 && n <= 47) this.bg = n - 40;
+      else if (n >= 100 && n <= 107) this.bg = n - 100 + 8;
+      else if (n === 39) this.fg = null;
+      else if (n === 49) this.bg = null;
+      else if (n === 38 || n === 48) {
+        const mode = parseInt(parts[i + 1], 10);
+        let col = null;
+        if (mode === 5) { col = { idx: parseInt(parts[i + 2], 10) }; i += 2; }
+        else if (mode === 2) { col = { rgb: [parseInt(parts[i + 2], 10), parseInt(parts[i + 3], 10), parseInt(parts[i + 4], 10)] }; i += 4; }
+        if (n === 38) this.fg = col; else this.bg = col;
+      }
+    }
+  }
+
+  scheduleRender() { if (this._raf) return; this._raf = requestAnimationFrame(() => { this._raf = 0; this.render(); }); }
+  render() {
+    if (!this.screen) return;
+    const pal = GonasTerminal.PALETTE;
+    const colorOf = (v, isFg) => {
+      if (v == null) return null;
+      if (typeof v === "number") return pal[v];
+      if (v.rgb) return `rgb(${v.rgb[0]},${v.rgb[1]},${v.rgb[2]})`;
+      if (v.idx != null) return GonasTerminal.xterm256(v.idx);
+      return null;
+    };
+    let html = "";
+    for (let y = 0; y < this.rows; y++) {
+      const row = this.buf.grid[y];
+      let run = "", curKey = null, curStyle = "";
+      const flush = () => { if (run) html += `<span style="${curStyle}">${esc(run)}</span>`; run = ""; };
+      for (let x = 0; x < this.cols; x++) {
+        const cell = row[x] || this._blankCell();
+        const isCursor = this.cursorVisible && this._focused && x === this.buf.x && y === this.buf.y;
+        let fg = colorOf(cell.fg), bg = colorOf(cell.bg);
+        if (cell.inverse) { const t = fg; fg = bg || "#0b0f0e"; bg = t || "#d6e0dd"; }
+        if (isCursor) { const t = fg; fg = bg || "#0b0f0e"; bg = "#8fe0c8"; }
+        const style = (fg ? `color:${fg};` : "") + (bg ? `background:${bg};` : "") + (cell.bold ? "font-weight:600;" : "");
+        const key = style + (isCursor ? "|c" : "");
+        if (key !== curKey) { flush(); curKey = key; curStyle = style; }
+        run += cell.c;
+      }
+      flush();
+      html += "\n";
+    }
+    this.screen.innerHTML = html;
+  }
+
+  _wireInput() {
+    const screen = this.screen, input = this.input;
+    screen.addEventListener("mousedown", () => input.focus());
+    input.addEventListener("focus", () => { this._focused = true; this.render(); });
+    input.addEventListener("blur", () => { this._focused = false; this.render(); });
+    input.addEventListener("paste", (e) => {
+      const txt = (e.clipboardData || window.clipboardData).getData("text");
+      if (txt) this._send(txt);
+      e.preventDefault();
+    });
+    input.addEventListener("keydown", (e) => {
+      const b = this._keyToBytes(e);
+      if (b !== null) { this._send(b); e.preventDefault(); input.value = ""; }
+    });
+  }
+  _keyToBytes(e) {
+    const k = e.key;
+    const CSI = this.appCursor ? "\x1bO" : "\x1b[";
+    if (e.ctrlKey && k.length === 1) {
+      const c = k.toLowerCase().charCodeAt(0);
+      if (c >= 97 && c <= 122) return String.fromCharCode(c - 96); // Ctrl-A..Z
+    }
+    switch (k) {
+      case "Enter": return "\r";
+      case "Backspace": return "\x7f";
+      case "Tab": return "\t";
+      case "Escape": return "\x1b";
+      case "ArrowUp": return CSI + "A";
+      case "ArrowDown": return CSI + "B";
+      case "ArrowRight": return CSI + "C";
+      case "ArrowLeft": return CSI + "D";
+      case "Home": return "\x1b[H";
+      case "End": return "\x1b[F";
+      case "PageUp": return "\x1b[5~";
+      case "PageDown": return "\x1b[6~";
+      case "Delete": return "\x1b[3~";
+      case "Insert": return "\x1b[2~";
+    }
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey) return k;
+    return null;
+  }
+  dispose() { if (this._raf) cancelAnimationFrame(this._raf); if (this.host) this.host.innerHTML = ""; }
+}
+// 16 色基本調色盤(ANSI)。
+GonasTerminal.PALETTE = [
+  "#2e3436", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+  "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
+];
+// xterm 256 色對應成 CSS 顏色。
+GonasTerminal.xterm256 = function (n) {
+  if (n < 16) return GonasTerminal.PALETTE[n];
+  if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
+  const i = n - 16, r = Math.floor(i / 36), g = Math.floor((i % 36) / 6), bl = i % 6;
+  const c = (x) => (x === 0 ? 0 : 55 + x * 40);
+  return `rgb(${c(r)},${c(g)},${c(bl)})`;
+};
+
+// showContainerTerminalPanel 打開一個互動式終端機,透過 WebSocket 連到容器裡一個
+// 帶 TTY 的 shell(等同 docker exec -it)。優先用 xterm.js(若已打包進 /vendor),
+// 否則用內建的 GonasTerminal —— 兩者都走同一套 WebSocket 橋接。
 async function showContainerTerminalPanel(el, containerID) {
   const panel = el.querySelector(`#panel-${cssEscape(containerID)}`);
   if (!panel) return;
@@ -2567,26 +2887,32 @@ async function showContainerTerminalPanel(el, containerID) {
   wirePanelClose(panel);
   const host = panel.querySelector(".term-host");
 
-  try {
-    await ensureXterm();
-  } catch (e) {
-    host.innerHTML = msg("warn", t("apps.terminalNoLib"));
-    return;
-  }
+  // 優先用 xterm.js(若已打包進 /vendor);拿不到就用內建 GonasTerminal。
+  // 兩者都提供 open/onData/write/focus/dispose + cols/rows + fit() 這組介面。
+  let term, fit = null;
+  let xtermOK = false;
+  try { await ensureXterm(); xtermOK = !!window.Terminal; } catch (e) { xtermOK = false; }
 
-  const term = new window.Terminal({
-    cursorBlink: true,
-    fontSize: 13,
-    fontFamily: "ui-monospace, Menlo, Consolas, monospace",
-    theme: { background: "#0b0f0e" },
-  });
-  let fit = null;
-  if (window.FitAddon && window.FitAddon.FitAddon) {
-    fit = new window.FitAddon.FitAddon();
-    term.loadAddon(fit);
+  if (xtermOK) {
+    term = new window.Terminal({
+      cursorBlink: true,
+      fontSize: 13,
+      fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+      theme: { background: "#0b0f0e" },
+    });
+    if (window.FitAddon && window.FitAddon.FitAddon) {
+      fit = new window.FitAddon.FitAddon();
+      term.loadAddon(fit);
+    }
+    term.open(host);
+    try { if (fit) fit.fit(); } catch (e) {}
+  } else {
+    // 內建終端機:GonasTerminal 自己就會依容器大小算出 cols/rows(fit()),
+    // 不需要外掛的 fit addon。
+    term = new GonasTerminal();
+    term.open(host);
+    fit = { fit: () => term.fit() };
   }
-  term.open(host);
-  try { if (fit) fit.fit(); } catch (e) {}
 
   // WebSocket:同源,ws/wss 跟著頁面的 http/https。
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
