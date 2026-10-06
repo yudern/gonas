@@ -114,6 +114,10 @@ func main() {
 		logger.Warn("failed to ensure data dir, continuing without it", "dataDir", cfg.DataDir, "err", err)
 	}
 
+	// 第六十一輪:把內建離線 apt 倉庫從 0750 的私有資料目錄搬到 _apt 讀得到的
+	// 公開位置並修好 apt 來源(舊版安裝的機器換上新 gonasd 就自癒)。best-effort。
+	api.EnsureOfflineRepo(logger)
+
 	apiServer, handler, err := api.New(logger, cfg.DataDir)
 	if err != nil {
 		logger.Error("failed to initialize API server", "err", err)

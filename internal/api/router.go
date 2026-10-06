@@ -783,6 +783,12 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, errorResponse{Error: err.Error()})
 }
 
+// writeErrorDetail 跟 writeError 一樣,但多帶一個 detail 欄位(例如 apt 的
+// 真實輸出),前端會原樣顯示在錯誤訊息下方。
+func writeErrorDetail(w http.ResponseWriter, status int, err error, detail string) {
+	writeJSON(w, status, map[string]string{"error": err.Error(), "detail": detail})
+}
+
 // readJSON 把請求 body 解析進 dst,失敗時回傳一個已經寫好 400 的錯誤,
 // 呼叫端只需要判斷 ok 就好。用 http.MaxBytesReader 包住 body 是為了擋掉
 // 異常肥大(或忘記帶 Content-Length、body 送個沒完)的請求撐爆記憶體,

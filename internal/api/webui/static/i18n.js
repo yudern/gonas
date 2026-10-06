@@ -215,6 +215,7 @@ const dict = {
       installingLong: "正在安裝「{name}」,可能需要幾分鐘,請不要關閉這個頁面…",
       installOk: "「{name}」已安裝完成。",
       installFailed: "安裝「{name}」失敗:{reason}",
+      aptOutput: "apt 的實際輸出:",
       allInstalled: "所有選用套件都已安裝。",
       someMissing: "有 {n} 個選用套件尚未安裝 —— 對應功能要裝了才能用。",
       adminOnlyNote: "(只有管理者能安裝)",
@@ -767,6 +768,7 @@ const dict = {
       installingLong: "正在安装「{name}」,可能需要几分钟,请不要关闭此页面…",
       installOk: "「{name}」已安装完成。",
       installFailed: "安装「{name}」失败:{reason}",
+      aptOutput: "apt 的实际输出:",
       allInstalled: "所有可选软件包都已安装。",
       someMissing: "有 {n} 个可选软件包尚未安装 —— 对应功能装了才能用。",
       adminOnlyNote: "(只有管理员能安装)",
@@ -1319,6 +1321,7 @@ const dict = {
       installingLong: "Installing “{name}” — this can take a few minutes, please keep this page open…",
       installOk: "“{name}” installed successfully.",
       installFailed: "Installing “{name}” failed: {reason}",
+      aptOutput: "Actual apt output:",
       allInstalled: "All optional packages are installed.",
       someMissing: "{n} optional package(s) are not installed yet — the matching features need them.",
       adminOnlyNote: "(only an admin can install)",
@@ -1711,7 +1714,8 @@ const errorMap = {
   "snapraid is not installed — parity protection needs it; install it from the System Doctor page (or it comes preinstalled on the offline appliance image)": { "zh-Hant": "snapraid 尚未安裝 —— 同位校驗要靠它保護資料。請到「系統診斷」一鍵補裝(離線映像則已內建)。", "zh-Hans": "snapraid 尚未安装 —— 校验保护要靠它保护数据。请到「系统诊断」一键补装(离线镜像则已内置)。", "en": "snapraid isn't installed — parity protection needs it. Install it from the System Doctor page (the offline appliance image has it preinstalled)." },
   "a package install is already in progress, please wait for it to finish": { "zh-Hant": "已經有一個套件正在安裝,請等它裝完再試。", "zh-Hans": "已经有一个软件包正在安装,请等它装完再试。", "en": "A package install is already in progress — please wait for it to finish." },
   "an app install is already in progress, please wait for it to finish": { "zh-Hant": "已經有一個應用正在安裝/解除安裝,請等它完成再試。", "zh-Hans": "已经有一个应用正在安装/卸载,请等它完成再试。", "en": "An app install is already in progress — please wait for it to finish." },
-  "apt could not find that package in the current sources — this NAS may have no internet access or cannot reach the Debian mirror; installing optional packages needs a working network connection": { "zh-Hant": "在目前的套件來源裡找不到這個套件 —— 這台 NAS 可能沒有連上網路,或連不到 Debian 軟體源。補裝這些選用套件需要能上網。請先確認這台機器的網路/DNS 正常,再試一次。", "zh-Hans": "在当前的软件源里找不到这个软件包 —— 这台 NAS 可能没有联网,或连不到 Debian 软件源。补装这些可选软件包需要能联网。请先确认这台机器的网络/DNS 正常,再试一次。", "en": "That package isn't in the current apt sources — this NAS may have no internet access or can't reach the Debian mirror. Installing optional packages needs a working network; check this machine's network/DNS and try again." },
+  "apt could not find that package in the current sources — this NAS may have no internet access or cannot reach the Debian mirror; installing optional packages needs a working network connection": { "zh-Hant": "這台機器上沒有內建這個套件的離線包,網路來源裡也找不到 —— 這台 NAS 可能沒有連上網路,或連不到 Debian 軟體源。請確認網路/DNS 正常後再試一次;下方是 apt 的實際輸出。", "zh-Hans": "这台机器上没有内置这个软件包的离线包,网络软件源里也找不到 —— 这台 NAS 可能没有联网,或连不到 Debian 软件源。请确认网络/DNS 正常后再试一次;下方是 apt 的实际输出。", "en": "This package isn't in a bundled offline repo on this machine, and the network apt sources don't have it either — this NAS may have no internet access or can't reach the Debian mirror. Check network/DNS and try again; the actual apt output is shown below." },
+  "installing from the bundled offline package repo failed — see the apt output below for the exact reason": { "zh-Hant": "從內建的離線套件包安裝失敗(不需要網路,這不是網路問題)—— 確切原因請看下方 apt 的實際輸出。", "zh-Hans": "从内置的离线软件包安装失败(不需要联网,这不是网络问题)—— 确切原因请看下方 apt 的实际输出。", "en": "Installing from the bundled offline package repo failed (no network is needed — this is not a network problem). See the actual apt output below for the exact reason." },
   "to turn off your own two-factor authentication, use the disable option (which asks for your password)": { "zh-Hant": "要關掉自己的兩步驟驗證,請用「停用」(需要輸入密碼),不是這個管理動作。", "zh-Hans": "要关闭自己的两步验证,请用「停用」(需要输入密码),不是这个管理操作。", "en": "To turn off your own two-factor authentication, use the disable option (which asks for your password)." },
   // 第三十輪覆核(資深 UI 設計師)抓到:後端這些「尚未設定」的提示原本帶著
   // 給工程師看的 REST 路徑尾巴(": PUT /api/... first"),直接漏到使用者畫面上。

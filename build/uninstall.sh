@@ -75,6 +75,10 @@ if [ "$PURGE" = "1" ]; then
 	read -r CONFIRM
 	if [ "$CONFIRM" = "yes" ]; then
 		rm -rf "$CONF_DIR" "$DATA_DIR"
+		# 內建離線 apt 倉庫(第六十一輪起獨立放在 /var/lib/gonas-offline-debs)
+		# 跟它的 apt 來源一起清掉,免得留一條指向不存在目錄的來源讓 apt update 報錯。
+		rm -rf /var/lib/gonas-offline-debs
+		rm -f /etc/apt/sources.list.d/gonas-offline.list
 		log "已刪除 $CONF_DIR 與 $DATA_DIR"
 	else
 		log "已取消,設定與資料目錄保留不動"

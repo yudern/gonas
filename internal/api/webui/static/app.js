@@ -4895,7 +4895,15 @@ async function renderDoctor(el) {
       } catch (err) {
         btn.disabled = false;
         btn.textContent = original;
-        if (box) box.innerHTML = msg("error", t("doctor.installFailed", { name, reason: err.message }));
+        if (box) {
+          box.innerHTML = msg("error", t("doctor.installFailed", { name, reason: err.message }));
+          // 第六十一輪:把 apt 的真實報錯原樣列出來,不再只剩一句籠統的訊息。
+          if (err.detail) {
+            box.insertAdjacentHTML("beforeend",
+              `<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">${esc(t("doctor.aptOutput"))}</div>` +
+              `<pre style="margin:4px 0 0;padding:8px 10px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:var(--surface-2);border-radius:6px">${esc(err.detail)}</pre>`);
+          }
+        }
       }
     });
   });

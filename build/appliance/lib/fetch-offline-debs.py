@@ -2,8 +2,8 @@
 # fetch-offline-debs.py —— 建置期(在有網路的 Mac 上)把「這片 DVD 上沒有、
 # 但 GoNAS 需要的選用套件」連同它們的相依封閉集,從 Debian 官方鏡像下載
 # 下來,攤平成一個「flat repo」放進 ISO 的 gonas/debs/,附一份 Packages
-# 索引。裝好開機之後,late-command.sh 會把它複製到 /var/lib/gonas/debs/
-# 並加一條 `deb [trusted=yes] file:///var/lib/gonas/debs ./` 的本機來源
+# 索引。裝好開機之後,late-command.sh 會把它複製到 /var/lib/gonas-offline-debs/
+# 並加一條 `deb [trusted=yes] file:///var/lib/gonas-offline-debs ./` 的本機來源
 # ——這樣使用者在 Web 介面點「安裝 mergerfs/samba/...」時,apt 就能「完全
 # 離線」從這份本機來源裝好(見 doctor 一鍵安裝的流程),不需要連網。
 #

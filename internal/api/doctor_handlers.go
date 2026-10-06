@@ -114,18 +114,27 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 	out, err := s.installOptionalPackage(ctx, req.Apt)
 	if err != nil {
 		s.logger.Error("optional package install failed", "apt", req.Apt, "err", err, "out", string(out))
-		// 「找不到套件」的兩種 apt 常見講法(來自 stderr,cmdrunner 會把 stderr
-		// 併進錯誤字串)——代表這台 NAS 的 apt 索引是空的/連不到鏡像,幾乎都是
-		// 離線或套件來源沒設好,不是這個套件真的不存在。給可行動的訊息。
+		// 第六十一輪:一律把 apt 的真實報錯(E:/相依性/權限那幾行)放在 detail
+		// 裡回給前端顯示——之前所有「找不到套件」都被收斂成一句「可能沒有聯網」,
+		// 把真正的原因(_apt 讀不到離線倉庫的 Permission denied)藏起來,使用者
+		// 跟我們都看不到,問題才會一修再犯。
+		detail := aptErrorDetail(out, err, 12)
+		if errors.Is(err, errOfflineInstallFailed) {
+			// 機器上有內建離線倉庫、但從它裝不起來:這不是「沒聯網」的問題,
+			// 不能再顯示那句誤導的訊息。
+			writeErrorDetail(w, http.StatusBadGateway, errOfflineInstallFailed, detail)
+			return
+		}
 		combined := strings.ToLower(err.Error() + " " + string(out))
 		if strings.Contains(combined, "unable to locate package") ||
 			strings.Contains(combined, "has no installation candidate") ||
 			strings.Contains(combined, "could not resolve") ||
 			strings.Contains(combined, "failed to fetch") {
-			writeError(w, http.StatusBadGateway, errPackageUnavailable)
+			// 沒有內建離線倉庫、走網路來源也找不到 → 才是真的「需要網路」。
+			writeErrorDetail(w, http.StatusBadGateway, errPackageUnavailable, detail)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
+		writeErrorDetail(w, http.StatusInternalServerError, errors.New("apt-get install failed"), detail)
 		return
 	}
 	// 第五十八輪產品覆核(#3):裝好服務後,把先前「設定已存、但當時服務還沒
@@ -188,6 +197,13 @@ func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte
 		return a
 	}
 
+	// 第六十一輪:每次安裝前先確保離線倉庫在 _apt 讀得到的位置、apt 來源指向
+	// 它(舊版放在 0750 的 /var/lib/gonas/debs 底下 → apt 讀不到,見
+	// offline_repo.go)。best-effort,失敗只記 log,後面的 apt 輸出會說明原因。
+	if err := ensureOfflineRepo(s.logger); err != nil {
+		s.logger.Warn("preparing the bundled offline apt repo failed", "err", err)
+	}
+
 	if _, statErr := os.Stat(offlineSourceList); statErr == nil {
 		// 只用本機離線來源:Dir::Etc::sourcelist 指到離線清單、sourceparts 指到
 		// /dev/null(等於「沒有其他來源檔」),apt 就完全看不到網路來源,不會連網。
@@ -195,28 +211,33 @@ func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte
 			"-o", "Dir::Etc::sourcelist=" + offlineSourceList,
 			"-o", "Dir::Etc::sourceparts=/dev/null",
 		}
-		// 只索引本機來源(file://,不連網、很快)。best-effort。
+		// 只索引本機來源(file://,不連網、很快)。best-effort,但輸出保留下來,
+		// 失敗時一起回給前端(真正的錯——例如 Permission denied——常常出在這一步)。
 		updateArgs := append(append([]string{}, localOnly...), "update")
-		if out, err := s.runner.Run(ctx, "apt-get", updateArgs...); err != nil {
-			s.logger.Warn("local-only apt-get update failed (continuing to try install)", "apt", apt, "err", err, "out", string(out))
+		updOut, updErr := s.runner.Run(ctx, "apt-get", updateArgs...)
+		if updErr != nil {
+			s.logger.Warn("local-only apt-get update failed (continuing to try install)", "apt", apt, "err", updErr, "out", string(updOut))
 		}
 		out, err := s.runner.Run(ctx, "env", installArgsNoninteractive(localOnly...)...)
 		if err == nil {
 			s.logger.Info("installed optional package from the local offline repo (no network used)", "apt", apt)
 			return out, nil
 		}
-		// 離線包裡沒有(或其他原因)→ 只有在「真的連得到鏡像」時才退回走網路。
-		// 第六十輪(建置/運維覆核):這台機器內建了離線來源 = 它是離線 appliance,
-		// 若又連不到鏡像,原本的網路退回會卡在 `apt-get update` 連 deb.debian.org
-		// 直到 10 分鐘 context 逾時才回錯——對使用者像是「按了沒反應」。先用一個
-		// 3 秒的探測判斷鏡像通不通:不通就直接回「找不到套件(可能離線)」的可
-		// 行動錯誤,不要空等;通的話才走完整網路退回(對應「機器有網路、要裝
-		// 離線包裡沒有的套件」)。
-		if !mirrorReachable(ctx) {
-			s.logger.Info("offline-only install failed and the mirror is unreachable; not hanging on a network fallback", "apt", apt, "out", string(out))
-			return out, errPackageUnavailable
+		combined := append(append([]byte{}, updOut...), '\n')
+		if updErr != nil {
+			combined = append(combined, []byte(updErr.Error()+"\n")...)
 		}
-		s.logger.Info("offline-only install did not succeed; mirror looks reachable, falling back to network sources", "apt", apt, "out", string(out))
+		combined = append(combined, out...)
+		combined = append(combined, []byte("\n"+err.Error())...)
+		// 離線包裡沒有(或其他原因)→ 只有在「真的連得到鏡像」時才退回走網路。
+		// 第六十輪:連不到鏡像就直接回錯,不要卡在網路 apt-get update 上。
+		// 第六十一輪:回的是「離線倉庫安裝失敗」+ apt 真實輸出,而不是「可能
+		// 沒有聯網」——這台機器明明有離線倉庫,那句話只會誤導。
+		if !mirrorReachable(ctx) {
+			s.logger.Info("offline-only install failed and the mirror is unreachable; not hanging on a network fallback", "apt", apt, "out", string(combined))
+			return combined, errOfflineInstallFailed
+		}
+		s.logger.Info("offline-only install did not succeed; mirror looks reachable, falling back to network sources", "apt", apt, "out", string(combined))
 	}
 
 	// 後援:走完整來源(含網路)。給「沒有離線包、但機器有網路」的情況。

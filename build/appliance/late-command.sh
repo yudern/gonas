@@ -451,7 +451,7 @@ fi
 # build-iso.sh 第 4.8 節會在建置期(Mac 有網路)把 DVD 上沒有的選用套件
 # (mergerfs/samba/snapraid/nfs-kernel-server/wireguard-tools/docker.io)連同
 # 相依封閉集抓下來,攤平成一個 flat repo 放在安裝媒體的 gonas/debs/(含一份
-# Packages 索引)。這裡把它複製到目標系統的 /var/lib/gonas/debs/,並加一條
+# Packages 索引)。這裡把它複製到目標系統的 /var/lib/gonas-offline-debs/,並加一條
 # 本機 `file://` apt 來源——這樣使用者開機後(不管有沒有網路)在 Web 介面
 # Doctor 點「安裝 mergerfs/samba/…」時,apt 就能從這份本機來源離線裝好。
 #
@@ -459,7 +459,7 @@ fi
 #   - `[trusted=yes]`:本機 flat repo 沒有 GPG 簽章,明確標記為信任,apt 才
 #     不會因為「來源未簽章」而拒裝。這只影響這一個本機來源,不動 Debian 官方
 #     來源的簽章驗證。
-#   - flat repo 寫法 `... /var/lib/gonas/debs ./`(結尾的 `./`)——Packages
+#   - flat repo 寫法 `... /var/lib/gonas-offline-debs ./`(結尾的 `./`)——Packages
 #     索引就放在該目錄根部,不是 dists/ 那種階層式結構。
 #   - 跟第 3.5 節寫的「網路鏡像來源」並存:離線時走這份本機來源,有網路時
 #     apt 也能照樣走網路(對齊使用者要的「兩者都要」)。
@@ -471,13 +471,21 @@ fi
 #     等網路。
 # 整段 best-effort:沒有 debs/ 目錄(建置期沒抓成/被跳過)就什麼都不做;
 # 任何一步失敗只記警告,不影響安裝結果。
+#
+# 第六十一輪(使用者實機:Doctor 離線安裝 mergerFS 仍報「找不到套件」)的真正
+# 根因:舊版把倉庫放在 /var/lib/gonas/debs,而 install.sh 會把 /var/lib/gonas
+# (私密資料目錄)設成 0750 root:root。apt 讀 file:// 來源時降權成 `_apt`,
+# 進不了 0750 的上層 → 「Failed to fetch … Permission denied」→「Unable to
+# locate package」。沙盒用真實 apt 重現、並驗證放到獨立 0755 目錄即可。所以
+# 倉庫改放在「獨立、公開可讀」的 /var/lib/gonas-offline-debs(不放寬私密資料
+# 目錄的權限)。舊版裝好的機器由新 gonasd 啟動時自動遷移(見
+# internal/api/offline_repo.go),不需要重灌。
 OFFLINE_DEBS_SRC="$GONAS_DIR/debs"
-OFFLINE_DEBS_DEST=/var/lib/gonas/debs
+OFFLINE_DEBS_DEST=/var/lib/gonas-offline-debs
 if [ -d "$OFFLINE_DEBS_SRC" ] && [ -f "$OFFLINE_DEBS_SRC/Packages" ]; then
     if mkdir -p "$OFFLINE_DEBS_DEST" && cp -a "$OFFLINE_DEBS_SRC/." "$OFFLINE_DEBS_DEST/"; then
-        # 讓 apt 的沙盒使用者 _apt 也讀得到(否則 apt 會印一行囉嗦的
-        # 「Download is performed unsandboxed as root … Permission denied」提示
-        # ——那只是 Notice、apt 會改用 root 讀、安裝照樣成功,但清掉比較乾淨)。
+        # 讓 apt 的沙盒使用者 _apt 讀得到:目錄 0755、檔案 0644(含倉庫目錄本身)。
+        chmod 0755 "$OFFLINE_DEBS_DEST" 2>/dev/null || true
         chmod -R a+rX "$OFFLINE_DEBS_DEST" 2>/dev/null || true
         _deb_n="$(find "$OFFLINE_DEBS_DEST" -name '*.deb' 2>/dev/null | grep -c . || echo 0)"
         log "copied $_deb_n bundled offline .deb(s) to $OFFLINE_DEBS_DEST"

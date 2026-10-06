@@ -40,7 +40,11 @@ async function request(method, path, body) {
     // translateError 把裡面「乾淨、可枚舉」的固定訊息翻成目前介面語言,
     // 查不到的動態/技術性訊息就原樣顯示英文,見 i18n.js 的說明。
     const message = (data && data.error) ? translateError(data.error) : `${res.status} ${res.statusText}`;
-    throw new Error(message);
+    const e = new Error(message);
+    // 第六十一輪:部分 API(例如 Doctor 安裝)會多帶 detail(apt 的真實輸出),
+    // 掛在 Error 上給呼叫端原樣顯示。
+    if (data && typeof data.detail === "string" && data.detail) e.detail = data.detail;
+    throw e;
   }
   return data;
 }

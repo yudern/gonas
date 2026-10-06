@@ -377,7 +377,7 @@ virt -cpu cortex-a57` 之類的參數,還需要 UEFI 韌體
   `lib/fetch-offline-debs.py` 從 Debian 鏡像把「這片 DVD 上沒有」的選用
   套件連同**相依封閉集**下載下來,攤平成一個 flat repo 放進 `gonas/debs/`
   (含 `Packages` 索引);`late-command.sh` 第 3.6 步再把它複製到目標系統
-  `/var/lib/gonas/debs/`、加一條 `deb [trusted=yes] file://…` 的本機 apt
+  `/var/lib/gonas-offline-debs/`(獨立、0755,apt 的 `_apt` 才讀得到)、加一條 `deb [trusted=yes] file://…` 的本機 apt
   來源。這樣使用者開機後在 Web Doctor 點「安裝 mergerfs/samba/…」時,
   apt 就從這份本機來源**完全離線**裝好;有網路時也照樣能走網路(使用者
   要的「兩者都要」)。相依封閉集的計算有離線單元測試
