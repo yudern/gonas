@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/bng147/gonas/internal/docker"
 	"net/http"
 	"time"
 
@@ -81,6 +82,13 @@ type appOpStatus struct {
 	Progress string `json:"progress,omitempty"` // docker 拉取進度行
 	Stage    string `json:"stage"`              // "running" | "done" | "failed"
 	Error    string `json:"error,omitempty"`
+	// 第六十五輪:詳細進度(見 app_progress.go)。
+	Step       string          `json:"step,omitempty"` // pull / create / start / check
+	Percent    int             `json:"percent"`
+	Downloaded int64           `json:"downloaded,omitempty"`
+	TotalBytes int64           `json:"totalBytes,omitempty"`
+	Layers     []layerProgress `json:"layers,omitempty"`
+	Log        []string        `json:"log,omitempty"`
 }
 
 func (s *Server) setAppOp(st appOpStatus) { s.appOpStatus.Store(&st) }
@@ -124,7 +132,8 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 	// (拉映像可能好幾分鐘)同步擋在這支請求上,前端只能空等、沒有進度。現在
 	// 背景跑,OnPullProgress 把 docker 的拉取進度寫進 appOpStatus,前端輪詢
 	// GET /appstore/op-status 顯示。single-flight 旗標由背景 goroutine 結束時釋放。
-	s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "running"})
+	prog := newAppProgress(tmpl.ID, "install")
+	s.setAppOp(prog.finish("running", ""))
 	overrides := req.Overrides
 	go func() {
 		defer s.appInstalling.Store(false)
@@ -137,16 +146,15 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 			Template:         tmpl,
 			Overrides:        overrides,
 			StartGracePeriod: 2 * time.Second,
-			OnPullProgress: func(svc, status string) {
-				s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "running", Service: svc, Progress: status})
-			},
+			OnPullEvent:      func(svc string, ev docker.PullEvent) { s.setAppOp(prog.event(svc, ev)) },
+			OnStep:           func(svc, step string) { s.setAppOp(prog.step(svc, step)) },
 			OnRollbackError: func(svc string, rbErr error) {
 				s.logger.Warn("app install rollback cleanup failed", "app", tmpl.ID, "service", svc, "err", rbErr)
 			},
 		})
 		if err != nil {
 			s.logger.Error("installing app failed", "app", tmpl.ID, "err", err)
-			s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "failed", Error: err.Error()})
+			s.setAppOp(prog.finish("failed", err.Error()))
 			return
 		}
 		installed := state.InstalledApp{Template: tmpl, Result: result, Overrides: overrides}
@@ -156,7 +164,7 @@ func (s *Server) handleAppstoreInstall(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			s.logger.Error("app installed but persisting installed-app record failed", "app", tmpl.ID, "err", err)
 		}
-		s.setAppOp(appOpStatus{AppID: tmpl.ID, Action: "install", Stage: "done"})
+		s.setAppOp(prog.finish("done", ""))
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "installing", "appId": tmpl.ID})
@@ -202,7 +210,8 @@ func (s *Server) handleAppstoreUpdate(w http.ResponseWriter, r *http.Request) {
 // single-flight 旗標。update(沿用舊 overrides)與 edit(用新 overrides)共用這段。
 // 呼叫前必須已經 CompareAndSwap(appInstalling)成功。
 func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, overrides map[string]appstore.ServiceOverride) {
-	s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running"})
+	prog := newAppProgress(id, "update")
+	s.setAppOp(prog.finish("running", ""))
 	go func() {
 		defer s.appInstalling.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -213,9 +222,8 @@ func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, o
 			Template:         tmpl,
 			Overrides:        overrides,
 			StartGracePeriod: 2 * time.Second,
-			OnPullProgress: func(svc, status string) {
-				s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "running", Service: svc, Progress: status})
-			},
+			OnPullEvent:      func(svc string, ev docker.PullEvent) { s.setAppOp(prog.event(svc, ev)) },
+			OnStep:           func(svc, step string) { s.setAppOp(prog.step(svc, step)) },
 			OnRollbackError: func(svc string, rbErr error) {
 				s.logger.Warn("app recreate rollback cleanup failed", "app", id, "service", svc, "err", rbErr)
 			},
@@ -249,7 +257,7 @@ func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, o
 					s.logger.Error("failed to remove the stale app record after a failed recreate", "app", id, "err", uerr)
 				}
 			}
-			s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "failed", Error: err.Error()})
+			s.setAppOp(prog.finish("failed", err.Error()))
 			return
 		}
 		updated := state.InstalledApp{Template: tmpl, Result: result, Overrides: overrides}
@@ -265,7 +273,7 @@ func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, o
 		}); err != nil {
 			s.logger.Error("app recreated but persisting the new record failed", "app", id, "err", err)
 		}
-		s.setAppOp(appOpStatus{AppID: id, Action: "update", Stage: "done"})
+		s.setAppOp(prog.finish("done", ""))
 	}()
 }
 

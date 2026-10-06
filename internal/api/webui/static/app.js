@@ -20,6 +20,7 @@ const routes = {
   backup: renderBackup,
   system: renderSystem,
   doctor: renderDoctor,
+  network: renderNetwork,
 };
 
 // 跟後端 internal/api.monitorPollInterval 一致，純粹用來在頁面文字上
@@ -554,9 +555,16 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       const checkBtn2 = el.querySelector("#update-check-btn");
       if (checkBtn2) checkBtn2.disabled = true;
       try {
-        const res = await api.applySystemUpdate();
+        await api.applySystemUpdate();
         const box = el.querySelector("#update-msg");
-        if (box) box.innerHTML = msg("ok", translateNotice(res.message));
+        // 第六十五輪:顯示下載進度,直到進入「替換/重啟」階段或失敗。
+        const failed = await trackApplyProgress(box);
+        if (failed) {
+          applyBtn.disabled = false;
+          applyBtn.textContent = t("update.applyNow");
+          if (checkBtn2) checkBtn2.disabled = false;
+          return;
+        }
         pollForRestartThenReload();
       } catch (err) {
         applyBtn.disabled = false;
@@ -587,10 +595,15 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       const fd = new FormData();
       fd.append("file", file);
       try {
-        if (progressBox) progressBox.innerHTML = msg("warn", t("update.offlineUploading", { pct: 0 }));
-        const res = await api.uploadSystemUpdate(fd, (frac) => {
-          if (progressBox) progressBox.innerHTML = msg("warn", t("update.offlineUploading", { pct: Math.round(frac * 100) }));
-        });
+        const showUpload = (frac, done, total) => {
+          if (!progressBox) return;
+          const pct = Math.round((frac || 0) * 100);
+          progressBox.innerHTML = frac >= 1
+            ? msg("warn", t("update.uploadVerify")) + progressBar(100, "")
+            : progressBar(pct, t("update.uploadProgress", { pct, done: formatBytes0(done), total: formatBytes(total || file.size) }));
+        };
+        showUpload(0, 0, file.size);
+        const res = await api.uploadSystemUpdate(fd, showUpload);
         if (progressBox) progressBox.innerHTML = msg("ok", translateNotice(res.message));
         pollForRestartThenReload();
       } catch (err) {
@@ -627,6 +640,35 @@ function attachSystemUpdateHandlers(el, isAdmin) {
       }
     });
   }
+}
+
+// trackApplyProgress 在線上更新期間每秒讀一次狀態,顯示目前階段與下載進度。
+// 回傳 true 代表失敗(已把錯誤顯示在 box);false 代表已進入替換/重啟階段
+// (或 gonasd 已經開始重啟、暫時連不上),呼叫端接著等它重新上線。
+async function trackApplyProgress(box) {
+  for (let i = 0; i < 1800; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let u;
+    try {
+      u = await api.systemUpdate();
+    } catch {
+      return false; // 連不上 = 已經在重啟
+    }
+    const stage = u.applyStage || "";
+    if (stage === "failed" || (!u.applyInProgress && u.applyError)) {
+      if (box) box.innerHTML = msg("error", translateError(u.applyError || ""));
+      return true;
+    }
+    if (stage === "applying" || stage === "restarting" || !u.applyInProgress) return false;
+    const total = u.applyTotal > 0 ? u.applyTotal : 0;
+    const done = u.applyDownloaded || 0;
+    const pct = total ? Math.floor((done / total) * 100) : 0;
+    const label = stage === "downloading"
+      ? t("update.downloadProgress", { pct, done: formatBytes0(done), total: total ? formatBytes(total) : "?" })
+      : t("update.stage." + (stage || "fetching_manifest"));
+    if (box) box.innerHTML = `<div class="op-box"><div class="op-title">${esc(t("update.stage." + (stage || "fetching_manifest")))}</div>${progressBar(pct, label)}</div>`;
+  }
+  return false;
 }
 
 // pollForRestartThenReload 在使用者觸發「套用更新」之後,定期戳
@@ -674,6 +716,9 @@ function statTile(label, value, cls, icon) {
 // UI 精品化:給每個區塊一枚低調的識別圖示,讓八個頁面看起來成一套系統,
 // 又不搶戲(圖示用 --text-faint、細描邊)。
 const SECTION_ICONS = {
+  globe: '<circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.9 4.5 2.9 7s-.9 4.8-2.9 7c-2-2.2-2.9-4.5-2.9-7S8 5.2 10 3z"/>',
+  pulse: '<path d="M2.5 10.5h3l2-5.5 3 10 2-4.5h4.5"/>',
+  tool: '<path d="M12.5 3.5a3.5 3.5 0 0 0-3.3 4.6L3.5 13.8l2.7 2.7 5.7-5.7a3.5 3.5 0 0 0 4.6-3.3l-2 2-2.3-.4-.4-2.3z"/>',
   link: '<path d="M8 12l4-4M7.5 5.5l1-1a3.5 3.5 0 0 1 5 5l-1 1M12.5 14.5l-1 1a3.5 3.5 0 0 1-5-5l1-1"/>',
   download: '<path d="M10 3v9M6.5 8.5 10 12l3.5-3.5M4 15.5h12"/>',
   array: '<ellipse cx="10" cy="5" rx="6.5" ry="2.3"/><path d="M3.5 5v10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3V5"/><path d="M3.5 10c0 1.3 2.9 2.3 6.5 2.3s6.5-1 6.5-2.3"/>',
@@ -1344,6 +1389,11 @@ async function runAction(fn, rerender, el) {
   }
 }
 
+// formatBytes0:跟 formatBytes 一樣,但 0 顯示成「0 B」(進度顯示用)。
+function formatBytes0(n) {
+  return n ? formatBytes(n) : "0 B";
+}
+
 function formatBytes(n) {
   if (!n) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -1851,7 +1901,7 @@ function containerStatePill(st) {
 // pollAppOp 輪詢安裝/更新進度,把 docker 拉取進度顯示到 box,直到完成或失敗。
 // 完成回 true、失敗回 false(呼叫端據此顯示成功/失敗並重整)。第六十輪產品
 // 覆核:安裝/更新改成背景執行,這裡讓使用者看到「正在拉取 xxx」而不是空等。
-async function pollAppOp(box, labelKey) {
+async function pollAppOp(box, labelKey, vars) {
   for (;;) {
     await new Promise((r) => setTimeout(r, 1000));
     let st;
@@ -1861,12 +1911,64 @@ async function pollAppOp(box, labelKey) {
       continue; // 暫時讀不到就再試
     }
     if (st.stage === "running") {
-      const detail = st.service ? `${st.service}: ${st.progress || ""}` : (st.progress || "");
-      if (box) box.innerHTML = msg("warn", t(labelKey) + (detail ? " — " + esc(detail) : ""));
+      if (box) renderOpBox(box, appOpHtml(st, t(labelKey, vars)));
       continue;
     }
     return st; // done / failed / idle — 呼叫端據此在重整後顯示結果
   }
+}
+
+// ---- 第六十五輪:共用的進度條/日誌元件 ----
+
+function progressBar(pct, label, small) {
+  const p = Math.max(0, Math.min(100, Math.round(pct || 0)));
+  return `<div class="progress${small ? " sm" : ""}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p}"><div class="progress-fill" style="width:${p}%"></div></div>` +
+    (label ? `<div class="progress-label">${esc(label)}</div>` : "");
+}
+
+// logBoxHtml:可收合的日誌框。key 用來在每秒重畫時記住「使用者有沒有展開」。
+function logBoxHtml(lines, key, openByDefault) {
+  const list = lines || [];
+  if (!list.length) return "";
+  return `<details class="logbox-wrap" data-logkey="${esc(key)}"${openByDefault ? " open" : ""}><summary>${esc(t("progress.showLog", { n: list.length }))}</summary><pre class="logbox">${esc(list.join("\n"))}</pre></details>`;
+}
+
+// renderOpBox 重畫進度框,但保留日誌框的展開狀態與「捲到最底」的行為。
+function renderOpBox(box, html) {
+  const openState = {};
+  const atBottom = {};
+  box.querySelectorAll("details[data-logkey]").forEach((d) => {
+    openState[d.dataset.logkey] = d.open;
+    const pre = d.querySelector("pre");
+    atBottom[d.dataset.logkey] = !pre || pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+  });
+  box.innerHTML = html;
+  box.querySelectorAll("details[data-logkey]").forEach((d) => {
+    const k = d.dataset.logkey;
+    if (k in openState) d.open = openState[k];
+    const pre = d.querySelector("pre");
+    if (pre && atBottom[k] !== false) pre.scrollTop = pre.scrollHeight;
+  });
+}
+
+// appOpHtml:App 安裝/更新進度(步驟、總進度、每層進度、日誌)。
+function appOpHtml(st, title) {
+  const stepText = st.step ? t("apps.stepLabel", { svc: st.service || "", step: t("apps.step." + st.step) }) : "";
+  const layers = st.layers || [];
+  const doneLayers = layers.filter((l) => l.percent >= 100).length;
+  let label = `${st.percent || 0}%`;
+  if (st.totalBytes > 0) label += ` · ${formatBytes0(st.downloaded)} / ${formatBytes(st.totalBytes)}`;
+  if (layers.length) label += ` · ${t("progress.layers", { done: doneLayers, total: layers.length })}`;
+  const layerHtml = layers.length
+    ? `<div class="op-layers">${layers.slice(0, 24).map((l) => `<div class="op-layer"><code>${esc(l.id)}</code> ${esc(l.status)} ${l.percent}%${progressBar(l.percent, "", true)}</div>`).join("")}</div>`
+    : "";
+  const failed = st.stage === "failed";
+  return `<div class="op-box">
+    <div class="op-title">${esc(title)}${stepText ? " — " + esc(stepText) : ""}</div>
+    ${failed ? "" : progressBar(st.stage === "done" ? 100 : st.percent, label)}
+    ${failed ? "" : layerHtml}
+    ${logBoxHtml(st.log, "app-op", failed)}
+  </div>`;
 }
 
 async function renderApps(el) {
@@ -2047,12 +2149,12 @@ async function renderApps(el) {
       const box = el.querySelector("#app-op-msg");
       try {
         await api.updateApp(btn.dataset.update); // 202,立即返回
-        const st = await pollAppOp(box, "apps.updatingLong");
+        const st = await pollAppOp(box, "apps.updatingLong", { name });
         await reRenderAppsKeepingScroll(el);
         const done = st.stage !== "failed";
         el.insertAdjacentHTML("afterbegin", done
           ? msg("ok", t("apps.updateOk", { name }))
-          : msg("error", translateError(st.error || "")));
+          : `<div>${msg("error", translateError(st.error || ""))}${logBoxHtml(st.log, "app-op-fail", true)}</div>`);
       } catch (err) {
         if (box) box.innerHTML = msg("error", translateError(err.message));
       }
@@ -2269,7 +2371,7 @@ async function renderApps(el) {
         await api.installApp(templateId, overrides); // 202,背景安裝
         const st = await pollAppOp(box, "apps.installing");
         if (st.stage === "failed") {
-          box.innerHTML = msg("error", translateError(st.error || ""));
+          box.innerHTML = msg("error", translateError(st.error || "")) + logBoxHtml(st.log, "app-op-fail", true);
           return;
         }
         box.innerHTML = msg("ok", t("apps.installSuccess"));
@@ -2384,7 +2486,7 @@ async function renderApps(el) {
         await api.installCustomApp(template); // 202,背景安裝
         const st = await pollAppOp(box, "apps.installing");
         if (st.stage === "failed") {
-          box.innerHTML = msg("error", translateError(st.error || ""));
+          box.innerHTML = msg("error", translateError(st.error || "")) + logBoxHtml(st.log, "app-op-fail", true);
           return;
         }
         box.innerHTML = msg("ok", t("apps.installSuccess"));
@@ -4887,16 +4989,38 @@ async function renderDoctor(el) {
       const original = btn.textContent;
       btn.textContent = t("doctor.installing");
       if (box) box.innerHTML = msg("warn", t("doctor.installingLong", { name }));
+      // 第六十五輪:安裝請求進行中,每秒讀一次即時進度(階段、百分比、apt 輸出)。
+      let polling = true;
+      let lastLines = [];
+      const poll = async () => {
+        while (polling) {
+          await new Promise((r) => setTimeout(r, 1000));
+          if (!polling) break;
+          try {
+            const p = await api.doctorInstallProgress();
+            if (!polling || p.apt !== apt) continue;
+            lastLines = p.lines || [];
+            if (box) renderOpBox(box, `<div class="op-box">
+              <div class="op-title">${esc(t("doctor.progressTitle", { name, stage: t("doctor.stage." + (p.stage || "prepare")) }))}</div>
+              ${progressBar(p.percent, `${p.percent || 0}%`)}
+              ${logBoxHtml(lastLines, "doctor-apt", true)}
+            </div>`);
+          } catch { /* 暫時讀不到就下一輪 */ }
+        }
+      };
+      poll();
       try {
         await api.doctorInstall(apt);
+        polling = false;
         if (box) box.innerHTML = msg("ok", t("doctor.installOk", { name }));
         // 重新整理整頁狀態(裝好的會變成「已安裝」、按鈕消失)。
-        renderDoctor(el);
+        if (location.hash === "#/doctor") renderDoctor(el); // 使用者已切到別頁就不要蓋掉它
       } catch (err) {
+        polling = false;
         btn.disabled = false;
         btn.textContent = original;
         if (box) {
-          box.innerHTML = msg("error", t("doctor.installFailed", { name, reason: err.message }));
+          box.innerHTML = msg("error", t("doctor.installFailed", { name, reason: err.message })) + logBoxHtml(lastLines, "doctor-apt-fail", false);
           // 第六十一輪:把 apt 的真實報錯原樣列出來,不再只剩一句籠統的訊息。
           if (err.detail) {
             box.insertAdjacentHTML("beforeend",
@@ -4907,4 +5031,272 @@ async function renderDoctor(el) {
       }
     });
   });
+}
+
+
+// ---- 第六十五輪:網路頁 ----
+// 概況(網卡/閘道/DNS)、一鍵體檢、DNS 設定與測速、鏡像加速地址測速、
+// 小工具(ping/路由追蹤/埠/DNS 查詢/HTTP)。除了概況,其餘都需要管理者。
+async function renderNetwork(el) {
+  const [ov, me] = await Promise.all([
+    api.networkOverview().catch((e) => ({ error: e.message })),
+    api.me().catch(() => ({ role: "" })),
+  ]);
+  const isAdmin = me.role === "admin";
+  if (ov.error) {
+    el.innerHTML = `<h1>${esc(t("network.title"))}</h1>${msg("error", translateError(ov.error))}`;
+    return;
+  }
+  const dns = ov.dns || { servers: [], mode: "plain" };
+  const ifaceHtml = (ov.interfaces || []).map((i) =>
+    `<div><strong>${esc(i.name)}</strong> ${i.up ? "" : `<span class="pill danger">${esc(t("network.down"))}</span>`} <span style="color:var(--text-faint)">${esc((i.addrs || []).join(", ") || t("network.none"))}${i.mac ? " · " + esc(i.mac) : ""}</span></div>`
+  ).join("") || esc(t("network.none"));
+
+  el.innerHTML = `
+    <h1>${esc(t("network.title"))}</h1>
+    <p class="page-subtitle">${esc(t("network.subtitle"))}</p>
+
+    <div class="card">
+      ${h2i("globe", esc(t("network.overviewTitle")))}
+      <dl class="kv-grid">
+        <dt>${esc(t("network.hostname"))}</dt><dd>${esc(ov.hostname || "—")}</dd>
+        <dt>${esc(t("network.ifaces"))}</dt><dd>${ifaceHtml}</dd>
+        <dt>${esc(t("network.gateway"))}</dt><dd>${esc(ov.gateway ? `${ov.gateway} (${ov.gatewayIface})` : t("network.none"))}</dd>
+        <dt>${esc(t("network.dnsServers"))}</dt><dd id="net-dns-current">${esc((dns.servers || []).join(", ") || t("network.none"))}</dd>
+        <dt>${esc(t("network.dnsSource"))}</dt><dd id="net-dns-source">${esc(dns.managed ? t("network.dnsManaged") : t("network.dnsAuto"))} · ${esc(t("network.mode." + dns.mode))}</dd>
+      </dl>
+    </div>
+
+    ${isAdmin ? `
+    <div class="card">
+      ${h2i("pulse", esc(t("network.diagTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px">${esc(t("network.diagHint"))}</p>
+      <div class="btn-row"><button type="button" id="net-diag-btn">${esc(t("network.diagRun"))}</button></div>
+      <div id="net-diag-out" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      ${h2i("globe", esc(t("network.dnsTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px">${esc(t("network.dnsHint"))}</p>
+      <form id="net-dns-form">
+        <div class="field"><label>${esc(t("network.dnsInput"))}</label>
+          <textarea name="servers" rows="3" placeholder="223.5.5.5&#10;119.29.29.29">${esc(dns.managed ? (dns.servers || []).join("\n") : "")}</textarea></div>
+        <div class="btn-row" style="margin-top:10px">
+          <button type="submit">${esc(t("network.dnsSave"))}</button>
+          <button type="button" class="secondary" id="net-dns-test">${esc(t("network.dnsTest"))}</button>
+          ${dns.managed ? `<button type="button" class="secondary" id="net-dns-reset">${esc(t("network.dnsReset"))}</button>` : ""}
+        </div>
+      </form>
+      <div id="net-dns-msg" style="margin-top:10px"></div>
+      <div id="net-dns-speed"></div>
+    </div>
+
+    <div class="card">
+      ${h2i("download", esc(t("network.mirrorTitle")))}
+      <p style="color:var(--text-dim);font-size:13px;margin:0 0 10px">${esc(t("network.mirrorHint"))}</p>
+      <div class="btn-row"><button type="button" id="net-mirror-test">${esc(t("network.mirrorTest"))}</button></div>
+      <div id="net-mirror-out" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      ${h2i("tool", esc(t("network.toolsTitle")))}
+      <div class="tool-tabs" role="tablist">
+        ${["ping", "traceroute", "port", "dns", "http"].map((k, i) => `<button type="button" class="secondary${i === 0 ? " active" : ""}" data-tool="${k}">${esc(t("network.tool." + k))}</button>`).join("")}
+      </div>
+      <form id="net-tool-form" class="tool-form">
+        <div class="field"><label id="net-tool-target-label">${esc(t("network.target"))}</label><input type="text" name="target" placeholder="192.168.1.1" required></div>
+        <div class="field" id="net-tool-port" hidden style="flex:0 1 110px"><label>${esc(t("network.port"))}</label><input type="number" name="port" min="1" max="65535" value="443"></div>
+        <div class="field" id="net-tool-server" hidden><label>${esc(t("network.dnsServerOpt"))}</label><input type="text" name="server" placeholder="223.5.5.5"></div>
+        <button type="submit" id="net-tool-run">${esc(t("network.run"))}</button>
+      </form>
+      <pre class="logbox" id="net-tool-out" hidden></pre>
+    </div>` : ""}
+  `;
+  if (!isAdmin) return;
+
+  const errText = (code, raw) => (code ? t("network.err." + code) : "") + (raw ? ` — ${raw}` : "");
+
+  // 一鍵體檢
+  const diagBtn = el.querySelector("#net-diag-btn");
+  const diagOut = el.querySelector("#net-diag-out");
+  diagBtn.addEventListener("click", async () => {
+    diagBtn.disabled = true;
+    diagOut.innerHTML = msg("warn", t("network.diagRunning")) + progressBar(30, "");
+    try {
+      const d = await api.networkDiagnose();
+      diagOut.innerHTML = renderDiagnosis(d, errText);
+      const applyBtn = diagOut.querySelector("[data-apply-dns]");
+      if (applyBtn) {
+        applyBtn.addEventListener("click", async () => {
+          applyBtn.disabled = true;
+          try {
+            await api.networkSetDNS(applyBtn.dataset.applyDns.split(","));
+            await renderNetwork(el);
+            el.querySelector("#net-dns-msg").innerHTML = msg("ok", t("network.dnsSaved"));
+          } catch (err) {
+            applyBtn.disabled = false;
+            diagOut.insertAdjacentHTML("afterbegin", msg("error", translateError(err.message)));
+          }
+        });
+      }
+    } catch (err) {
+      diagOut.innerHTML = msg("error", translateError(err.message));
+    } finally {
+      diagBtn.disabled = false;
+    }
+  });
+
+  // DNS 設定
+  const dnsForm = el.querySelector("#net-dns-form");
+  const dnsMsg = el.querySelector("#net-dns-msg");
+  dnsForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const servers = (new FormData(dnsForm).get("servers") || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    try {
+      await api.networkSetDNS(servers);
+      await renderNetwork(el);
+      el.querySelector("#net-dns-msg").innerHTML = msg("ok", t("network.dnsSaved"));
+    } catch (err) {
+      dnsMsg.innerHTML = msg("error", translateError(err.message));
+    }
+  });
+  const resetBtn = el.querySelector("#net-dns-reset");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", async () => {
+      if (!confirm(t("network.dnsResetConfirm"))) return;
+      try {
+        await api.networkResetDNS();
+        await renderNetwork(el);
+        el.querySelector("#net-dns-msg").innerHTML = msg("ok", t("network.dnsResetDone"));
+      } catch (err) {
+        dnsMsg.innerHTML = msg("error", translateError(err.message));
+      }
+    });
+  }
+  const dnsTestBtn = el.querySelector("#net-dns-test");
+  const dnsSpeed = el.querySelector("#net-dns-speed");
+  dnsTestBtn.addEventListener("click", async () => {
+    dnsTestBtn.disabled = true;
+    dnsSpeed.innerHTML = msg("warn", t("network.dnsTesting"));
+    try {
+      const list = await api.networkDNSTest();
+      dnsSpeed.innerHTML = list.map((r) => `<div class="speed-row">
+        <span class="net-dot${r.ok ? "" : " fail"}"></span>
+        <span class="grow"><code>${esc(r.target)}</code>${r.current ? ` <span class="pill neutral">${esc(t("network.current"))}</span>` : ""}
+          ${r.ok ? "" : `<div class="net-check-sub">${esc(errText(r.errCode, ""))}</div>`}</span>
+        <span class="net-ms">${r.ok ? esc(t("network.ms", { n: r.ms })) : esc(t("network.fail"))}</span>
+        ${r.ok && !r.current ? `<button type="button" class="secondary" data-use-dns="${esc(r.target)}">${esc(t("network.use"))}</button>` : ""}
+      </div>`).join("");
+      dnsSpeed.querySelectorAll("[data-use-dns]").forEach((b) => b.addEventListener("click", () => {
+        const ta = dnsForm.querySelector("textarea");
+        const cur = ta.value.split(/[\s,]+/).filter(Boolean);
+        if (!cur.includes(b.dataset.useDns)) cur.push(b.dataset.useDns);
+        ta.value = cur.slice(-3).join("\n");
+        ta.focus();
+      }));
+    } catch (err) {
+      dnsSpeed.innerHTML = msg("error", translateError(err.message));
+    } finally {
+      dnsTestBtn.disabled = false;
+    }
+  });
+
+  // 鏡像加速地址測速
+  const mirrorBtn = el.querySelector("#net-mirror-test");
+  const mirrorOut = el.querySelector("#net-mirror-out");
+  mirrorBtn.addEventListener("click", async () => {
+    mirrorBtn.disabled = true;
+    mirrorOut.innerHTML = msg("warn", t("network.mirrorTesting"));
+    try {
+      const list = await api.networkMirrorTest();
+      mirrorOut.innerHTML = list.map((r) => `<div class="speed-row">
+        <input type="checkbox" data-mirror="${esc(r.target)}" ${r.ok ? (r.current || list.filter((x) => x.ok).indexOf(r) < 2 ? "checked" : "") : "disabled"} aria-label="${esc(r.target)}">
+        <span class="net-dot${r.ok ? "" : " fail"}"></span>
+        <span class="grow"><code>${esc(r.target)}</code>${r.current ? ` <span class="pill neutral">${esc(t("network.current"))}</span>` : ""}
+          ${r.ok ? "" : `<div class="net-check-sub">${esc(errText(r.errCode, ""))}</div>`}</span>
+        <span class="net-ms">${r.ok ? esc(t("network.ms", { n: r.ms })) : esc(t("network.fail"))}</span>
+      </div>`).join("") + `<div class="btn-row" style="margin-top:10px"><button type="button" id="net-mirror-apply">${esc(t("network.mirrorApply"))}</button></div><div id="net-mirror-msg" style="margin-top:8px"></div>`;
+      mirrorOut.querySelector("#net-mirror-apply").addEventListener("click", async () => {
+        const picked = [...mirrorOut.querySelectorAll("[data-mirror]:checked")].map((c) => c.dataset.mirror);
+        const m = mirrorOut.querySelector("#net-mirror-msg");
+        if (!picked.length) { m.innerHTML = msg("error", t("network.mirrorNone")); return; }
+        try {
+          const cur = await api.registryConfig().catch(() => ({ insecureRegistries: [] }));
+          const res = await api.setRegistryConfig(picked, cur.insecureRegistries || []);
+          m.innerHTML = res.applied ? msg("ok", t("network.mirrorApplied")) : msg("warn", translateNotice(res.warning) || t("apps.registrySavedNoReload"));
+        } catch (err) {
+          m.innerHTML = msg("error", translateError(err.message));
+        }
+      });
+    } catch (err) {
+      mirrorOut.innerHTML = msg("error", translateError(err.message));
+    } finally {
+      mirrorBtn.disabled = false;
+    }
+  });
+
+  // 小工具
+  let tool = "ping";
+  const toolForm = el.querySelector("#net-tool-form");
+  const toolOut = el.querySelector("#net-tool-out");
+  const targetInput = toolForm.querySelector('input[name="target"]');
+  el.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => {
+    tool = b.dataset.tool;
+    el.querySelectorAll("[data-tool]").forEach((x) => x.classList.toggle("active", x === b));
+    el.querySelector("#net-tool-port").hidden = tool !== "port";
+    el.querySelector("#net-tool-server").hidden = tool !== "dns";
+    el.querySelector("#net-tool-target-label").textContent = t(tool === "http" ? "network.targetUrl" : "network.target");
+    targetInput.placeholder = { ping: "192.168.1.1", traceroute: "223.5.5.5", port: "docker.m.daocloud.io", dns: "registry-1.docker.io", http: "https://docker.m.daocloud.io/v2/" }[tool];
+  }));
+  toolForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(toolForm);
+    const runBtn = el.querySelector("#net-tool-run");
+    runBtn.disabled = true;
+    runBtn.textContent = t("network.running");
+    toolOut.hidden = false;
+    toolOut.textContent = t("network.running");
+    try {
+      const res = await api.networkTool({ tool, target: (f.get("target") || "").trim(), port: Number(f.get("port")) || 0, server: (f.get("server") || "").trim() });
+      toolOut.textContent = (res.errCode ? t("network.err." + res.errCode) + "\n\n" : "") + (res.output || "");
+    } catch (err) {
+      toolOut.textContent = translateError(err.message);
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = t("network.run");
+    }
+  });
+}
+
+// renderDiagnosis:體檢結果(建議在上、逐項紅綠燈在下)。
+function renderDiagnosis(d, errText) {
+  const hints = (d.hints || []).map((h) => {
+    const good = h === "allGood" || h === "dockerHubBlockedMirrorOk";
+    const text = t("network.hint." + h, { dns: (d.suggestDns || []).join(", ") });
+    const btn = h === "dnsBrokenUsePublic" && (d.suggestDns || []).length
+      ? `<div class="btn-row" style="margin-top:8px"><button type="button" data-apply-dns="${esc(d.suggestDns.join(","))}">${esc(t("network.applyDns"))}</button></div>`
+      : "";
+    return `<div class="msg ${good ? "ok" : "error"}">${esc(text)}${btn}</div>`;
+  }).join("");
+  const label = (c) => {
+    const id = c.id;
+    if (id.startsWith("dns:")) return t("network.check.dnsServer", { target: c.target });
+    if (id.startsWith("dnspub:")) return t("network.check.dnsPublic", { target: c.target });
+    if (id.startsWith("https:mirror:")) return t("network.check.mirror", { target: id.slice("https:mirror:".length) });
+    if (id === "https:dockerhub") return t("network.check.dockerhub");
+    if (id === "https:debian") return t("network.check.debian");
+    if (id === "gateway") return t("network.check.gateway", { target: c.target || "" });
+    if (id === "dns") return t("network.check.dns", { target: c.target || "" });
+    return t("network.check." + id);
+  };
+  const rows = (d.checks || []).map((c) => {
+    let sub = c.ok ? (c.detail || "") : errText(c.errCode, c.error);
+    if (c.id === "clock") sub = t("network.check.clockDetail", { sec: c.detail || "0" });
+    return `<div class="net-check">
+      <span class="net-dot${c.ok ? "" : " fail"}"></span>
+      <div class="net-check-main"><div>${esc(label(c))}</div>${sub ? `<div class="net-check-sub">${esc(sub)}</div>` : ""}</div>
+      ${c.ok && c.ms ? `<span class="net-ms">${esc(t("network.ms", { n: c.ms }))}</span>` : ""}
+    </div>`;
+  }).join("");
+  return hints + rows;
 }

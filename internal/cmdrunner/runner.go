@@ -9,10 +9,13 @@
 package cmdrunner
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
+	"strings"
 )
 
 // Runner 執行一個外部指令。分成 Run(無標準輸入)與 RunWithStdin(需要餵資料
@@ -51,4 +54,67 @@ func runCmd(ctx context.Context, stdin []byte, name string, args ...string) ([]b
 		return out, fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return out, nil
+}
+
+// StreamRunner 是選用的擴充介面:邊執行邊把輸出(stdout+stderr 合併)一行
+// 一行回報給 onLine,結束時仍回傳完整輸出。給「要即時顯示進度」的長指令
+// (例如 apt 安裝)用。呼叫端用型別斷言判斷 Runner 有沒有實作,沒有就退回 Run。
+type StreamRunner interface {
+	RunStream(ctx context.Context, onLine func(line string), name string, args ...string) ([]byte, error)
+}
+
+// RunStream 實作 StreamRunner。\r 也視為換行(apt/dpkg 的進度會用 \r 覆寫同一行)。
+func (execRunner) RunStream(ctx context.Context, onLine func(line string), name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	var all bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		sc.Split(scanLinesCR)
+		for sc.Scan() {
+			line := sc.Text()
+			all.WriteString(line)
+			all.WriteByte('\n')
+			if onLine != nil && strings.TrimSpace(line) != "" {
+				onLine(line)
+			}
+		}
+		_, _ = io.Copy(io.Discard, pr)
+	}()
+	err := cmd.Start()
+	if err != nil {
+		pw.Close()
+		<-done
+		return all.Bytes(), fmt.Errorf("%s %v: %w", name, args, err)
+	}
+	err = cmd.Wait()
+	pw.Close()
+	<-done
+	if err != nil {
+		tail := all.String()
+		if len(tail) > 2000 {
+			tail = tail[len(tail)-2000:]
+		}
+		return all.Bytes(), fmt.Errorf("%s %v: %w (stderr: %s)", name, args, err, tail)
+	}
+	return all.Bytes(), nil
+}
+
+// scanLinesCR 跟 bufio.ScanLines 一樣,但 \r 也當作行尾。
+func scanLinesCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }

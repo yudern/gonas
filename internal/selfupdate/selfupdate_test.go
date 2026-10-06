@@ -589,3 +589,26 @@ func TestNewHTTPClient_WiresSecureRedirect(t *testing.T) {
 		t.Fatal("expected the wired CheckRedirect to reject a plaintext downgrade")
 	}
 }
+
+func TestDownloadAndVerifyWithProgress_ReportsBytes(t *testing.T) {
+	payload := make([]byte, 100000)
+	sum := sha256.Sum256(payload)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100000")
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+	var last, total int64
+	calls := 0
+	path, err := DownloadAndVerifyWithProgress(context.Background(), srv.Client(), Asset{URL: srv.URL, SHA256: hex.EncodeToString(sum[:])}, t.TempDir(), func(d, tt int64) {
+		calls++
+		last, total = d, tt
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	if calls < 2 || last != 100000 || total != 100000 {
+		t.Errorf("progress calls=%d last=%d total=%d", calls, last, total)
+	}
+}

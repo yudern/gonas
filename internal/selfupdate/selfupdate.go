@@ -334,6 +334,13 @@ const maxDownloadBytes = 200 << 20 // 200 MiB
 // 驗證失敗或任何步驟出錯時,暫存檔案會被清乾淨,不會留下未驗證、
 // 半下載的檔案佔用磁碟空間或被誤用。
 func DownloadAndVerify(ctx context.Context, client *http.Client, asset Asset, destDir string) (tempPath string, err error) {
+	return DownloadAndVerifyWithProgress(ctx, client, asset, destDir, nil)
+}
+
+// DownloadAndVerifyWithProgress 跟 DownloadAndVerify 一樣,另外在下載過程中
+// 呼叫 onProgress(已下載位元組, 總位元組;伺服器沒給長度時為 -1)。第六十五輪
+// 加上,給 Web UI 顯示線上更新的下載進度。onProgress 可為 nil。
+func DownloadAndVerifyWithProgress(ctx context.Context, client *http.Client, asset Asset, destDir string, onProgress func(done, total int64)) (tempPath string, err error) {
 	if err := requireHTTPS(asset.URL, "asset URL"); err != nil {
 		return "", err
 	}
@@ -378,7 +385,12 @@ func DownloadAndVerify(ctx context.Context, client *http.Client, asset Asset, de
 
 	hasher := sha256.New()
 	limited := io.LimitReader(resp.Body, maxDownloadBytes+1)
-	written, err := io.Copy(io.MultiWriter(tmp, hasher), limited)
+	var dst io.Writer = io.MultiWriter(tmp, hasher)
+	if onProgress != nil {
+		dst = &progressWriter{w: dst, total: resp.ContentLength, fn: onProgress}
+		onProgress(0, resp.ContentLength)
+	}
+	written, err := io.Copy(dst, limited)
 	if err != nil {
 		return "", fmt.Errorf("selfupdate: writing downloaded update: %w", err)
 	}
@@ -691,4 +703,19 @@ func (c *Checker) Stop() {
 	}
 	c.cancel()
 	<-c.done
+}
+
+// progressWriter 在每次寫入後回報累計位元組數。
+type progressWriter struct {
+	w     io.Writer
+	done  int64
+	total int64
+	fn    func(done, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.done += int64(n)
+	p.fn(p.done, p.total)
+	return n, err
 }

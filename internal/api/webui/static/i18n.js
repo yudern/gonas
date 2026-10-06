@@ -1687,6 +1687,219 @@ const dict = {
   },
 };
 
+// 第六十五輪新增的字串(網路診斷頁、安裝進度)。集中放在這裡、用 deepMerge
+// 併進 dict,三種語言並排,比較好對照有沒有漏翻。
+const dict65 = {
+  "zh-Hant": {
+    nav: { network: "網路" },
+    progress: { showLog: "詳細日誌({n} 行)", layers: "映像層 {done}/{total} 完成" },
+    apps: {
+      step: { pull: "拉取鏡像", create: "建立容器", start: "啟動容器", check: "確認容器正常運行" },
+      stepLabel: "{svc}:{step}",
+    },
+    doctor: {
+      stage: { prepare: "讀取套件索引", download: "下載套件", unpack: "解包", configure: "設定", done: "完成", failed: "失敗" },
+      progressTitle: "正在安裝「{name}」— {stage}",
+      aptLog: "apt 即時輸出",
+    },
+    update: {
+      stage: { fetching_manifest: "讀取更新資訊", downloading: "下載中", applying: "替換執行檔", restarting: "重新啟動中", failed: "失敗" },
+      downloadProgress: "正在下載更新:{pct}%({done} / {total})",
+      uploadProgress: "正在上傳:{pct}%({done} / {total})",
+      uploadVerify: "上傳完成,正在驗證並替換執行檔…",
+    },
+    network: {
+      title: "網路",
+      subtitle: "檢查這台 NAS 能不能上網、DNS 是否正常、能不能連到 Docker Hub 與鏡像加速地址;也可以在這裡設定 DNS、測速,以及使用常用的網路小工具。",
+      overviewTitle: "網路概況", hostname: "主機名稱", ifaces: "網卡", gateway: "預設閘道", dnsServers: "DNS 伺服器", dnsSource: "DNS 來源",
+      mode: { plain: "DHCP/手動(resolv.conf)", resolved: "systemd-resolved", networkmanager: "NetworkManager", resolvconf: "resolvconf" },
+      dnsAuto: "自動取得(DHCP)", dnsManaged: "GoNAS 設定的固定 DNS", down: "未連線", none: "無",
+      diagTitle: "一鍵網路體檢", diagHint: "依序檢查:網卡 → 路由器 → 外網 → DNS → Docker Hub/加速地址/Debian 套件源 → 系統時間。每一項都會說明原因與建議。",
+      diagRun: "開始體檢", diagRunning: "正在檢測…(約 10 秒)",
+      check: {
+        link: "網卡與 IP 位址", gateway: "路由器(閘道){target}", internet: "外網連線(直接連 IP,不經 DNS)",
+        dns: "系統 DNS 解析 {target}", dnsServer: "DNS 伺服器 {target}", dnsPublic: "公共 DNS {target}",
+        dockerhub: "Docker Hub", debian: "Debian 套件源", mirror: "加速地址 {target}", clock: "系統時間",
+        clockDetail: "與網路時間相差 {sec} 秒",
+      },
+      err: {
+        dns_not_found: "網域不存在", dns_failed: "DNS 查詢失敗或逾時", tls_cert: "TLS 憑證錯誤(常見原因:系統時間不對)",
+        refused: "連線被拒絕", unreachable: "網路不可達", timeout: "逾時", reset: "連線被中斷", other: "錯誤",
+        bad_status: "回應不像鏡像倉庫", clock_skew: "時間誤差過大",
+      },
+      hint: {
+        allGood: "全部正常:這台 NAS 可以上網、解析網域,也連得到 Docker Hub/加速地址。",
+        noLink: "沒有偵測到可用的網卡 IP 位址:請檢查網線、交換機,或路由器的 DHCP。",
+        gatewayDown: "連不到路由器(閘道):請檢查網線與路由器,或 NAS 的 IP 是否跟路由器在同一網段。",
+        noInternet: "路由器連得到,但出不了外網:請檢查路由器本身的上網狀態。",
+        dnsBrokenUsePublic: "能上外網,但目前的 DNS 伺服器解析不了網域——這就是拉鏡像失敗的原因。公共 DNS 是好的,建議一鍵改用:{dns}",
+        dnsBroken: "DNS 解析失敗,連公共 DNS 也查不到:可能是路由器或防火牆攔截了 DNS(UDP 53)。",
+        dockerHubBlockedNoMirror: "連不到 Docker Hub(國內常見),而且還沒設定鏡像加速地址:請在下方「鏡像加速地址測速」選一個能用的填入。",
+        dockerHubBlockedMirrorOk: "連不到 Docker Hub,但已設定的加速地址可用,拉鏡像會走加速地址。",
+        dockerHubBlockedMirrorBad: "連不到 Docker Hub,已設定的加速地址也連不上:請在下方測速換一個能用的。",
+        clockSkew: "系統時間跟網路時間相差太多,HTTPS 憑證驗證會失敗:請檢查時間、時區或 NTP 設定。",
+      },
+      applyDns: "一鍵改用這組 DNS",
+      dnsTitle: "DNS 設定",
+      dnsHint: "設成固定的 DNS 伺服器後會持久保存(重新開機、DHCP 續租都不會被蓋掉)。不確定填什麼,先按「DNS 測速」選最快的。",
+      dnsInput: "DNS 伺服器(1~3 個 IP,一行一個)", dnsSave: "儲存 DNS", dnsReset: "恢復自動取得(DHCP)",
+      dnsSaved: "已儲存,DNS 已立即生效。", dnsResetDone: "已恢復為自動取得。", dnsResetConfirm: "確定要恢復為 DHCP 自動取得的 DNS 嗎?",
+      dnsTest: "DNS 測速", dnsTesting: "測速中…", use: "使用", current: "目前", fail: "失敗",
+      mirrorTitle: "鏡像加速地址測速",
+      mirrorHint: "逐個測試 Docker 鏡像加速地址能不能連、延遲多少。公共加速源的可用性經常變動,以這裡的實測結果為準;勾選能用的再一鍵設為加速地址。",
+      mirrorTest: "開始測速", mirrorTesting: "測速中…", mirrorApply: "把勾選的地址設為加速地址",
+      mirrorApplied: "已更新 Docker 鏡像加速設定並套用。", mirrorNone: "請至少勾選一個可用的地址。",
+      toolsTitle: "網路小工具",
+      tool: { ping: "Ping", traceroute: "路由追蹤", port: "埠檢測", dns: "DNS 查詢", http: "HTTP 存取" },
+      target: "目標(主機名稱或 IP)", targetUrl: "網址(http:// 或 https://)", port: "埠", dnsServerOpt: "指定 DNS 伺服器(選填)",
+      run: "執行", running: "執行中…", ms: "{n} ms",
+    },
+  },
+  "zh-Hans": {
+    nav: { network: "网络" },
+    progress: { showLog: "详细日志({n} 行)", layers: "镜像层 {done}/{total} 完成" },
+    apps: {
+      step: { pull: "拉取镜像", create: "创建容器", start: "启动容器", check: "确认容器正常运行" },
+      stepLabel: "{svc}:{step}",
+    },
+    doctor: {
+      stage: { prepare: "读取软件包索引", download: "下载软件包", unpack: "解包", configure: "配置", done: "完成", failed: "失败" },
+      progressTitle: "正在安装「{name}」— {stage}",
+      aptLog: "apt 实时输出",
+    },
+    update: {
+      stage: { fetching_manifest: "读取更新信息", downloading: "下载中", applying: "替换执行文件", restarting: "重新启动中", failed: "失败" },
+      downloadProgress: "正在下载更新:{pct}%({done} / {total})",
+      uploadProgress: "正在上传:{pct}%({done} / {total})",
+      uploadVerify: "上传完成,正在校验并替换执行文件…",
+    },
+    network: {
+      title: "网络",
+      subtitle: "检查这台 NAS 能不能上网、DNS 是否正常、能不能连到 Docker Hub 和镜像加速地址;也可以在这里设置 DNS、测速,以及使用常用的网络小工具。",
+      overviewTitle: "网络概况", hostname: "主机名", ifaces: "网卡", gateway: "默认网关", dnsServers: "DNS 服务器", dnsSource: "DNS 来源",
+      mode: { plain: "DHCP/手动(resolv.conf)", resolved: "systemd-resolved", networkmanager: "NetworkManager", resolvconf: "resolvconf" },
+      dnsAuto: "自动获取(DHCP)", dnsManaged: "GoNAS 设置的固定 DNS", down: "未连接", none: "无",
+      diagTitle: "一键网络体检", diagHint: "依次检查:网卡 → 路由器 → 外网 → DNS → Docker Hub/加速地址/Debian 软件源 → 系统时间。每一项都会说明原因和建议。",
+      diagRun: "开始体检", diagRunning: "正在检测…(约 10 秒)",
+      check: {
+        link: "网卡与 IP 地址", gateway: "路由器(网关){target}", internet: "外网连接(直接连 IP,不经过 DNS)",
+        dns: "系统 DNS 解析 {target}", dnsServer: "DNS 服务器 {target}", dnsPublic: "公共 DNS {target}",
+        dockerhub: "Docker Hub", debian: "Debian 软件源", mirror: "加速地址 {target}", clock: "系统时间",
+        clockDetail: "与网络时间相差 {sec} 秒",
+      },
+      err: {
+        dns_not_found: "域名不存在", dns_failed: "DNS 查询失败或超时", tls_cert: "TLS 证书错误(常见原因:系统时间不对)",
+        refused: "连接被拒绝", unreachable: "网络不可达", timeout: "超时", reset: "连接被中断", other: "错误",
+        bad_status: "响应不像镜像仓库", clock_skew: "时间误差过大",
+      },
+      hint: {
+        allGood: "全部正常:这台 NAS 可以上网、解析域名,也连得到 Docker Hub/加速地址。",
+        noLink: "没有检测到可用的网卡 IP 地址:请检查网线、交换机,或路由器的 DHCP。",
+        gatewayDown: "连不到路由器(网关):请检查网线和路由器,或 NAS 的 IP 是否跟路由器在同一网段。",
+        noInternet: "路由器连得到,但出不了外网:请检查路由器本身的上网状态。",
+        dnsBrokenUsePublic: "能上外网,但当前的 DNS 服务器解析不了域名——这就是拉镜像失败的原因。公共 DNS 是好的,建议一键改用:{dns}",
+        dnsBroken: "DNS 解析失败,连公共 DNS 也查不到:可能是路由器或防火墙拦截了 DNS(UDP 53)。",
+        dockerHubBlockedNoMirror: "连不到 Docker Hub(国内常见),而且还没设置镜像加速地址:请在下方「镜像加速地址测速」选一个能用的填入。",
+        dockerHubBlockedMirrorOk: "连不到 Docker Hub,但已设置的加速地址可用,拉镜像会走加速地址。",
+        dockerHubBlockedMirrorBad: "连不到 Docker Hub,已设置的加速地址也连不上:请在下方测速换一个能用的。",
+        clockSkew: "系统时间跟网络时间相差太多,HTTPS 证书校验会失败:请检查时间、时区或 NTP 设置。",
+      },
+      applyDns: "一键改用这组 DNS",
+      dnsTitle: "DNS 设置",
+      dnsHint: "设成固定的 DNS 服务器后会持久保存(重启、DHCP 续租都不会被覆盖)。不确定填什么,先点「DNS 测速」选最快的。",
+      dnsInput: "DNS 服务器(1~3 个 IP,一行一个)", dnsSave: "保存 DNS", dnsReset: "恢复自动获取(DHCP)",
+      dnsSaved: "已保存,DNS 已立即生效。", dnsResetDone: "已恢复为自动获取。", dnsResetConfirm: "确定要恢复为 DHCP 自动获取的 DNS 吗?",
+      dnsTest: "DNS 测速", dnsTesting: "测速中…", use: "使用", current: "当前", fail: "失败",
+      mirrorTitle: "镜像加速地址测速",
+      mirrorHint: "逐个测试 Docker 镜像加速地址能不能连、延迟多少。公共加速源的可用性经常变化,以这里的实测结果为准;勾选能用的再一键设为加速地址。",
+      mirrorTest: "开始测速", mirrorTesting: "测速中…", mirrorApply: "把勾选的地址设为加速地址",
+      mirrorApplied: "已更新 Docker 镜像加速设置并应用。", mirrorNone: "请至少勾选一个可用的地址。",
+      toolsTitle: "网络小工具",
+      tool: { ping: "Ping", traceroute: "路由追踪", port: "端口检测", dns: "DNS 查询", http: "HTTP 访问" },
+      target: "目标(主机名或 IP)", targetUrl: "网址(http:// 或 https://)", port: "端口", dnsServerOpt: "指定 DNS 服务器(选填)",
+      run: "执行", running: "执行中…", ms: "{n} ms",
+    },
+  },
+  "en": {
+    nav: { network: "Network" },
+    progress: { showLog: "Detailed log ({n} lines)", layers: "Image layers {done}/{total} done" },
+    apps: {
+      step: { pull: "Pulling image", create: "Creating container", start: "Starting container", check: "Checking the container stays up" },
+      stepLabel: "{svc}: {step}",
+    },
+    doctor: {
+      stage: { prepare: "Reading package index", download: "Downloading packages", unpack: "Unpacking", configure: "Configuring", done: "Done", failed: "Failed" },
+      progressTitle: "Installing “{name}” — {stage}",
+      aptLog: "Live apt output",
+    },
+    update: {
+      stage: { fetching_manifest: "Fetching update info", downloading: "Downloading", applying: "Replacing the binary", restarting: "Restarting", failed: "Failed" },
+      downloadProgress: "Downloading update: {pct}% ({done} / {total})",
+      uploadProgress: "Uploading: {pct}% ({done} / {total})",
+      uploadVerify: "Upload complete — verifying and replacing the binary…",
+    },
+    network: {
+      title: "Network",
+      subtitle: "Check whether this NAS can reach the internet, whether DNS works, and whether Docker Hub and registry mirrors are reachable. You can also set DNS, run speed tests and use common network tools here.",
+      overviewTitle: "Overview", hostname: "Hostname", ifaces: "Interfaces", gateway: "Default gateway", dnsServers: "DNS servers", dnsSource: "DNS source",
+      mode: { plain: "DHCP/manual (resolv.conf)", resolved: "systemd-resolved", networkmanager: "NetworkManager", resolvconf: "resolvconf" },
+      dnsAuto: "Automatic (DHCP)", dnsManaged: "Fixed DNS set by GoNAS", down: "down", none: "none",
+      diagTitle: "Network health check", diagHint: "Checks, in order: interface → router → internet → DNS → Docker Hub/mirrors/Debian mirror → system clock. Each item explains the cause and what to do.",
+      diagRun: "Run check", diagRunning: "Checking… (about 10 seconds)",
+      check: {
+        link: "Interface & IP address", gateway: "Router (gateway) {target}", internet: "Internet (direct IP, no DNS)",
+        dns: "System DNS lookup {target}", dnsServer: "DNS server {target}", dnsPublic: "Public DNS {target}",
+        dockerhub: "Docker Hub", debian: "Debian mirror", mirror: "Mirror {target}", clock: "System clock",
+        clockDetail: "{sec} s off from network time",
+      },
+      err: {
+        dns_not_found: "domain not found", dns_failed: "DNS query failed or timed out", tls_cert: "TLS certificate error (often a wrong system clock)",
+        refused: "connection refused", unreachable: "network unreachable", timeout: "timed out", reset: "connection dropped", other: "error",
+        bad_status: "doesn't look like a registry", clock_skew: "clock is far off",
+      },
+      hint: {
+        allGood: "All good: this NAS can reach the internet, resolve names, and reach Docker Hub/mirrors.",
+        noLink: "No usable interface IP address detected: check the cable, switch, or the router's DHCP.",
+        gatewayDown: "Can't reach the router (gateway): check the cable and router, and that the NAS IP is on the router's subnet.",
+        noInternet: "The router is reachable but the internet isn't: check the router's own uplink.",
+        dnsBrokenUsePublic: "The internet is reachable, but the current DNS server can't resolve names — that's why image pulls fail. Public DNS works; switch to it with one click: {dns}",
+        dnsBroken: "DNS lookups fail even against public DNS: the router or a firewall may be blocking DNS (UDP 53).",
+        dockerHubBlockedNoMirror: "Docker Hub is unreachable and no registry mirror is configured: pick a working one in “Registry mirror speed test” below.",
+        dockerHubBlockedMirrorOk: "Docker Hub is unreachable, but a configured mirror works — pulls will go through it.",
+        dockerHubBlockedMirrorBad: "Docker Hub is unreachable and none of the configured mirrors respond: run the speed test below and switch.",
+        clockSkew: "The system clock is far off from network time, so HTTPS certificate checks will fail: check time, timezone or NTP.",
+      },
+      applyDns: "Use these DNS servers",
+      dnsTitle: "DNS settings",
+      dnsHint: "A fixed DNS setting is persistent (survives reboots and DHCP renewals). Not sure what to use? Run the DNS speed test and pick the fastest.",
+      dnsInput: "DNS servers (1–3 IPs, one per line)", dnsSave: "Save DNS", dnsReset: "Back to automatic (DHCP)",
+      dnsSaved: "Saved — DNS is in effect now.", dnsResetDone: "Back to automatic DNS.", dnsResetConfirm: "Switch back to DNS from DHCP?",
+      dnsTest: "DNS speed test", dnsTesting: "Testing…", use: "Use", current: "current", fail: "failed",
+      mirrorTitle: "Registry mirror speed test",
+      mirrorHint: "Tests whether each Docker registry mirror is reachable and how fast. Public mirrors come and go, so trust these live results; tick the working ones and apply them.",
+      mirrorTest: "Run test", mirrorTesting: "Testing…", mirrorApply: "Use ticked mirrors",
+      mirrorApplied: "Docker registry mirrors updated and applied.", mirrorNone: "Tick at least one working mirror.",
+      toolsTitle: "Network tools",
+      tool: { ping: "Ping", traceroute: "Traceroute", port: "Port check", dns: "DNS lookup", http: "HTTP request" },
+      target: "Target (hostname or IP)", targetUrl: "URL (http:// or https://)", port: "Port", dnsServerOpt: "DNS server (optional)",
+      run: "Run", running: "Running…", ms: "{n} ms",
+    },
+  },
+};
+
+function deepMerge(dst, src) {
+  for (const [k, v] of Object.entries(src)) {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
+      deepMerge(dst[k], v);
+    } else {
+      dst[k] = v;
+    }
+  }
+  return dst;
+}
+deepMerge(dict, dict65);
+
 // 後端 HTTP API 回傳的 error 訊息(見 internal/api/errors.go、
 // internal/filemanager/filemanager.go、internal/docker/exec.go)固定是
 // 英文——這是一份手動維護的翻譯表,把後端「乾淨、可枚舉」的固定錯誤

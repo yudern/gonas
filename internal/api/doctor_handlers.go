@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bng147/gonas/internal/cmdrunner"
 	"github.com/bng147/gonas/internal/doctor"
 )
 
@@ -112,7 +113,13 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	s.logger.Info("installing optional package via web Doctor", "apt", req.Apt)
+	s.doctorProg.begin(req.Apt)
 	out, err := s.installOptionalPackage(ctx, req.Apt)
+	if err != nil {
+		s.doctorProg.finish(err, aptErrorDetail(out, err, 12))
+	} else {
+		s.doctorProg.finish(nil, "")
+	}
 	if err != nil {
 		s.logger.Error("optional package install failed", "apt", req.Apt, "err", err, "out", string(out))
 		// 第六十一輪:一律把 apt 的真實報錯(E:/相依性/權限那幾行)放在 detail
@@ -275,6 +282,7 @@ var systemdRunAvailable = func() bool {
 // --pipe 讓輸出跟結束碼照樣回到這裡。沒有 systemd(開發環境)或 systemd-run
 // 本身起不來時,才退回直接執行。
 func (s *Server) runApt(ctx context.Context, aptArgs ...string) ([]byte, error) {
+	s.doctorProg.line("$ apt-get " + strings.Join(aptArgs, " "))
 	if systemdRunAvailable() {
 		aptBin := "/usr/bin/apt-get"
 		if p, err := exec.LookPath("apt-get"); err == nil {
@@ -287,14 +295,29 @@ func (s *Server) runApt(ctx context.Context, aptArgs ...string) ([]byte, error) 
 			"--", aptBin,
 		}
 		args = append(args, aptArgs...)
-		out, err := s.runner.Run(ctx, "systemd-run", args...)
+		out, err := s.runStreaming(ctx, "systemd-run", args...)
 		if err == nil || !systemdRunCouldNotStart(out, err) {
 			return out, err
 		}
 		s.logger.Warn("systemd-run could not start a transient unit for apt; running apt directly", "err", err, "out", string(out))
 	}
 	direct := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}, aptArgs...)
-	return s.runner.Run(ctx, "env", direct...)
+	return s.runStreaming(ctx, "env", direct...)
+}
+
+// runStreaming 若 runner 支援串流就邊跑邊把輸出送進 Doctor 進度,否則退回
+// 一般 Run、結束後一次補上全部輸出。
+func (s *Server) runStreaming(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if sr, ok := s.runner.(cmdrunner.StreamRunner); ok {
+		return sr.RunStream(ctx, s.doctorProg.line, name, args...)
+	}
+	out, err := s.runner.Run(ctx, name, args...)
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(l) != "" {
+			s.doctorProg.line(l)
+		}
+	}
+	return out, err
 }
 
 // systemdRunCouldNotStart 分辨「systemd-run 自己沒能把 unit 起起來」(要退回

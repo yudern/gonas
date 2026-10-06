@@ -20,6 +20,7 @@ import (
 	"github.com/bng147/gonas/internal/backup"
 	"github.com/bng147/gonas/internal/docker"
 	"github.com/bng147/gonas/internal/monitor"
+	"github.com/bng147/gonas/internal/netdiag"
 	"github.com/bng147/gonas/internal/security"
 	"github.com/bng147/gonas/internal/selfupdate"
 	"github.com/bng147/gonas/internal/state"
@@ -269,6 +270,11 @@ type Server struct {
 	// 安裝請求同時打進來會撞鎖、第二個以難懂的錯誤失敗。用一個 atomic 旗標
 	// 讓同一時間只跑一個安裝,後到的請求直接回 409,而不是讓它去撞 dpkg 鎖。
 	doctorInstalling atomic.Bool
+	// doctorProg 是目前(或剛結束)那次系統診斷安裝的即時進度與 apt 輸出
+	// (第六十五輪),見 doctor_progress.go。
+	doctorProg doctorProgress
+	// dnsCfg 非 nil 時取代預設的 DNS 設定器(測試用),見 network_handlers.go。
+	dnsCfg *netdiag.DNSConfigurator
 
 	// appInstalling 是「應用商店安裝/解除安裝」的 single-flight 旗標(第六十輪
 	// QA 覆核):安裝要拉映像、建容器,可能跑好幾分鐘,同一時間只允許一個,
@@ -499,6 +505,14 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/system/power/reboot", s.requireAdmin(s.handleSystemPowerReboot))
 	mux.HandleFunc("GET /api/v1/system/doctor", s.requireAuth(s.handleDoctorStatus))
 	mux.HandleFunc("POST /api/v1/system/doctor/install", s.requireAdmin(s.handleDoctorInstall))
+	mux.HandleFunc("GET /api/v1/system/doctor/install/progress", s.requireAuth(s.handleDoctorInstallProgress))
+	mux.HandleFunc("GET /api/v1/network", s.requireAuth(s.handleNetworkOverview))
+	mux.HandleFunc("POST /api/v1/network/diagnose", s.requireAdmin(s.handleNetworkDiagnose))
+	mux.HandleFunc("PUT /api/v1/network/dns", s.requireAdmin(s.handleNetworkDNSSet))
+	mux.HandleFunc("DELETE /api/v1/network/dns", s.requireAdmin(s.handleNetworkDNSReset))
+	mux.HandleFunc("POST /api/v1/network/dns/test", s.requireAdmin(s.handleNetworkDNSTest))
+	mux.HandleFunc("POST /api/v1/network/mirrors/test", s.requireAdmin(s.handleNetworkMirrorTest))
+	mux.HandleFunc("POST /api/v1/network/tool", s.requireAdmin(s.handleNetworkTool))
 
 	mux.HandleFunc("GET /api/v1/ups/status", s.requireAuth(s.handleUPSStatus))
 	mux.HandleFunc("GET /api/v1/ups/list", s.requireAuth(s.handleUPSList))

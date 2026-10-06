@@ -62,6 +62,9 @@ type applyUpdateStatus struct {
 	Stage     applyUpdateStage
 	StartedAt time.Time
 	Err       error
+	// 第六十五輪:線上更新下載進度(總長未知時 Total = -1)。
+	Downloaded int64
+	Total      int64
 }
 
 // systemUpdateResponse 是 GET /api/v1/system/update 的回應,合併三種
@@ -82,6 +85,8 @@ type systemUpdateResponse struct {
 	ApplyInProgress bool   `json:"applyInProgress"`
 	ApplyStage      string `json:"applyStage,omitempty"`
 	ApplyError      string `json:"applyError,omitempty"`
+	ApplyDownloaded int64  `json:"applyDownloaded,omitempty"`
+	ApplyTotal      int64  `json:"applyTotal,omitempty"`
 
 	// BackupAvailable 代表執行檔旁邊有沒有一份 ".previous" 備份可以
 	// 復原——Web UI 只在這是 true 的時候才顯示「復原到上一個版本」的
@@ -149,6 +154,7 @@ func (s *Server) buildSystemUpdateResponse() systemUpdateResponse {
 	if applyStatus.Stage != applyStageIdle {
 		resp.ApplyStage = string(applyStatus.Stage)
 		resp.ApplyInProgress = applyStatus.Stage != applyStageFailed
+		resp.ApplyDownloaded, resp.ApplyTotal = applyStatus.Downloaded, applyStatus.Total
 		if applyStatus.Err != nil {
 			resp.ApplyError = applyStatus.Err.Error()
 		}
@@ -447,7 +453,11 @@ func (s *Server) runApplyUpdate(ctx context.Context, manifestURL string) {
 	}
 
 	s.setApplyStage(applyStageDownloading)
-	tempPath, err := selfupdate.DownloadAndVerify(ctx, s.updateHTTPClient, asset, filepath.Dir(execPath))
+	tempPath, err := selfupdate.DownloadAndVerifyWithProgress(ctx, s.updateHTTPClient, asset, filepath.Dir(execPath), func(done, total int64) {
+		s.applyMu.Lock()
+		s.applyStatus.Downloaded, s.applyStatus.Total = done, total
+		s.applyMu.Unlock()
+	})
 	if err != nil {
 		s.failApply(err)
 		return

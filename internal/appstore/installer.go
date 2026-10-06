@@ -65,6 +65,12 @@ type InstallRequest struct {
 	Overrides map[string]ServiceOverride
 	// OnPullProgress 是選用的拉取進度回呼，可為 nil。
 	OnPullProgress func(serviceName, status string)
+	// OnPullEvent 是選用的結構化拉取進度回呼(含層 ID 與位元組數),給前端
+	// 畫進度條用。可為 nil。
+	OnPullEvent func(serviceName string, ev docker.PullEvent)
+	// OnStep 是選用的步驟回呼:每個服務進入 "pull" / "create" / "start" /
+	// "check" 時呼叫一次,讓前端顯示目前在哪一步。可為 nil。
+	OnStep func(serviceName, step string)
 	// OnRollbackError 是選用的回呼:安裝失敗後回滾(停止/移除已建立的容器、
 	// 移除網路)過程中若有錯誤,透過它回報。可為 nil。第三十四輪加上——
 	// 原本回滾清理失敗是直接丟棄(installer 這層沒有 logger),導致「安裝
@@ -88,6 +94,26 @@ type InstallRequest struct {
 	// 路徑」也能一鍵裝起來。可為 nil,呼叫端不設就用 os.MkdirAll(0o755)。
 	// 抽成 hook 是為了讓 installer 測試不必真的去動檔案系統。
 	EnsureHostDir func(path string) error
+}
+
+// step 回報目前步驟(OnStep 為 nil 時什麼都不做)。
+func (req InstallRequest) step(svc, step string) {
+	if req.OnStep != nil {
+		req.OnStep(svc, step)
+	}
+}
+
+// pull 用結構化事件拉映像,同時餵 OnPullEvent 與(舊的)OnPullProgress。
+func (req InstallRequest) pull(ctx context.Context, client *docker.Client, svc, image string) error {
+	req.step(svc, "pull")
+	return client.PullImageEvents(ctx, image, func(ev docker.PullEvent) {
+		if req.OnPullEvent != nil {
+			req.OnPullEvent(svc, ev)
+		}
+		if req.OnPullProgress != nil && ev.Status != "" {
+			req.OnPullProgress(svc, ev.Status)
+		}
+	})
 }
 
 // InstallResult 記錄安裝完成後每個服務對應到的容器 ID，方便呼叫端記錄下來
@@ -196,18 +222,14 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 				req.OnPullProgress(svc.Name, "image already present locally, skipping pull")
 			}
 		} else {
-			progress := func(status string) {
-				if req.OnPullProgress != nil {
-					req.OnPullProgress(svc.Name, status)
-				}
-			}
-			if err := client.PullImage(ctx, image, progress); err != nil {
+			if err := req.pull(ctx, client, svc.Name, image); err != nil {
 				rollback()
 				return InstallResult{}, fmt.Errorf("service %q: pulling image %q: %w", svc.Name, image, err)
 			}
 		}
 
 		containerName := req.Template.ID + "-" + svc.Name
+		req.step(svc.Name, "create")
 		id, _, err := client.CreateContainer(ctx, docker.CreateContainerRequest{
 			Name:          containerName,
 			Image:         image,
@@ -230,6 +252,7 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		}
 		result.ContainerIDs[svc.Name] = id
 
+		req.step(svc.Name, "start")
 		if err := client.StartContainer(ctx, id); err != nil {
 			rollback()
 			return InstallResult{}, fmt.Errorf("service %q: starting container: %w", svc.Name, err)
@@ -239,6 +262,7 @@ func Install(ctx context.Context, client *docker.Client, req InstallRequest) (In
 		// (連不到/舊 daemon 不支援)不擋安裝(避免把「其實裝好了、只是查不到」
 		// 誤判成失敗);只有「Inspect 成功、而且明確看到它已經退出」才視為安裝
 		// 失敗並回滾,把 exit code 一併回報,讓使用者知道是這個容器起不來。
+		req.step(svc.Name, "check")
 		if req.StartGracePeriod > 0 {
 			select {
 			case <-time.After(req.StartGracePeriod):
@@ -293,12 +317,7 @@ func Update(ctx context.Context, client *docker.Client, req InstallRequest) (Ins
 	}
 	for _, svc := range req.Template.Services {
 		image := req.Overrides[svc.Name].EffectiveImage(svc.Image)
-		progress := func(status string) {
-			if req.OnPullProgress != nil {
-				req.OnPullProgress(svc.Name, status)
-			}
-		}
-		if err := client.PullImage(ctx, image, progress); err != nil {
+		if err := req.pull(ctx, client, svc.Name, image); err != nil {
 			return InstallResult{}, fmt.Errorf("pulling new image for service %q (%s): %w — the app was left running on its current version", svc.Name, image, err)
 		}
 	}

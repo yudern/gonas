@@ -88,15 +88,40 @@ func normalizeRef(ref string) string {
 // 這支 API 有個容易踩的坑：就算最終失敗，HTTP 狀態碼通常還是 200，錯誤是
 // 包在串流某一行的 "error" 欄位裡，不檢查這個欄位就會誤判成功。
 type pullProgressLine struct {
-	Status   string `json:"status"`
-	Error    string `json:"error"`
-	Progress string `json:"progress"`
-	ID       string `json:"id"`
+	Status         string `json:"status"`
+	Error          string `json:"error"`
+	Progress       string `json:"progress"`
+	ID             string `json:"id"`
+	ProgressDetail struct {
+		Current int64 `json:"current"`
+		Total   int64 `json:"total"`
+	} `json:"progressDetail"`
+}
+
+// PullEvent 是拉取映像時的一筆進度事件(對應串流裡的一行)。ID 是映像層
+// (layer)的短 ID,沒有 ID 的是整體訊息(例如「Pulling from library/nginx」
+// 「Digest: …」「Status: Downloaded newer image …」)。Current/Total 是這一層
+// 目前下載/解壓的位元組數(只有 Downloading/Extracting 時才有)。
+type PullEvent struct {
+	ID      string `json:"id,omitempty"`
+	Status  string `json:"status"`
+	Current int64  `json:"current,omitempty"`
+	Total   int64  `json:"total,omitempty"`
 }
 
 // PullImage 從映像倉庫拉取 image（對應 `docker pull`）。onProgress 是選用的回呼,
 // 每收到一行進度就呼叫一次，可以拿去更新 Web UI 上的拉取進度條；傳 nil 表示不關心進度。
 func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(status string)) error {
+	return c.PullImageEvents(ctx, ref, func(ev PullEvent) {
+		if onProgress != nil && ev.Status != "" {
+			onProgress(ev.Status)
+		}
+	})
+}
+
+// PullImageEvents 跟 PullImage 一樣,但把每一行進度以結構化的 PullEvent
+// (含層 ID 與位元組數)回報,給前端畫「每層進度條 + 總百分比」用。
+func (c *Client) PullImageEvents(ctx context.Context, ref string, onEvent func(PullEvent)) error {
 	repo, tag := splitImageRef(ref)
 	path := "/images/create?" + url.Values{"fromImage": {repo}, "tag": {tag}}.Encode()
 
@@ -127,8 +152,8 @@ func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(stat
 		if p.Error != "" {
 			return fmt.Errorf("pulling image %q: %s", ref, p.Error)
 		}
-		if onProgress != nil && p.Status != "" {
-			onProgress(p.Status)
+		if onEvent != nil && p.Status != "" {
+			onEvent(PullEvent{ID: p.ID, Status: p.Status, Current: p.ProgressDetail.Current, Total: p.ProgressDetail.Total})
 		}
 	}
 	if err := scanner.Err(); err != nil {

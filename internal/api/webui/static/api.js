@@ -62,6 +62,15 @@ export const api = {
 
   doctorStatus: () => request("GET", "/api/v1/system/doctor"),
   doctorInstall: (apt) => request("POST", "/api/v1/system/doctor/install", { apt }),
+  doctorInstallProgress: () => request("GET", "/api/v1/system/doctor/install/progress"),
+
+  networkOverview: () => request("GET", "/api/v1/network"),
+  networkDiagnose: () => request("POST", "/api/v1/network/diagnose"),
+  networkSetDNS: (servers) => request("PUT", "/api/v1/network/dns", { servers }),
+  networkResetDNS: () => request("DELETE", "/api/v1/network/dns"),
+  networkDNSTest: () => request("POST", "/api/v1/network/dns/test"),
+  networkMirrorTest: () => request("POST", "/api/v1/network/mirrors/test"),
+  networkTool: (req) => request("POST", "/api/v1/network/tool", req),
 
   upsStatus: () => request("GET", "/api/v1/ups/status"),
   upsList: () => request("GET", "/api/v1/ups/list"),
@@ -213,7 +222,7 @@ function uploadWithProgress(path, formData, onProgress) {
     xhr.open("POST", path);
     if (onProgress) {
       xhr.upload.addEventListener("progress", (ev) => {
-        if (ev.lengthComputable) onProgress(ev.loaded / ev.total);
+        if (ev.lengthComputable) onProgress(ev.loaded / ev.total, ev.loaded, ev.total);
       });
     }
     xhr.onload = () => {
