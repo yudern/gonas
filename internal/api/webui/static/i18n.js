@@ -2053,14 +2053,61 @@ const errorPatterns = [
       "en": "The uploaded file failed to run as gonasd (--version failed); refusing to replace the running daemon.",
     },
   },
+  // 第六十三輪(使用者實機:Docker 明明「可用」,應用商店安裝卻顯示「Docker
+  // 尚未安裝或未啟動」)。根因:原本這條 pattern 只要錯誤裡出現「docker daemon」
+  // 就整句換掉,而 dockerd 回的任何錯誤(拉鏡像連不上 Docker Hub、鏡像不存在、
+  // 名稱衝突…)都長「docker daemon returned 500: …」,真正原因全被蓋成「沒裝/
+  // 沒啟動」。改成按情況分開,並一律附上原始錯誤({raw})。順序有意義:具體的在前。
   {
-    re: /docker daemon|dockerd|docker\.sock/i,
+    // 拉鏡像時連不到鏡像倉庫(國內連 Docker Hub 最常見)。
+    re: /(pulling image|images\/create|registry-1\.docker\.io|\/v2\/)[\s\S]*(i\/o timeout|TLS handshake timeout|request canceled|connection refused|connection reset|no such host|Client\.Timeout|context deadline exceeded|network is unreachable|EOF)/i,
+    raw: true,
+    msg: {
+      "zh-Hant": "拉取鏡像失敗:連不到鏡像倉庫(國內經常連不上 Docker Hub)。請在應用頁的「Docker 鏡像加速」填入可用的加速地址,或在安裝表單裡把鏡像改成國內鏡像源後重試。原始錯誤:{raw}",
+      "zh-Hans": "拉取镜像失败:连不到镜像仓库(国内经常连不上 Docker Hub)。请在应用页的「Docker 镜像加速」填入可用的加速地址,或在安装表单里把镜像改成国内镜像源后重试。原始错误:{raw}",
+      "en": "Pulling the image failed: the registry is unreachable (Docker Hub is often blocked in mainland China). Add a working mirror under “Docker registry mirrors” on the Apps page, or change the image to a mirror in the install form, then retry. Original error: {raw}",
+    },
+  },
+  {
+    // 鏡像名稱/標籤不存在,或私有倉庫要登入。
+    re: /pull access denied|manifest unknown|manifest for .* not found|repository does not exist|requested access to the resource is denied/i,
+    raw: true,
+    msg: {
+      "zh-Hant": "鏡像不存在或沒有權限拉取,請檢查鏡像名稱與標籤。原始錯誤:{raw}",
+      "zh-Hans": "镜像不存在或没有权限拉取,请检查镜像名称与标签。原始错误:{raw}",
+      "en": "The image doesn't exist or can't be pulled without credentials — check the image name and tag. Original error: {raw}",
+    },
+  },
+  {
+    // 私有倉庫走 HTTP、但 dockerd 沒把它列為不安全倉庫。
+    re: /server gave HTTP response to HTTPS client/i,
+    raw: true,
+    msg: {
+      "zh-Hant": "這個鏡像倉庫是 HTTP(沒有 HTTPS),請在應用頁「Docker 鏡像加速」的「Insecure registry」裡加上它的「位址:埠」(例如 192.168.1.10:5000)。原始錯誤:{raw}",
+      "zh-Hans": "这个镜像仓库是 HTTP(没有 HTTPS),请在应用页「Docker 镜像加速」的「Insecure registry」里加上它的「地址:端口」(例如 192.168.1.10:5000)。原始错误:{raw}",
+      "en": "This registry serves plain HTTP. Add its host:port (e.g. 192.168.1.10:5000) to “insecure registries” under “Docker registry mirrors” on the Apps page. Original error: {raw}",
+    },
+  },
+  {
+    // 真的連不到 dockerd(沒裝、沒啟動、socket 不存在)。
     // 刻意不帶結尾標點:這句常被嵌進 dashboard/apps 的 dockerWarn 模板句子裡
     // (模板自己會補標點),不留句號才不會出現「未啟動。。」這種雙標點。
+    re: /calling docker daemon|pinging docker daemon|docker daemon ping|is dockerd running|dialing docker socket|docker\.sock/i,
     msg: {
       "zh-Hant": "Docker 尚未安裝或未啟動",
       "zh-Hans": "Docker 尚未安装或未启动",
       "en": "Docker is not installed or not running",
+    },
+  },
+  {
+    // dockerd 有回應、但回了錯誤:照實顯示它說了什麼。
+    re: /docker daemon returned [^:]*:\s*([\s\S]*)$/i,
+    raw: true,
+    group: 1,
+    msg: {
+      "zh-Hant": "Docker 回報錯誤:{raw}",
+      "zh-Hans": "Docker 返回错误:{raw}",
+      "en": "Docker reported an error: {raw}",
     },
   },
 ];
@@ -2071,8 +2118,14 @@ export function translateError(rawMessage) {
   if (entry) return entry[currentLocale] || entry[FALLBACK_LOCALE] || rawMessage;
   // 收錄不到的動態錯誤:先試 pattern。
   for (const p of errorPatterns) {
-    if (p.re.test(rawMessage)) {
-      return p.msg[currentLocale] || p.msg[FALLBACK_LOCALE] || rawMessage;
+    const m = p.re.exec(rawMessage);
+    if (m) {
+      const text = p.msg[currentLocale] || p.msg[FALLBACK_LOCALE] || rawMessage;
+      if (!p.raw) return text;
+      // 帶原始錯誤:pattern 有擷取群組就用群組(例如只取 dockerd 說的那段),
+      // 否則用整句;都去掉結尾空白。
+      const detail = (p.group && m[p.group] && m[p.group].trim()) || rawMessage.trim();
+      return text.replace("{raw}", detail);
     }
   }
   // 最後的清理:把給工程師看的 "... : GET /api/v1/... first" 這種 REST 路徑/

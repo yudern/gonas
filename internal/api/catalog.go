@@ -267,4 +267,42 @@ var builtinCatalog = []appstore.AppTemplate{
 			},
 		},
 	},
+	{
+		// 第六十三輪(使用者:「我需要建一個自建私有倉庫」)。官方 registry:2 +
+		// 一個網頁瀏覽介面(joxit/docker-registry-ui,經由它內建的 nginx 反代到
+		// registry,瀏覽器不用處理 CORS)。
+		ID:          "registry",
+		Name:        "Docker 私有鏡像倉庫(Registry)",
+		Description: "在 NAS 上自建私有 Docker 鏡像倉庫,區網內的電腦可以把自己的鏡像 push 上來、再從這裡 pull,不必經過 Docker Hub。附網頁介面(預設埠 5080)可瀏覽/刪除鏡像。倉庫走 HTTP、沒有帳號密碼,只建議在區網內使用。用法:NAS 本機用 localhost:5000/名稱;其他電腦用「NAS的IP:5000/名稱」,並需在那台電腦(以及本機要用 IP 拉取時,在應用頁「Docker 鏡像加速」)的 Insecure registry 加上「NAS的IP:5000」。",
+		Category:    "utilities",
+		Services: []appstore.ServiceTemplate{
+			{
+				Name:  "app",
+				Image: "registry:2",
+				Env: []appstore.EnvVar{
+					{Key: "REGISTRY_STORAGE_DELETE_ENABLED", Default: "true", Description: "允許刪除鏡像(網頁介面的刪除按鈕需要)"},
+				},
+				Ports: []appstore.PortMapping{
+					{ContainerPort: 5000, HostPort: 5000},
+				},
+				Volumes: []appstore.VolumeMapping{
+					{ContainerPath: "/var/lib/registry"}, // 鏡像資料,建議放在陣列上
+				},
+			},
+			{
+				Name:  "ui",
+				Image: "joxit/docker-registry-ui:latest",
+				Env: []appstore.EnvVar{
+					{Key: "SINGLE_REGISTRY", Default: "true"},
+					{Key: "REGISTRY_TITLE", Default: "GoNAS Registry"},
+					{Key: "NGINX_PROXY_PASS_URL", Default: "http://registry-app:5000"}, // 同 App 網路內用容器名找到 registry
+					{Key: "DELETE_IMAGES", Default: "true"},
+					{Key: "SHOW_CONTENT_DIGEST", Default: "true"},
+				},
+				Ports: []appstore.PortMapping{
+					{ContainerPort: 80, HostPort: 5080},
+				},
+			},
+		},
+	},
 }
