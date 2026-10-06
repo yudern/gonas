@@ -29,6 +29,8 @@ func TestMain(m *testing.M) {
 	offlineRepoDir = filepath.Join(tmp, "gonas-offline-debs")
 	legacyOfflineRepoDir = filepath.Join(tmp, "gonas", "debs")
 	offlineSourceList = filepath.Join(tmp, "apt", "gonas-offline.list")
+	// 單元測試一律走「直接執行」路徑;systemd-run 路徑有專門的測試覆寫。
+	systemdRunAvailable = func() bool { return false }
 	code := m.Run()
 	os.RemoveAll(tmp)
 	os.Exit(code)
@@ -293,4 +295,78 @@ func TestOfflineRepo_RealAptEndToEnd(t *testing.T) {
 func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+// 第六十二輪:有 systemd 時,apt 必須透過 systemd-run 在獨立的 transient unit
+// 裡跑(不繼承 gonasd 的能力限制/seccomp),而且本機來源帶 APT::Sandbox::User=root。
+func TestRunApt_UsesSystemdRunWhenAvailable(t *testing.T) {
+	withOfflinePaths(t)
+	makeLegacyRepo(t)
+	old := systemdRunAvailable
+	systemdRunAvailable = func() bool { return true }
+	defer func() { systemdRunAvailable = old }()
+
+	s := newTestServer(t)
+	rr := &recordingRunner{}
+	s.runner = rr
+	if _, err := s.installOptionalPackage(context.Background(), "mergerfs"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(rr.calls) == 0 {
+		t.Fatal("no commands run")
+	}
+	for _, c := range rr.calls {
+		if !strings.HasPrefix(c, "systemd-run --wait --pipe --collect --quiet") {
+			t.Errorf("apt must run through systemd-run, got %q", c)
+		}
+		if !strings.Contains(c, "--setenv=DEBIAN_FRONTEND=noninteractive") {
+			t.Errorf("missing noninteractive env: %q", c)
+		}
+		if !strings.Contains(c, "APT::Sandbox::User=root") {
+			t.Errorf("local-only apt must not drop privileges to _apt: %q", c)
+		}
+	}
+	if !rr.sawContaining("systemd-run", "install -y --no-install-recommends mergerfs") {
+		t.Errorf("expected install via systemd-run; calls=%v", rr.calls)
+	}
+}
+
+// systemd-run 本身起不來(例如連不到 systemd)→ 退回直接執行 apt。
+func TestRunApt_FallsBackWhenSystemdRunCannotStart(t *testing.T) {
+	old := systemdRunAvailable
+	systemdRunAvailable = func() bool { return true }
+	defer func() { systemdRunAvailable = old }()
+
+	s := newTestServer(t)
+	rr := &recordingRunner{
+		failWith: errors.New("exit status 1 (stderr: Failed to connect to bus: No such file or directory)"),
+		failIf:   func(cmd string) bool { return strings.HasPrefix(cmd, "systemd-run") },
+	}
+	s.runner = rr
+	if _, err := s.runApt(context.Background(), "update"); err != nil {
+		t.Fatalf("fallback should succeed: %v", err)
+	}
+	if !rr.sawContaining("env DEBIAN_FRONTEND=noninteractive apt-get update") {
+		t.Errorf("expected direct fallback; calls=%v", rr.calls)
+	}
+}
+
+// unit 起來了、是 apt 自己失敗 → 照實回報,不能再直接重跑一次。
+func TestRunApt_AptFailureInsideUnitIsNotRetried(t *testing.T) {
+	old := systemdRunAvailable
+	systemdRunAvailable = func() bool { return true }
+	defer func() { systemdRunAvailable = old }()
+
+	s := newTestServer(t)
+	rr := &recordingRunner{
+		failWith: errors.New("exit status 100 (stderr: E: Unable to locate package foo)"),
+		failIf:   func(cmd string) bool { return true },
+	}
+	s.runner = rr
+	if _, err := s.runApt(context.Background(), "install", "-y", "foo"); err == nil {
+		t.Fatal("expected the apt error to be returned")
+	}
+	if len(rr.calls) != 1 {
+		t.Errorf("must not retry outside systemd-run when apt itself failed; calls=%v", rr.calls)
+	}
 }

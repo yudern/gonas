@@ -76,7 +76,7 @@ func TestInstallOptionalPackage_OfflineOnlyWhenBundlePresent(t *testing.T) {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
 	for _, c := range rr.calls {
-		if c == "apt-get update" {
+		if strings.HasSuffix(c, "apt-get update") {
 			t.Errorf("offline path must NOT run the network-wide 'apt-get update'; calls=%v", rr.calls)
 		}
 	}
@@ -146,7 +146,7 @@ func TestInstallOptionalPackage_OfflineAndMirrorUnreachableFailsFast(t *testing.
 		t.Fatal("expected an error when offline install fails and the mirror is unreachable")
 	}
 	for _, c := range rr.calls {
-		if c == "apt-get update" {
+		if strings.HasSuffix(c, "apt-get update") {
 			t.Errorf("must NOT run the network 'apt-get update' when the mirror is unreachable; calls=%v", rr.calls)
 		}
 	}

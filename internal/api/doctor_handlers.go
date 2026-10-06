@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -190,11 +191,9 @@ func (s *Server) handleDoctorInstall(w http.ResponseWriter, r *http.Request) {
 // (含網路)來源,對應「機器剛好有網路、要裝離線包裡沒有的東西」的情況。
 // 這才真正做到使用者要的「離線也能裝、有網路也能裝」。
 func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte, error) {
-	installArgsNoninteractive := func(extra ...string) []string {
-		a := []string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}
-		a = append(a, extra...)
-		a = append(a, "install", "-y", "--no-install-recommends", apt)
-		return a
+	installArgs := func(extra ...string) []string {
+		a := append([]string{}, extra...)
+		return append(a, "install", "-y", "--no-install-recommends", apt)
 	}
 
 	// 第六十一輪:每次安裝前先確保離線倉庫在 _apt 讀得到的位置、apt 來源指向
@@ -207,18 +206,20 @@ func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte
 	if _, statErr := os.Stat(offlineSourceList); statErr == nil {
 		// 只用本機離線來源:Dir::Etc::sourcelist 指到離線清單、sourceparts 指到
 		// /dev/null(等於「沒有其他來源檔」),apt 就完全看不到網路來源,不會連網。
+		// APT::Sandbox::User=root:讀本機 file:// 來源不需要降權成 _apt(第六十二輪
+		// 實機:降權那一步就是 seteuid 42 失敗的地方),對本機來源沒有安全差異。
 		localOnly := []string{
 			"-o", "Dir::Etc::sourcelist=" + offlineSourceList,
 			"-o", "Dir::Etc::sourceparts=/dev/null",
+			"-o", "APT::Sandbox::User=root",
 		}
 		// 只索引本機來源(file://,不連網、很快)。best-effort,但輸出保留下來,
-		// 失敗時一起回給前端(真正的錯——例如 Permission denied——常常出在這一步)。
-		updateArgs := append(append([]string{}, localOnly...), "update")
-		updOut, updErr := s.runner.Run(ctx, "apt-get", updateArgs...)
+		// 失敗時一起回給前端(真正的錯常常出在這一步)。
+		updOut, updErr := s.runApt(ctx, append(append([]string{}, localOnly...), "update")...)
 		if updErr != nil {
 			s.logger.Warn("local-only apt-get update failed (continuing to try install)", "apt", apt, "err", updErr, "out", string(updOut))
 		}
-		out, err := s.runner.Run(ctx, "env", installArgsNoninteractive(localOnly...)...)
+		out, err := s.runApt(ctx, installArgs(localOnly...)...)
 		if err == nil {
 			s.logger.Info("installed optional package from the local offline repo (no network used)", "apt", apt)
 			return out, nil
@@ -241,8 +242,77 @@ func (s *Server) installOptionalPackage(ctx context.Context, apt string) ([]byte
 	}
 
 	// 後援:走完整來源(含網路)。給「沒有離線包、但機器有網路」的情況。
-	if out, err := s.runner.Run(ctx, "apt-get", "update"); err != nil {
+	if out, err := s.runApt(ctx, "update"); err != nil {
 		s.logger.Warn("apt-get update reported an error before doctor install (continuing)", "apt", apt, "err", err, "out", string(out))
 	}
-	return s.runner.Run(ctx, "env", installArgsNoninteractive()...)
+	return s.runApt(ctx, installArgs()...)
+}
+
+// systemdRunAvailable 判斷能不能用 systemd-run 把 apt 放到一個「全新的」
+// transient service 裡跑(標準的 sd_booted 判斷 + 有 systemd-run 指令)。
+// 用 var 方便測試覆寫。
+var systemdRunAvailable = func() bool {
+	if st, err := os.Stat("/run/systemd/system"); err != nil || !st.IsDir() {
+		return false
+	}
+	_, err := exec.LookPath("systemd-run")
+	return err == nil
+}
+
+// runApt 執行一次 apt-get(DEBIAN_FRONTEND=noninteractive)。
+//
+// 第六十二輪(使用者實機截圖:「E: seteuid 42 failed - seteuid (1: Operation
+// not permitted)」「Failed to set new user ids - setresuid」):gonasd 這個
+// 行程沒有 CAP_SETUID(沙盒用 capsh 拿掉 CAP_SETUID 後一字不差重現),而
+// gonas.service 的 RestrictSUIDSGID=true 另外還會用 seccomp 擋掉「設定
+// setuid 位元」——dpkg 解開 fusermount3(mergerfs 依賴的 fuse3)、mount.nfs
+// 這類本來就帶 setuid 位元的檔案時一定會被擋。這些限制都會被 gonasd fork 出去
+// 的 apt/dpkg 繼承,所以「從 gonasd 直接跑 apt」在這台 NAS 上註定失敗。
+//
+// 修法:有 systemd 時,用 `systemd-run --wait --pipe` 讓 PID 1 另外起一個
+// 一次性的 transient service 來跑 apt——它是 systemd 直接生出來的,不繼承
+// gonasd 的能力限制/seccomp,權限跟管理員在 SSH 裡打 apt-get 一樣;--wait
+// --pipe 讓輸出跟結束碼照樣回到這裡。沒有 systemd(開發環境)或 systemd-run
+// 本身起不來時,才退回直接執行。
+func (s *Server) runApt(ctx context.Context, aptArgs ...string) ([]byte, error) {
+	if systemdRunAvailable() {
+		aptBin := "/usr/bin/apt-get"
+		if p, err := exec.LookPath("apt-get"); err == nil {
+			aptBin = p
+		}
+		args := []string{
+			"--wait", "--pipe", "--collect", "--quiet",
+			"--description=GoNAS Doctor package install",
+			"--setenv=DEBIAN_FRONTEND=noninteractive",
+			"--", aptBin,
+		}
+		args = append(args, aptArgs...)
+		out, err := s.runner.Run(ctx, "systemd-run", args...)
+		if err == nil || !systemdRunCouldNotStart(out, err) {
+			return out, err
+		}
+		s.logger.Warn("systemd-run could not start a transient unit for apt; running apt directly", "err", err, "out", string(out))
+	}
+	direct := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}, aptArgs...)
+	return s.runner.Run(ctx, "env", direct...)
+}
+
+// systemdRunCouldNotStart 分辨「systemd-run 自己沒能把 unit 起起來」(要退回
+// 直接執行)跟「unit 起來了、是 apt 本身失敗」(照實回報,不能重跑)。
+func systemdRunCouldNotStart(out []byte, err error) bool {
+	t := strings.ToLower(string(out) + " " + err.Error())
+	for _, sig := range []string{
+		"failed to start transient",
+		"failed to connect to bus",
+		"has not been booted with systemd",
+		"failed to connect to system scope bus",
+		"failed to create bus connection",
+		"executable file not found",
+		"no such file or directory (stderr: )",
+	} {
+		if strings.Contains(t, sig) {
+			return true
+		}
+	}
+	return false
 }
