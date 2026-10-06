@@ -2900,12 +2900,32 @@ async function showContainerTerminalPanel(el, containerID) {
       fontFamily: "ui-monospace, Menlo, Consolas, monospace",
       theme: { background: "#0b0f0e" },
     });
+    // fit addon 是「可選」的 —— 有就用它,沒有(使用者只放了 xterm.js + css,
+    // 沒放 addon)就自己量字元尺寸算 cols/rows 再 term.resize,一樣能自適應。
+    let fitAddon = null;
     if (window.FitAddon && window.FitAddon.FitAddon) {
-      fit = new window.FitAddon.FitAddon();
-      term.loadAddon(fit);
+      fitAddon = new window.FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
     }
     term.open(host);
-    try { if (fit) fit.fit(); } catch (e) {}
+    fit = {
+      fit: () => {
+        if (fitAddon) { try { fitAddon.fit(); } catch (e) {} return; }
+        try {
+          const probe = document.createElement("span");
+          probe.textContent = "0".repeat(10);
+          probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font:13px ui-monospace,Menlo,Consolas,monospace";
+          host.appendChild(probe);
+          const r = probe.getBoundingClientRect();
+          probe.remove();
+          const cw = Math.max(6, r.width / 10), ch = Math.max(12, r.height);
+          const cols = Math.max(20, Math.floor((host.clientWidth - 14) / cw));
+          const rows = Math.max(6, Math.floor((host.clientHeight - 14) / ch));
+          term.resize(cols, rows);
+        } catch (e) {}
+      },
+    };
+    fit.fit();
   } else {
     // 內建終端機:GonasTerminal 自己就會依容器大小算出 cols/rows(fit()),
     // 不需要外掛的 fit addon。

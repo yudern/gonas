@@ -1,11 +1,15 @@
 # 第三方前端資源(vendored)
 
 這個資料夾放「必須離線可用、所以直接打包進二進位」的第三方前端資源。
-目前需要的是互動式容器終端機用的 xterm.js:
+目前(可選)用的是互動式容器終端機要用的 xterm.js。放不放都行:不放就用內建
+終端機模擬器,放了就升級成 xterm 渲染。
 
-- `xterm.min.js`           (xterm 5.3.0)
-- `xterm.min.css`          (xterm 5.3.0)
-- `xterm-addon-fit.min.js` (xterm-addon-fit 0.8.0)
+只需要兩個檔案(fit addon 是可選的 —— 沒有它,前端會自己量字元尺寸算視窗
+大小,一樣自適應):
+
+- `xterm.min.js`           (xterm 5.3.0)  ← 必要
+- `xterm.min.css`          (xterm 5.3.0)  ← 必要
+- `xterm-addon-fit.min.js` (xterm-addon-fit 0.8.0)  ← 可選,放了會用它來 fit
 
 這些檔案由 `//go:embed webui/static` 一併打包進 gonasd,執行期以 `/vendor/...`
 提供給 Web UI。**不是必須的**:沒有這三個檔案時,互動式終端機會自動改用 GonasNAS
