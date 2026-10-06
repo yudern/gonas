@@ -245,39 +245,82 @@ func (c *Client) InspectContainer(ctx context.Context, id string) (ContainerInsp
 // 會顯示的欄位,不是完整 inspect(那有上百個欄位),多出來的 Docker 欄位會被
 // json 解碼器安靜忽略。
 type ContainerDetail struct {
-	ID      string `json:"Id"`
-	Name    string `json:"Name"`
-	Created string `json:"Created"`
-	State   struct {
-		Status    string `json:"Status"`
-		Running   bool   `json:"Running"`
-		ExitCode  int    `json:"ExitCode"`
-		StartedAt string `json:"StartedAt"`
-		Error     string `json:"Error"`
+	ID       string   `json:"Id"`
+	Name     string   `json:"Name"`
+	Created  string   `json:"Created"`
+	Path     string   `json:"Path"`
+	Args     []string `json:"Args"`
+	Image    string   `json:"Image"` // 映像 ID(sha256:…)
+	Platform string   `json:"Platform"`
+	Driver   string   `json:"Driver"`
+	State    struct {
+		Status     string `json:"Status"`
+		Running    bool   `json:"Running"`
+		Paused     bool   `json:"Paused"`
+		Restarting bool   `json:"Restarting"`
+		OOMKilled  bool   `json:"OOMKilled"`
+		Pid        int    `json:"Pid"`
+		ExitCode   int    `json:"ExitCode"`
+		StartedAt  string `json:"StartedAt"`
+		FinishedAt string `json:"FinishedAt"`
+		Error      string `json:"Error"`
+		Health     *struct {
+			Status        string `json:"Status"`
+			FailingStreak int    `json:"FailingStreak"`
+			Log           []struct {
+				ExitCode int    `json:"ExitCode"`
+				Output   string `json:"Output"`
+				End      string `json:"End"`
+			} `json:"Log"`
+		} `json:"Health"`
 	} `json:"State"`
 	RestartCount int `json:"RestartCount"`
 	Config       struct {
-		Image  string            `json:"Image"`
-		Env    []string          `json:"Env"`
-		Cmd    []string          `json:"Cmd"`
-		Labels map[string]string `json:"Labels"`
+		Hostname     string              `json:"Hostname"`
+		User         string              `json:"User"`
+		Image        string              `json:"Image"`
+		Env          []string            `json:"Env"`
+		Cmd          []string            `json:"Cmd"`
+		Entrypoint   []string            `json:"Entrypoint"`
+		WorkingDir   string              `json:"WorkingDir"`
+		Tty          bool                `json:"Tty"`
+		Labels       map[string]string   `json:"Labels"`
+		ExposedPorts map[string]struct{} `json:"ExposedPorts"`
 	} `json:"Config"`
 	HostConfig struct {
-		Memory        int64  `json:"Memory"`
-		NanoCpus      int64  `json:"NanoCpus"`
-		NetworkMode   string `json:"NetworkMode"`
+		Memory      int64    `json:"Memory"`
+		NanoCpus    int64    `json:"NanoCpus"`
+		NetworkMode string   `json:"NetworkMode"`
+		Privileged  bool     `json:"Privileged"`
+		CapAdd      []string `json:"CapAdd"`
+		Devices     []struct {
+			PathOnHost      string `json:"PathOnHost"`
+			PathInContainer string `json:"PathInContainer"`
+		} `json:"Devices"`
 		RestartPolicy struct {
-			Name string `json:"Name"`
+			Name              string `json:"Name"`
+			MaximumRetryCount int    `json:"MaximumRetryCount"`
 		} `json:"RestartPolicy"`
 	} `json:"HostConfig"`
 	Mounts []struct {
+		Type        string `json:"Type"`
+		Name        string `json:"Name"`
 		Source      string `json:"Source"`
 		Destination string `json:"Destination"`
 		RW          bool   `json:"RW"`
 	} `json:"Mounts"`
 	NetworkSettings struct {
+		Ports map[string][]struct {
+			HostIP   string `json:"HostIp"`
+			HostPort string `json:"HostPort"`
+		} `json:"Ports"`
 		Networks map[string]struct {
-			IPAddress string `json:"IPAddress"`
+			IPAddress         string   `json:"IPAddress"`
+			IPPrefixLen       int      `json:"IPPrefixLen"`
+			Gateway           string   `json:"Gateway"`
+			MacAddress        string   `json:"MacAddress"`
+			GlobalIPv6Address string   `json:"GlobalIPv6Address"`
+			Aliases           []string `json:"Aliases"`
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 }

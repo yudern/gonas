@@ -2108,7 +2108,7 @@ async function renderApps(el) {
     <div class="card">
       ${h2i("grid", esc(t("apps.catalog")))}
       ${renderCatalogSource(catalogSource)}
-      ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase)).join("")}
+      ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase, installed.some((a) => a.template && a.template.id === tmpl.id))).join("")}
     </div>
 
     <div class="card">
@@ -2591,34 +2591,88 @@ async function showContainerInspectPanel(el, containerID) {
   const body = panel.querySelector(".inspect-body");
   try {
     const d = await api.containerInspect(containerID);
-    const row = (label, val) => val ? `<div class="stat-line"><span>${esc(label)}</span><strong>${esc(val)}</strong></div>` : "";
-    const mem = d.hostConfig && d.hostConfig.Memory ? formatBytes(d.hostConfig.Memory) : t("apps.resUnlimited");
-    const cpus = d.hostConfig && d.hostConfig.NanoCpus ? (d.hostConfig.NanoCpus / 1e9) + " " + t("apps.cpuCores") : t("apps.resUnlimited");
-    const rp = (d.hostConfig && d.hostConfig.RestartPolicy && d.hostConfig.RestartPolicy.Name) || "-";
-    const nets = d.networkSettings && d.networkSettings.Networks ? d.networkSettings.Networks : {};
-    const netLines = Object.entries(nets).map(([n, v]) => `${n}${v && v.IPAddress ? " (" + v.IPAddress + ")" : ""}`).join(", ");
-    const mounts = (d.mounts || []).map((m) => `${m.Source} → ${m.Destination}${m.RW ? "" : " (ro)"}`);
-    const env = (d.config && d.config.Env) || [];
-    let html = "";
-    html += row(t("apps.detImage"), (d.config && d.config.Image) || "");
-    html += row(t("apps.detState"), (d.state ? d.state.Status : "") + (d.state && d.state.Error ? " — " + d.state.Error : ""));
-    html += row(t("apps.detCreated"), d.created ? formatDateTime(d.created) : "");
-    html += row(t("apps.detRestartPolicy"), rp + (d.restartCount ? " (×" + d.restartCount + ")" : ""));
-    html += row(t("apps.detMem"), mem);
-    html += row(t("apps.detCpu"), cpus);
-    html += row(t("apps.detNetwork"), netLines);
-    if (mounts.length) {
-      html += `<div class="inspect-group"><div class="inspect-group-h">${esc(t("apps.detMounts"))}</div>` +
-        mounts.map((m) => `<div class="inspect-kv"><code>${esc(m)}</code></div>`).join("") + `</div>`;
-    }
-    if (env.length) {
-      html += `<div class="inspect-group"><div class="inspect-group-h">${esc(t("apps.detEnv"))}</div>` +
-        env.map((e) => `<div class="inspect-kv"><code>${esc(e)}</code></div>`).join("") + `</div>`;
-    }
-    body.innerHTML = html || esc(t("apps.detNone"));
+    body.innerHTML = containerDetailHtml(d);
+    body.querySelectorAll("[data-env-reveal]").forEach((b) => b.addEventListener("click", () => {
+      const cell = body.querySelector(`[data-env-val="${b.dataset.envReveal}"]`);
+      const shown = cell.dataset.shown === "1";
+      cell.textContent = shown ? "••••••" : cell.dataset.raw;
+      cell.dataset.shown = shown ? "0" : "1";
+      b.textContent = t(shown ? "apps.detShow" : "apps.detHide");
+    }));
   } catch (err) {
     body.textContent = translateError(err.message);
   }
+}
+
+// containerDetailHtml:容器詳情(第六十六輪重做)。分組:概要 / 網路 / 埠 /
+// 掛載 / 環境變數 / 標籤。敏感環境變數(名字含 PASS/SECRET/TOKEN/KEY…)預設
+// 遮住,點「顯示」才看得到;標籤預設收合。
+function containerDetailHtml(d) {
+  const kv = (label, val, raw) => (val === undefined || val === null || val === "")
+    ? "" : `<dt>${esc(label)}</dt><dd>${raw ? val : esc(val)}</dd>`;
+  const st = d.state || {};
+  const pillKind = st.running ? "ok" : (st.status === "exited" || st.status === "dead" ? "danger" : "warn");
+  let stateHtml = `<span class="pill ${pillKind}">${esc(st.status || "?")}</span>`;
+  if (!st.running && st.exitCode !== undefined) stateHtml += ` ${esc(t("apps.detExit", { code: st.exitCode }))}`;
+  if (st.oomKilled) stateHtml += ` <span class="pill danger">OOM</span>`;
+  if (st.health) stateHtml += ` · ${esc(t("apps.detHealth"))}: <span class="pill ${st.health === "healthy" ? "ok" : st.health === "unhealthy" ? "danger" : "warn"}">${esc(st.health)}</span>`;
+  if (st.error) stateHtml += `<div class="net-check-sub">${esc(st.error)}</div>`;
+  if (st.health && st.health !== "healthy" && st.healthLast) stateHtml += `<div class="net-check-sub">${esc(st.healthLast)}</div>`;
+  const res = `${d.memory ? formatBytes(d.memory) : t("apps.resUnlimited")} / ${d.nanoCpus ? (d.nanoCpus / 1e9) + " " + t("apps.cpuCores") : t("apps.resUnlimited")}`;
+
+  let html = `<dl class="kv-grid inspect-kv-grid">
+    ${kv(t("apps.detName"), d.name)}
+    ${kv(t("apps.detImage"), d.image)}
+    ${kv(t("apps.detState"), stateHtml, true)}
+    ${kv(t("apps.detCreated"), d.created ? formatDateTime(d.created) : "")}
+    ${kv(t("apps.detStarted"), st.startedAt ? formatDateTime(st.startedAt) : "")}
+    ${!st.running ? kv(t("apps.detFinished"), st.finishedAt ? formatDateTime(st.finishedAt) : "") : ""}
+    ${kv(t("apps.detRestartPolicy"), d.restartPolicy + (d.restartCount ? " " + t("apps.detRestarted", { n: d.restartCount }) : ""))}
+    ${kv(t("apps.detResources"), res)}
+    ${kv(t("apps.detCommand"), d.command ? `<code>${esc(d.command)}</code>` : "", true)}
+    ${kv(t("apps.detWorkdir"), d.workingDir)}
+    ${kv(t("apps.detUser"), d.user)}
+    ${kv(t("apps.detHostname"), d.hostname)}
+    ${kv("PID", st.running && st.pid ? String(st.pid) : "")}
+    ${d.privileged ? kv(t("apps.detPrivileged"), `<span class="pill warn">${esc(t("apps.detYes"))}</span>`, true) : ""}
+    ${kv(t("apps.detCaps"), (d.capAdd || []).join(", "))}
+    ${kv(t("apps.detDevices"), (d.devices || []).join(", "))}
+  </dl>`;
+
+  const group = (title, inner) => `<div class="inspect-group"><div class="inspect-group-h">${esc(title)}</div>${inner}</div>`;
+  const table = (heads, rows) => `<div class="table-scroll"><table class="inspect-table"><thead><tr>${heads.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+
+  const nets = d.networks || [];
+  html += group(`${t("apps.detNetworks")} · ${d.networkMode || ""}`, nets.length
+    ? table([t("apps.detNetName"), "IP", t("apps.detGateway"), "MAC"], nets.map((n) =>
+      `<tr><td>${esc(n.name)}${n.aliases && n.aliases.length ? `<div class="net-check-sub">${esc(n.aliases.join(", "))}</div>` : ""}</td><td><code>${esc(n.ip || "—")}</code>${n.ipv6 ? `<div class="net-check-sub"><code>${esc(n.ipv6)}</code></div>` : ""}</td><td><code>${esc(n.gateway || "—")}</code></td><td><code>${esc(n.mac || "—")}</code></td></tr>`))
+    : `<div class="empty-state">${esc(t("apps.detNone"))}</div>`);
+
+  const ports = d.ports || [];
+  if (ports.length) {
+    html += group(t("apps.detPorts"), ports.map((p) => `<div class="inspect-kv"><code>${p.hostPort
+      ? esc(`${p.hostIp && p.hostIp !== "0.0.0.0" ? p.hostIp : "*"}:${p.hostPort} → ${p.container}`)
+      : esc(p.container)}</code>${p.hostPort ? "" : ` <span class="net-check-sub">${esc(t("apps.detNotPublished"))}</span>`}</div>`).join(""));
+  }
+  const mounts = d.mounts || [];
+  if (mounts.length) {
+    html += group(t("apps.detMounts"), table([t("apps.detMountType"), t("apps.detMountSrc"), t("apps.detMountDst"), ""], mounts.map((m) =>
+      `<tr><td>${esc(m.type)}</td><td><code>${esc(m.source)}</code></td><td><code>${esc(m.destination)}</code></td><td>${m.rw ? "" : `<span class="pill neutral">ro</span>`}</td></tr>`)));
+  }
+  const env = d.env || [];
+  if (env.length) {
+    html += group(`${t("apps.detEnv")} (${env.length})`, table([t("apps.detEnvKey"), t("apps.detEnvVal")], env.map((e, i) =>
+      `<tr><td><code>${esc(e.key)}</code></td><td>${e.secret
+        ? `<code data-env-val="${i}" data-raw="${esc(e.value)}" data-shown="0">••••••</code> <button type="button" class="secondary btn-xs" data-env-reveal="${i}">${esc(t("apps.detShow"))}</button>`
+        : `<code>${esc(e.value)}</code>`}</td></tr>`)));
+  }
+  const labels = Object.entries(d.labels || {});
+  if (labels.length) {
+    html += `<details class="inspect-group"><summary class="inspect-group-h" style="cursor:pointer">${esc(t("apps.detLabels"))} (${labels.length})</summary>` +
+      table([t("apps.detEnvKey"), t("apps.detEnvVal")], labels.sort().map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td><code>${esc(v)}</code></td></tr>`)) + `</details>`;
+  }
+  html += `<div class="net-check-sub" style="margin-top:10px">ID <code>${esc(d.id || "")}</code>${d.imageId ? ` · ${esc(t("apps.detImageId"))} <code>${esc(d.imageId.replace(/^sha256:/, "").slice(0, 12))}</code>` : ""}${d.platform ? " · " + esc(d.platform) : ""}</div>`;
+  return html;
 }
 
 // xtermLoader 懶載入 xterm.js(+ fit addon + css),只在使用者第一次打開終端機
@@ -3304,7 +3358,7 @@ function renderCatalogSource(src) {
   `;
 }
 
-function renderCatalogEntry(tmpl, appdataBase) {
+function renderCatalogEntry(tmpl, appdataBase, isInstalled) {
   const base = appdataBase || "/mnt/tank";
   const fields = tmpl.services.flatMap((svc) => {
     // 鏡像位址預填成範本預設,使用者可改成國內鏡像源(例如換掉 registry 前綴)。
@@ -3351,13 +3405,15 @@ function renderCatalogEntry(tmpl, appdataBase) {
         <p>${esc(translateNotice(tmpl.description || ""))}</p>
         <div class="services">${tmpl.services.map((s) => esc(s.image)).join(" · ")}</div>
       </div>
-      <button data-toggle-install="${esc(tmpl.id)}">${esc(t("apps.install"))}</button>
+      ${isInstalled
+        ? `<span class="pill ok" title="${esc(t("apps.alreadyInstalledHint"))}">${esc(t("apps.alreadyInstalled"))}</span>`
+        : `<button data-toggle-install="${esc(tmpl.id)}">${esc(t("apps.install"))}</button>`}
     </div>
-    <form class="install-form" id="install-form-${esc(tmpl.id)}" data-install="${esc(tmpl.id)}">
+    ${isInstalled ? "" : `<form class="install-form" id="install-form-${esc(tmpl.id)}" data-install="${esc(tmpl.id)}">
       <div class="install-msg"></div>
       ${fields.join("")}
       <div class="btn-row"><button type="submit">${esc(t("apps.confirmInstall"))}</button></div>
-    </form>
+    </form>`}
   `;
 }
 

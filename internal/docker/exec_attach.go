@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -118,4 +119,24 @@ func (c *Client) ResizeExec(ctx context.Context, execID string, height, width in
 		return fmt.Errorf("resizing exec %s: %w", execID, err)
 	}
 	return nil
+}
+
+// PathExists 檢查容器裡某個路徑存不存在(對應 HEAD /containers/{id}/archive,
+// Docker 用它回報檔案的 stat;不存在回 404)。給互動式終端機挑 shell 用——
+// 有些精簡映像(例如 portainer、distroless)根本沒有 /bin/sh。
+func (c *Client) PathExists(ctx context.Context, containerID, path string) (bool, error) {
+	q := url.Values{"path": {path}}.Encode()
+	resp, err := c.do(ctx, "HEAD", "/containers/"+url.PathEscape(containerID)+"/archive?"+q, nil)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("checking %s in container %s: docker daemon returned %s", path, containerID, resp.Status)
+	}
 }

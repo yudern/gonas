@@ -33,8 +33,8 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	// (例如 /bin/bash)。只收單一執行檔路徑,不接受帶參數的任意字串(避免
 	// 把使用者輸入直接拼成指令),要跑別的直接在終端機裡輸入即可。
 	shell := r.URL.Query().Get("cmd")
-	if shell == "" || strings.ContainsAny(shell, " \t\n") {
-		shell = "/bin/sh"
+	if strings.ContainsAny(shell, " \t\n") {
+		shell = ""
 	}
 
 	ws, err := upgradeWebSocket(w, r)
@@ -43,6 +43,22 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer ws.Close()
+
+	// 第六十六輪(使用者實機:Portainer 容器開終端報「exec: "/bin/sh": no such
+	// file or directory」):精簡映像不一定有 /bin/sh。沒指定 cmd 時依序找
+	// bash → sh → ash → busybox sh,一個都沒有就直接說明「這個映像沒有 shell」,
+	// 而不是丟一行 OCI runtime 錯誤。
+	if shell == "" {
+		found, noShell := s.pickContainerShell(r.Context(), id)
+		if noShell {
+			_ = ws.WriteBinary([]byte("\r\n[GoNAS] 这个容器的镜像是精简镜像,里面没有任何 shell(/bin/bash、/bin/sh 都不存在),所以无法打开终端。\r\n" +
+				"[GoNAS] This container's image has no shell (no /bin/bash or /bin/sh), so a terminal can't be opened.\r\n" +
+				"\r\n可以改用「查看日志」「详情」排查;Portainer 这类应用请直接打开它的网页界面管理。\r\n"))
+			ws.WriteClose()
+			return
+		}
+		shell = found
+	}
 
 	exec, err := s.docker.StartInteractiveExec(r.Context(), id, []string{shell})
 	if err != nil {
@@ -115,4 +131,28 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	<-outputDone
 	// readLoop 可能還卡在 ReadMessage;關 ws.conn 已在 WriteClose 做了,等它返回。
 	<-done
+}
+
+// shellCandidates 是互動式終端機依序嘗試的 shell。
+var shellCandidates = []string{"/bin/bash", "/bin/sh", "/bin/ash", "/busybox/sh"}
+
+// pickContainerShell 找出容器裡第一個存在的 shell。noShell=true 代表確定
+// 一個都沒有;查詢本身失敗(舊版 Docker 不支援等)時退回 /bin/sh 照舊嘗試。
+func (s *Server) pickContainerShell(ctx context.Context, id string) (shell string, noShell bool) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, c := range shellCandidates {
+		ok, err := s.docker.PathExists(ctx, id, c)
+		if err != nil {
+			return "/bin/sh", false
+		}
+		if ok {
+			return c, false
+		}
+	}
+	// 全部 404:也可能是容器本身不存在——那就交給後面的 exec 回報真正的錯。
+	if _, err := s.docker.InspectContainer(ctx, id); err != nil {
+		return "/bin/sh", false
+	}
+	return "", true
 }

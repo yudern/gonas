@@ -661,3 +661,13 @@ details.card > summary:hover::after { border-color: var(--accent); }
 .tool-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
 .tool-form .field { flex: 1 1 200px; margin-bottom: 0; }
 .tool-form .field[hidden] { display: none; }
+
+/* ---- 第六十六輪:容器詳情 ---- */
+.inspect-kv-grid { margin-bottom: 4px; }
+.inspect-kv-grid dd code { font-size: 12px; word-break: break-all; }
+.table-scroll { overflow-x: auto; }
+.inspect-table { font-size: 12px; }
+.inspect-table th { text-align: left; font-weight: 600; color: var(--text-faint); padding: 4px 8px 4px 0; white-space: nowrap; }
+.inspect-table td { padding: 4px 8px 4px 0; vertical-align: top; border-top: 1px solid var(--border); word-break: break-all; }
+.inspect-table td:first-child { white-space: nowrap; word-break: normal; }
+button.btn-xs { padding: 1px 8px; font-size: 11px; min-height: 0; }

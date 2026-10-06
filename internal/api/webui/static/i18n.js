@@ -1900,6 +1900,38 @@ function deepMerge(dst, src) {
 }
 deepMerge(dict, dict65);
 
+// 第六十六輪:容器詳情重做、商店「已安裝」狀態。
+const dict66 = {
+  "zh-Hant": { apps: {
+    alreadyInstalled: "已安裝", alreadyInstalledHint: "這個 App 已經裝好了,在上方「已安裝」裡管理;解除安裝(或容器被刪除)後這裡會重新出現「安裝」。",
+    detName: "名稱", detStarted: "啟動於", detFinished: "停止於", detResources: "資源上限(記憶體 / CPU)",
+    detCommand: "啟動指令", detWorkdir: "工作目錄", detUser: "執行身分", detHostname: "主機名稱", detHealth: "健康檢查",
+    detExit: "結束碼 {code}", detRestarted: "(已重啟 {n} 次)", detPrivileged: "特權模式", detYes: "是",
+    detCaps: "額外權限", detDevices: "裝置", detNetworks: "網路", detNetName: "網路", detGateway: "閘道",
+    detPorts: "埠對應", detNotPublished: "未對應到主機", detMountType: "類型", detMountSrc: "主機路徑 / 卷", detMountDst: "容器路徑",
+    detEnvKey: "名稱", detEnvVal: "值", detShow: "顯示", detHide: "隱藏", detLabels: "標籤", detImageId: "映像 ID",
+  } },
+  "zh-Hans": { apps: {
+    alreadyInstalled: "已安装", alreadyInstalledHint: "这个 App 已经装好了,在上方「已安装」里管理;卸载(或容器被删除)后这里会重新出现「安装」。",
+    detName: "名称", detStarted: "启动于", detFinished: "停止于", detResources: "资源上限(内存 / CPU)",
+    detCommand: "启动命令", detWorkdir: "工作目录", detUser: "运行用户", detHostname: "主机名", detHealth: "健康检查",
+    detExit: "退出码 {code}", detRestarted: "(已重启 {n} 次)", detPrivileged: "特权模式", detYes: "是",
+    detCaps: "额外权限", detDevices: "设备", detNetworks: "网络", detNetName: "网络", detGateway: "网关",
+    detPorts: "端口映射", detNotPublished: "未映射到主机", detMountType: "类型", detMountSrc: "主机路径 / 卷", detMountDst: "容器路径",
+    detEnvKey: "名称", detEnvVal: "值", detShow: "显示", detHide: "隐藏", detLabels: "标签", detImageId: "镜像 ID",
+  } },
+  "en": { apps: {
+    alreadyInstalled: "Installed", alreadyInstalledHint: "This app is already installed — manage it under “Installed” above. After uninstalling (or if its containers are deleted) the Install button comes back.",
+    detName: "Name", detStarted: "Started", detFinished: "Stopped", detResources: "Limits (memory / CPU)",
+    detCommand: "Command", detWorkdir: "Working dir", detUser: "User", detHostname: "Hostname", detHealth: "Health",
+    detExit: "exit code {code}", detRestarted: "(restarted {n}×)", detPrivileged: "Privileged", detYes: "yes",
+    detCaps: "Added capabilities", detDevices: "Devices", detNetworks: "Networks", detNetName: "Network", detGateway: "Gateway",
+    detPorts: "Ports", detNotPublished: "not published", detMountType: "Type", detMountSrc: "Host path / volume", detMountDst: "Container path",
+    detEnvKey: "Name", detEnvVal: "Value", detShow: "Show", detHide: "Hide", detLabels: "Labels", detImageId: "Image ID",
+  } },
+};
+deepMerge(dict, dict66);
+
 // 後端 HTTP API 回傳的 error 訊息(見 internal/api/errors.go、
 // internal/filemanager/filemanager.go、internal/docker/exec.go)固定是
 // 英文——這是一份手動維護的翻譯表,把後端「乾淨、可枚舉」的固定錯誤
@@ -2299,6 +2331,16 @@ const errorPatterns = [
       "zh-Hant": "這個鏡像倉庫是 HTTP(沒有 HTTPS),請在應用頁「Docker 鏡像加速」的「Insecure registry」裡加上它的「位址:埠」(例如 192.168.1.10:5000)。原始錯誤:{raw}",
       "zh-Hans": "这个镜像仓库是 HTTP(没有 HTTPS),请在应用页「Docker 镜像加速」的「Insecure registry」里加上它的「地址:端口」(例如 192.168.1.10:5000)。原始错误:{raw}",
       "en": "This registry serves plain HTTP. Add its host:port (e.g. 192.168.1.10:5000) to “insecure registries” under “Docker registry mirrors” on the Apps page. Original error: {raw}",
+    },
+  },
+  {
+    // 第六十六輪:精簡映像沒有 shell,「執行命令」用 sh -c 跑不起來。
+    re: /exec: "?\/bin\/(ba)?sh"?: [^\n]*no such file or directory|executable file not found in \$PATH/i,
+    raw: true,
+    msg: {
+      "zh-Hant": "這個容器的映像是精簡映像,裡面沒有 shell,無法執行指令。原始錯誤:{raw}",
+      "zh-Hans": "这个容器的镜像是精简镜像,里面没有 shell,无法执行命令。原始错误:{raw}",
+      "en": "This container's image has no shell, so commands can't be run in it. Original error: {raw}",
     },
   },
   {

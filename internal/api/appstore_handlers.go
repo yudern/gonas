@@ -11,7 +11,78 @@ import (
 )
 
 func (s *Server) handleAppstoreListInstalled(w http.ResponseWriter, r *http.Request) {
+	s.reconcileInstalledApps(r.Context())
 	writeJSON(w, http.StatusOK, s.store.Snapshot().InstalledApps)
+}
+
+// reconcileInstalledApps(第六十六輪,使用者:「容器刪除掉,應重新顯示安裝」)
+// 把「容器已經在 GoNAS 之外被刪光」的 App 從已安裝清單移除——例如在
+// Portainer 或命令列 docker rm 掉了。否則它會一直顯示「已安裝」、商店也不能
+// 再裝(ID 衝突)。只在以下條件都成立時才移除,寧可不清也不誤刪:
+//   - 連得到 Docker、容器清單讀取成功(連不到時什麼都不做);
+//   - 這個 App 的所有容器(依 com.gonas.app 標籤,或安裝時記下的容器 ID)
+//     一個都不存在;
+//   - 沒有安裝/更新/解除安裝正在進行(搶 appInstalling 旗標,搶不到就跳過——
+//     更新途中舊容器會短暫消失,不能被誤判)。
+func (s *Server) reconcileInstalledApps(ctx context.Context) {
+	if s.docker == nil || len(s.store.Snapshot().InstalledApps) == 0 {
+		return
+	}
+	if !s.appInstalling.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.appInstalling.Store(false)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	containers, err := s.docker.ListContainers(ctx, true)
+	if err != nil {
+		return
+	}
+	present := map[string]bool{}
+	ids := map[string]bool{}
+	for _, c := range containers {
+		if app := c.Labels["com.gonas.app"]; app != "" {
+			present[app] = true
+		}
+		ids[c.ID] = true
+	}
+	var stale []string
+	for _, app := range s.store.Snapshot().InstalledApps {
+		if present[app.Template.ID] {
+			continue
+		}
+		alive := false
+		for _, id := range app.Result.ContainerIDs {
+			if ids[id] {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			stale = append(stale, app.Template.ID)
+		}
+	}
+	if len(stale) == 0 {
+		return
+	}
+	drop := map[string]bool{}
+	for _, id := range stale {
+		drop[id] = true
+	}
+	if err := s.store.Update(func(st *state.State) error {
+		kept := make([]state.InstalledApp, 0, len(st.InstalledApps))
+		for _, a := range st.InstalledApps {
+			if !drop[a.Template.ID] {
+				kept = append(kept, a)
+			}
+		}
+		st.InstalledApps = kept
+		return nil
+	}); err != nil {
+		s.logger.Warn("dropping installed apps whose containers are gone failed", "apps", stale, "err", err)
+		return
+	}
+	s.logger.Info("app containers were removed outside GoNAS; dropped stale installed-app records so they can be reinstalled", "apps", stale)
 }
 
 // installAppRequest 是 POST /api/v1/appstore/apps 的請求 body。恰好要帶
@@ -245,7 +316,7 @@ func (s *Server) recreateAppInBackground(id string, tmpl appstore.AppTemplate, o
 			}
 			if !stillThere {
 				if uerr := s.store.Update(func(st *state.State) error {
-					kept := st.InstalledApps[:0]
+					kept := make([]state.InstalledApp, 0, len(st.InstalledApps))
 					for _, a := range st.InstalledApps {
 						if a.Template.ID != id {
 							kept = append(kept, a)
@@ -347,7 +418,7 @@ func (s *Server) handleAppstoreUninstall(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := s.store.Update(func(st *state.State) error {
-		kept := st.InstalledApps[:0]
+		kept := make([]state.InstalledApp, 0, len(st.InstalledApps))
 		for _, app := range st.InstalledApps {
 			if app.Template.ID != id {
 				kept = append(kept, app)

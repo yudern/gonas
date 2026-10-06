@@ -242,7 +242,7 @@ func (s *Server) handleContainerInspect(w http.ResponseWriter, r *http.Request) 
 		writeError(w, dockerErrStatus(err, http.StatusInternalServerError), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, newContainerDetailView(detail))
 }
 
 // containerRenameRequest 是 POST .../rename 的 body。
