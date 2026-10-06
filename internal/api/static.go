@@ -22,5 +22,12 @@ func webUIHandler() http.Handler {
 		// 而不是包裝成執行期錯誤讓每個請求都悄悄失敗。
 		panic("api: embedding webui/static: " + err.Error())
 	}
-	return http.FileServer(http.FS(sub))
+	fsrv := http.FileServer(http.FS(sub))
+	// 第六十四輪:內嵌檔案沒有修改時間(沒有 Last-Modified/ETag),瀏覽器可能
+	// 沿用舊的 app.js/i18n.js——離線更新 gonasd 之後介面還在跑舊前端,修好的
+	// 東西看起來「沒修」。明確要求每次重新驗證(檔案很小、只在區網內)。
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		fsrv.ServeHTTP(w, r)
+	})
 }

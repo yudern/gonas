@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,9 +22,21 @@ import (
 
 const defaultSocketPath = "/var/run/docker.sock"
 
+// responseHeaderTimeout 是一般 API 呼叫「等回應標頭」的上限(var 方便測試縮短)。
+var responseHeaderTimeout = 30 * time.Second
+
 // Client 是對單一 Docker daemon 的最小 REST client。
 type Client struct {
 	httpClient *http.Client
+	// longHTTPClient 給「dockerd 可能很久才回標頭」的長操作(目前是拉映像)用:
+	// 跟 httpClient 一樣走 Unix socket,但「不設」ResponseHeaderTimeout。
+	// 第六十四輪(使用者實機:設了鏡像加速、Docker 明明可用,裝 App 仍報
+	// 「Docker 尚未安裝或未啟動」)根因:dockerd 的 POST /images/create 要等
+	// 解析完 manifest、寫出第一行進度才會送出 HTTP 標頭;Docker Hub/加速源
+	// 一慢就超過 30 秒,ResponseHeaderTimeout 先把請求砍掉,錯誤又帶著
+	// 「is dockerd running」字樣,被前端翻成「沒裝/沒啟動」。拉映像的總時間
+	// 由呼叫端的 context(安裝流程 30 分鐘)控制。
+	longHTTPClient *http.Client
 	// baseURL 預設是 "http://docker" 這個佔位主機名稱,實際連線由 DialContext
 	// 接管走 Unix socket。單元測試會用 WithBaseURL 換成 httptest.Server 的
 	// 真實網址,搭配 WithHTTPClient 換成一般的 TCP client,這樣完全不用碰
@@ -49,7 +62,7 @@ func WithAPIVersion(v string) Option {
 
 // WithHTTPClient 換掉底層的 http.Client,測試時用來接一般 TCP 而不是 Unix socket。
 func WithHTTPClient(hc *http.Client) Option {
-	return func(c *Client) { c.httpClient = hc }
+	return func(c *Client) { c.httpClient = hc; c.longHTTPClient = hc }
 }
 
 // WithBaseURL 換掉預設的 "http://docker" 佔位網址,測試時指向 httptest.Server。
@@ -64,17 +77,20 @@ func NewClient(socketPath string, opts ...Option) *Client {
 		socketPath = defaultSocketPath
 	}
 
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			// 連線本身要快速失敗(socket 不在/dockerd 沒跑),但「連上之後
-			// 傳多久」不在這裡限制——見下面為何不設 http.Client.Timeout。
-			d := net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, "unix", socketPath)
-		},
-		// 「送出請求後、拿到回應標頭前」的上限:dockerd 活著但卡住時能快速
-		// 報錯,又不會影響拿到標頭之後的長時間 body 串流(拉映像/看 log)。
-		ResponseHeaderTimeout: 30 * time.Second,
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		// 連線本身要快速失敗(socket 不在/dockerd 沒跑),但「連上之後
+		// 傳多久」不在這裡限制——見下面為何不設 http.Client.Timeout。
+		d := net.Dialer{Timeout: 10 * time.Second}
+		return d.DialContext(ctx, "unix", socketPath)
 	}
+	transport := &http.Transport{
+		DialContext: dial,
+		// 「送出請求後、拿到回應標頭前」的上限:dockerd 活著但卡住時能快速
+		// 報錯,又不會影響拿到標頭之後的長時間 body 串流(看 log)。
+		// 拉映像不適用(見 longHTTPClient)。
+		ResponseHeaderTimeout: responseHeaderTimeout,
+	}
+	longTransport := &http.Transport{DialContext: dial}
 
 	c := &Client{
 		// 第六十輪(QA+產品覆核 P0):這裡原本設了 http.Client.Timeout=30s。
@@ -86,9 +102,10 @@ func NewClient(socketPath string, opts ...Option) *Client {
 		// 該等多久(ping 用請求 context、pull 用很寬鬆的背景 context),再靠上面
 		// transport 的 DialTimeout / ResponseHeaderTimeout 擋住「socket 不通/
 		// daemon 卡死」這兩種真正該快速失敗的情況。
-		httpClient: &http.Client{Transport: transport},
-		baseURL:    "http://docker",
-		socketPath: socketPath,
+		httpClient:     &http.Client{Transport: transport},
+		longHTTPClient: &http.Client{Transport: longTransport},
+		baseURL:        "http://docker",
+		socketPath:     socketPath,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -105,6 +122,15 @@ type apiError struct {
 // 主機名稱用 "docker" 只是佔位符 —— 實際連線完全由上面的 DialContext 接管,
 // 不會真的做 DNS 查詢。
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doWith(ctx, c.httpClient, method, path, body)
+}
+
+// doLong 跟 do 一樣,但不受 ResponseHeaderTimeout 限制(拉映像用)。
+func (c *Client) doLong(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doWith(ctx, c.longHTTPClient, method, path, body)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, body io.Reader) (*http.Response, error) {
 	url := c.baseURL + c.versionedPath(path)
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
@@ -114,9 +140,15 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("calling docker daemon %s %s: %w (is dockerd running / socket reachable?)", method, path, err)
+		// 只有「連不上 socket」才是 dockerd 沒裝/沒跑;其餘(逾時、被取消、
+		// 連線中斷)照實回報,不要再讓前端誤翻成「Docker 尚未安裝或未啟動」。
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return nil, fmt.Errorf("calling docker daemon %s %s: %w (is dockerd running / socket reachable?)", method, path, err)
+		}
+		return nil, fmt.Errorf("docker request %s %s did not complete: %w", method, path, err)
 	}
 	return resp, nil
 }

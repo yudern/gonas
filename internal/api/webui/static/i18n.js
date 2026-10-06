@@ -2100,6 +2100,16 @@ const errorPatterns = [
     },
   },
   {
+    // 第六十四輪:連上了 dockerd,但請求逾時/中斷(不是沒裝、沒啟動)。
+    re: /docker request \S+ \S+ did not complete/i,
+    raw: true,
+    msg: {
+      "zh-Hant": "Docker 有在執行,但這次請求沒有完成(逾時或中斷),請稍後再試。原始錯誤:{raw}",
+      "zh-Hans": "Docker 在运行,但这次请求没有完成(超时或中断),请稍后再试。原始错误:{raw}",
+      "en": "Docker is running, but this request didn't complete (timed out or was interrupted). Please try again. Original error: {raw}",
+    },
+  },
+  {
     // dockerd 有回應、但回了錯誤:照實顯示它說了什麼。
     re: /docker daemon returned [^:]*:\s*([\s\S]*)$/i,
     raw: true,

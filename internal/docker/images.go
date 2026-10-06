@@ -100,7 +100,7 @@ func (c *Client) PullImage(ctx context.Context, ref string, onProgress func(stat
 	repo, tag := splitImageRef(ref)
 	path := "/images/create?" + url.Values{"fromImage": {repo}, "tag": {tag}}.Encode()
 
-	resp, err := c.do(ctx, "POST", path, nil)
+	resp, err := c.doLong(ctx, "POST", path, nil)
 	if err != nil {
 		return fmt.Errorf("pulling image %q: %w", ref, err)
 	}
