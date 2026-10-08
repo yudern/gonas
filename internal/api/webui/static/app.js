@@ -3887,6 +3887,87 @@ function isBooleanMetric(metric) {
   return metric === "arrayFailed" || metric === "smartFailed";
 }
 
+// renderTimeCard 畫「時間與時區」卡(第七十五輪:NAS 最基礎的系統時間設定)。
+function renderTimeCard(data, isAdmin) {
+  const st = data && data.status;
+  if (!st) {
+    return `<div class="card collapsible-card collapsed">${h2i("calendar", esc(t("time.title")))}<p class="hint">${esc(t("time.cannotManage"))}</p></div>`;
+  }
+  const ntpPill = st.ntpEnabled
+    ? `<span class="pill ${st.ntpSynchronized ? "ok" : "warn"}">${esc(st.ntpSynchronized ? t("time.ntpSynced") : t("time.ntpNotSynced"))}</span>`
+    : `<span class="pill neutral">${esc(t("time.ntpOff"))}</span>`;
+  const canEdit = isAdmin && st.canManage;
+  const controls = !canEdit ? (st.canManage ? "" : `<p class="hint" style="margin-top:10px">${esc(t("time.cannotManage"))}</p>`) : `
+    <div class="field" style="margin-top:14px;max-width:420px">
+      <label>${esc(t("time.timezone"))}</label>
+      <input type="text" id="tz-input" list="tz-list" value="${esc(st.timezone || "")}" autocomplete="off">
+      <datalist id="tz-list">${(data.timezones || []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist>
+      <div class="hint">${esc(t("time.timezoneHint"))}</div>
+    </div>
+    <div class="btn-row"><button type="button" id="tz-save">${esc(t("time.saveTimezone"))}</button></div>
+    <div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)">
+      <div class="checkbox-row"><label><input type="checkbox" id="ntp-toggle" ${st.ntpEnabled ? "checked" : ""}> ${esc(t("time.enableNtp"))}</label></div>
+    </div>
+    <div id="manual-time-wrap" style="margin-top:14px" ${st.ntpEnabled ? "hidden" : ""}>
+      <div class="field" style="max-width:300px">
+        <label>${esc(t("time.manualTitle"))}</label>
+        <input type="datetime-local" id="manual-time" step="1">
+        <div class="hint">${esc(t("time.manualHint"))}</div>
+      </div>
+      <div class="btn-row"><button type="button" class="secondary" id="manual-time-save">${esc(t("time.setTime"))}</button></div>
+    </div>`;
+  return `
+    <div class="card">
+      ${h2i("calendar", esc(t("time.title")))}
+      <dl class="kv-grid" style="max-width:520px">
+        <dt>${esc(t("time.currentTime"))}</dt><dd><strong id="live-clock" data-unix="${st.unixSeconds}" data-tz="${esc(st.timezone || "UTC")}" style="font-variant-numeric:tabular-nums">${esc(st.localTime || "")}</strong></dd>
+        <dt>${esc(t("time.timezone"))}</dt><dd><code>${esc(st.timezone || "—")}</code></dd>
+        <dt>${esc(t("time.ntp"))}</dt><dd>${ntpPill}</dd>
+      </dl>
+      <div id="time-msg"></div>
+      ${controls}
+    </div>`;
+}
+
+function wireTimeCard(el, data) {
+  // 即時走秒:用瀏覽器 Intl 以該時區每秒更新一次。元素不在了就停。
+  const clock = el.querySelector("#live-clock");
+  if (clock) {
+    const tz = clock.dataset.tz || "UTC";
+    const fmt = (() => { try { return new Intl.DateTimeFormat(getLocale(), { timeZone: tz, dateStyle: "medium", timeStyle: "medium", hour12: false }); } catch { return null; } })();
+    if (fmt) {
+      const id = setInterval(() => {
+        if (!document.body.contains(clock)) { clearInterval(id); return; }
+        clock.textContent = fmt.format(new Date());
+      }, 1000);
+    }
+  }
+  const msgBox = el.querySelector("#time-msg");
+  const refresh = () => renderSystem(el);
+  const tzSave = el.querySelector("#tz-save");
+  if (tzSave) tzSave.addEventListener("click", async () => {
+    const tz = (el.querySelector("#tz-input").value || "").trim();
+    tzSave.disabled = true;
+    try { await api.setTimezone(tz); if (msgBox) msgBox.innerHTML = msg("ok", t("time.saved")); setTimeout(refresh, 600); }
+    catch (err) { tzSave.disabled = false; if (msgBox) msgBox.innerHTML = msg("error", translateError(err.message)); }
+  });
+  const ntp = el.querySelector("#ntp-toggle");
+  if (ntp) ntp.addEventListener("change", async () => {
+    const wrap = el.querySelector("#manual-time-wrap");
+    if (wrap) wrap.hidden = ntp.checked;
+    try { await api.setNTP(ntp.checked); if (msgBox) msgBox.innerHTML = msg("ok", t("time.saved")); setTimeout(refresh, 800); }
+    catch (err) { if (msgBox) msgBox.innerHTML = msg("error", translateError(err.message)); }
+  });
+  const mSave = el.querySelector("#manual-time-save");
+  if (mSave) mSave.addEventListener("click", async () => {
+    const v = el.querySelector("#manual-time").value;
+    if (!v) return;
+    mSave.disabled = true;
+    try { await api.setManualTime(v); if (msgBox) msgBox.innerHTML = msg("ok", t("time.saved")); setTimeout(refresh, 600); }
+    catch (err) { mSave.disabled = false; if (msgBox) msgBox.innerHTML = msg("error", translateError(err.message)); }
+  });
+}
+
 // renderUPSCard 畫 UPS(不斷電系統)狀態 + 設定。狀態:查到就顯示市電/電池、
 // 電量、預估續航、負載;查不到(NUT 沒裝/沒設定)顯示提示。設定表單只有
 // 管理者看得到(啟用、UPS 名稱、市電中斷自動關機、續航門檻)。
@@ -4408,11 +4489,14 @@ async function renderSystem(el) {
     api.upsConfig().catch(() => ({})),
     api.upsList().catch(() => []),
   ]);
+  const timeData = await api.systemTime().catch(() => null);
   const isAdmin = me.role === "admin";
 
   el.innerHTML = `
     <h1>${esc(t("system.title"))}</h1>
     <p class="page-subtitle">${esc(t("system.subtitle"))}</p>
+
+    ${renderTimeCard(timeData, isAdmin)}
 
     ${isAdmin ? `
     <div class="card">
@@ -4455,6 +4539,7 @@ async function renderSystem(el) {
   wireUPS(el);
   if (isAdmin) wirePowerButtons(el);
   attachHTTPSFormHandlers(el);
+  wireTimeCard(el, timeData);
 }
 
 // ---------- 安全 ----------

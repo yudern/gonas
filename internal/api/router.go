@@ -514,6 +514,10 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/network/mirrors/test", s.requireAdmin(s.handleNetworkMirrorTest))
 	mux.HandleFunc("POST /api/v1/network/tool", s.requireAdmin(s.handleNetworkTool))
 
+	mux.HandleFunc("GET /api/v1/system/time", s.requireAuth(s.handleTimeGet))
+	mux.HandleFunc("PUT /api/v1/system/time/timezone", s.requireAdmin(s.handleTimeSetTimezone))
+	mux.HandleFunc("PUT /api/v1/system/time/ntp", s.requireAdmin(s.handleTimeSetNTP))
+	mux.HandleFunc("PUT /api/v1/system/time/manual", s.requireAdmin(s.handleTimeSetManual))
 	mux.HandleFunc("GET /api/v1/ups/status", s.requireAuth(s.handleUPSStatus))
 	mux.HandleFunc("GET /api/v1/ups/list", s.requireAuth(s.handleUPSList))
 	mux.HandleFunc("GET /api/v1/ups/config", s.requireAuth(s.handleUPSConfigGet))

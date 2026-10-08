@@ -72,6 +72,10 @@ export const api = {
   networkMirrorTest: () => request("POST", "/api/v1/network/mirrors/test"),
   networkTool: (req) => request("POST", "/api/v1/network/tool", req),
 
+  systemTime: () => request("GET", "/api/v1/system/time"),
+  setTimezone: (timezone) => request("PUT", "/api/v1/system/time/timezone", { timezone }),
+  setNTP: (enabled) => request("PUT", "/api/v1/system/time/ntp", { enabled }),
+  setManualTime: (t) => request("PUT", "/api/v1/system/time/manual", { time: t }),
   upsStatus: () => request("GET", "/api/v1/ups/status"),
   upsList: () => request("GET", "/api/v1/ups/list"),
   upsConfig: () => request("GET", "/api/v1/ups/config"),

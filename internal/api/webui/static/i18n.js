@@ -48,6 +48,14 @@ const dict = {
       registry: { name: "Docker 私有鏡像倉庫(Registry)", desc: "在 NAS 上自建私有 Docker 鏡像倉庫,區網內的電腦可以把自己的鏡像 push 上來、再從這裡 pull,不必經過 Docker Hub。附網頁介面(預設埠 5080)可瀏覽/刪除鏡像。倉庫走 HTTP、沒有帳號密碼,只建議在區網內使用。用法:NAS 本機用 localhost:5000/名稱;其他電腦用「NAS的IP:5000/名稱」,並需在那台電腦(以及本機要用 IP 拉取時,在應用頁「Docker 鏡像加速」)的 Insecure registry 加上「NAS的IP:5000」。", env: { REGISTRY_STORAGE_DELETE_ENABLED: "允許刪除鏡像(網頁介面的刪除按鈕需要)" } },
     },
     appcatEnv: { PUID: "執行容器的使用者 ID", PGID: "執行容器的群組 ID", TZ: "時區,例如 Asia/Taipei" },
+    time: {
+      title: "時間與時區", currentTime: "目前時間", timezone: "時區", ntp: "網路校時(NTP)",
+      ntpSynced: "已與時間伺服器同步", ntpNotSynced: "已開啟但尚未同步", ntpOff: "未開啟自動校時",
+      enableNtp: "自動與網路時間伺服器同步(建議開啟)", saveTimezone: "儲存時區",
+      timezoneHint: "輸入或選擇時區,例如 Asia/Taipei、Asia/Shanghai。",
+      manualTitle: "手動設定時間", manualHint: "需先關閉上面的 NTP 自動校時才能手動設定。", setTime: "設定時間",
+      cannotManage: "這台機器無法從這裡管理時間(需要 systemd / timedatectl)。", saved: "已更新時間設定。",
+    },
     common: {
       loading: "載入中…", loadFailed: "載入失敗:{msg}",
       save: "儲存", saved: "已儲存。", cancel: "取消", delete: "刪除", rename: "重新命名",
@@ -619,6 +627,14 @@ const dict = {
       registry: { name: "Docker 私有镜像仓库(Registry)", desc: "在 NAS 上自建私有 Docker 镜像仓库,局域网内的电脑可以把自己的镜像 push 上来、再从这里 pull,不必经过 Docker Hub。附网页界面(默认端口 5080)可浏览/删除镜像。仓库走 HTTP、没有账号密码,只建议在局域网内使用。用法:NAS 本机用 localhost:5000/名称;其他电脑用「NAS的IP:5000/名称」,并需在那台电脑(以及本机要用 IP 拉取时,在应用页「Docker 镜像加速」)的 Insecure registry 加上「NAS的IP:5000」。", env: { REGISTRY_STORAGE_DELETE_ENABLED: "允许删除镜像(网页界面的删除按钮需要)" } },
     },
     appcatEnv: { PUID: "运行容器的用户 ID", PGID: "运行容器的用户组 ID", TZ: "时区,例如 Asia/Shanghai" },
+    time: {
+      title: "时间与时区", currentTime: "当前时间", timezone: "时区", ntp: "网络校时(NTP)",
+      ntpSynced: "已与时间服务器同步", ntpNotSynced: "已开启但尚未同步", ntpOff: "未开启自动校时",
+      enableNtp: "自动与网络时间服务器同步(建议开启)", saveTimezone: "保存时区",
+      timezoneHint: "输入或选择时区,例如 Asia/Shanghai、Asia/Taipei。",
+      manualTitle: "手动设置时间", manualHint: "需先关闭上面的 NTP 自动校时才能手动设置。", setTime: "设置时间",
+      cannotManage: "这台机器无法从这里管理时间(需要 systemd / timedatectl)。", saved: "已更新时间设置。",
+    },
     common: {
       loading: "加载中…", loadFailed: "加载失败:{msg}",
       save: "保存", saved: "已保存。", cancel: "取消", delete: "删除", rename: "重命名",
@@ -1190,6 +1206,14 @@ const dict = {
       registry: { name: "Private Docker Registry", desc: "Run a private Docker registry on the NAS: machines on your LAN can push their own images here and pull them back without going through Docker Hub. Includes a web UI (default port 5080) to browse/delete images. It uses plain HTTP with no auth, so use it on a trusted LAN only. Usage: on the NAS use localhost:5000/name; from other machines use 'NAS-IP:5000/name', and add 'NAS-IP:5000' to that machine's insecure-registries (and, to pull by IP on the NAS itself, under Apps → Docker registry mirrors).", env: { REGISTRY_STORAGE_DELETE_ENABLED: "Allow deleting images (required by the web UI's delete button)." } },
     },
     appcatEnv: { PUID: "User ID that runs the container", PGID: "Group ID that runs the container", TZ: "Timezone, e.g. Asia/Shanghai" },
+    time: {
+      title: "Time & Time Zone", currentTime: "Current time", timezone: "Time zone", ntp: "Network time (NTP)",
+      ntpSynced: "Synchronized with time server", ntpNotSynced: "On, not yet synchronized", ntpOff: "Automatic sync off",
+      enableNtp: "Automatically sync with a network time server (recommended)", saveTimezone: "Save time zone",
+      timezoneHint: "Type or pick a time zone, e.g. Asia/Shanghai, America/New_York.",
+      manualTitle: "Set time manually", manualHint: "Turn off NTP above before setting the time manually.", setTime: "Set time",
+      cannotManage: "This machine can't manage time from here (requires systemd / timedatectl).", saved: "Time settings updated.",
+    },
     common: {
       loading: "Loading…", loadFailed: "Failed to load: {msg}",
       save: "Save", saved: "Saved.", cancel: "Cancel", delete: "Delete", rename: "Rename",
