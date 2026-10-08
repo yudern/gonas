@@ -469,6 +469,7 @@ async function renderDashboard(el) {
     api.doctorStatus().catch(() => []),
     api.containers().catch(() => []),
   ]);
+  const sys = await api.monitorSystem().catch(() => null);
   const isAdmin = me.role === "admin";
   const missingDeps = (deps || []).filter((d) => !d.installed);
   // 容器运行概览(第六十轮产品复审):仪表盘一眼看出有没有容器挂了。
@@ -484,10 +485,10 @@ async function renderDashboard(el) {
     <h1>${esc(t("dashboard.title"))}</h1>
     <p class="page-subtitle">${esc(t("dashboard.subtitle", { version: version.version, os: version.goos, arch: version.goarch, uptime: formatUptime(health.uptimeSeconds) }))}</p>
     <div class="grid">
-      ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok", "server")}
-      ${statTile("Docker", dockerValue, dockerStatus.available ? "ok" : "danger", "docker")}
-      ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
-      ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
+      ${statTile(t("dashboard.systemStatus"), t("dashboard.running"), "ok", "server", "#/monitor")}
+      ${statTile("Docker", dockerValue, dockerStatus.available ? "ok" : "danger", "docker", "#/apps")}
+      ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array", "#/storage")}
+      ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks", "#/storage")}
     </div>
     ${!dockerStatus.available ? msgAction("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") }), "#/doctor", t("doctor.dashButton")) : ""}
     ${missingDeps.length ? `
@@ -509,10 +510,37 @@ async function renderDashboard(el) {
       <div id="dash-array-msg"></div>
       <div class="btn-row"><button type="button" id="dash-start-array">${esc(t("storage.startArray"))}</button></div>
     </div>` : ""}
+    ${sys ? `
     <div class="card">
-      ${h2i("link", esc(t("dashboard.quickLinks")))}
-      <p style="color:var(--text-dim);font-size:13px;margin:0">${t("dashboard.quickLinksBody")}</p>
-    </div>
+      ${h2i("pulse", esc(t("dashboard.resourceUsage")))}
+      <div class="res-grid">
+        <div class="res-item">
+          <div class="res-head"><span>${esc(t("monitor.cpuUsage"))}</span><strong class="${percentClass(sys.cpuPercent)}">${esc(formatPercent(sys.cpuPercent))}</strong></div>
+          ${progressBar(sys.cpuPercent, "")}
+        </div>
+        <div class="res-item">
+          <div class="res-head"><span>${esc(t("monitor.memUsage"))}</span><strong class="${percentClass(sys.memPercent)}">${esc(formatPercent(sys.memPercent))}</strong></div>
+          ${progressBar(sys.memPercent, sys.memTotalBytes ? `${formatBytes(sys.memUsedBytes)} / ${formatBytes(sys.memTotalBytes)}` : "")}
+        </div>
+        <div class="res-item">
+          <div class="res-head"><span>${esc(t("monitor.diskUsage"))}${sys.diskPath ? ` <code>${esc(sys.diskPath)}</code>` : ""}</span><strong class="${percentClass(sys.diskPercent)}">${esc(formatPercent(sys.diskPercent))}</strong></div>
+          ${progressBar(sys.diskPercent, sys.diskTotalBytes ? `${formatBytes(sys.diskUsedBytes)} / ${formatBytes(sys.diskTotalBytes)}` : "")}
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:14px"><a href="#/monitor" class="secondary">${esc(t("dashboard.goMonitor"))}</a></div>
+    </div>` : ""}
+    ${dockerStatus.available && containers && containers.length ? `
+    <div class="card">
+      ${h2i("box", esc(t("dashboard.appsOverview", { running, stopped })))}
+      <div class="dash-apps">
+        ${containers.slice(0, 8).map((c) => {
+          const nm = (c.Names && c.Names[0] ? c.Names[0].replace(/^\//, "") : (c.Id || "").slice(0, 12));
+          return `<div class="dash-app"><span class="net-dot ${c.State === "running" ? "" : "fail"}"></span><span class="dash-app-name">${esc(nm)}</span><span class="dash-app-img">${esc(c.Image || "")}</span></div>`;
+        }).join("")}
+      </div>
+      ${containers.length > 8 ? `<p class="hint" style="margin:8px 0 0">${esc(t("dashboard.appsMore", { n: containers.length - 8 }))}</p>` : ""}
+      <div class="btn-row" style="margin-top:14px"><a href="#/apps" class="secondary">${esc(t("dashboard.goApps"))}</a></div>
+    </div>` : ""}
   `;
 
   const dashStart = el.querySelector("#dash-start-array");
@@ -841,11 +869,15 @@ const STAT_ICONS = {
   disks: '<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="2"/>',
 };
 
-function statTile(label, value, cls, icon) {
+function statTile(label, value, cls, icon, href) {
   const ic = icon && STAT_ICONS[icon]
     ? `<svg class="stat-icon" viewBox="0 0 20 20" aria-hidden="true">${STAT_ICONS[icon]}</svg>`
     : "";
-  return `<div class="stat-tile"><div class="stat-tile-head"><span class="label">${esc(label)}</span>${ic}</div><div class="value ${cls}">${esc(value)}</div></div>`;
+  const inner = `<div class="stat-tile-head"><span class="label">${esc(label)}</span>${ic}</div><div class="value ${cls}">${esc(value)}</div>`;
+  // 带 href 的磚子可点击直接跳到对应页面(第七十二轮:使用者要「点 Docker 跳 Docker」)。
+  return href
+    ? `<a class="stat-tile stat-link" href="${esc(href)}">${inner}<span class="stat-go" aria-hidden="true"></span></a>`
+    : `<div class="stat-tile">${inner}</div>`;
 }
 
 // SECTION_ICONS 是各頁區塊標題(卡片 h2)前的小圖示。跟 STAT_ICONS 與

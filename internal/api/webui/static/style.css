@@ -1232,3 +1232,28 @@ h2.card-h2 { font-size: 15.5px; font-weight: 650; margin-bottom: 18px; }
   .content { padding: 22px 16px 56px; }
   .card { padding: 18px 16px; }
 }
+
+
+/* ---- 第七十二輪:儀表盤充實(可點磚子、資源用量、應用概覽) ---- */
+a.stat-link { text-decoration: none; color: inherit; position: relative; display: block; transition: box-shadow .15s var(--ease), transform .12s var(--ease); }
+a.stat-link:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(20,30,40,.05), 0 12px 28px -10px rgba(20,30,40,.18); }
+a.stat-link .stat-go {
+  position: absolute; right: 16px; bottom: 16px; width: 7px; height: 7px;
+  border-right: 2px solid var(--text-faint); border-top: 2px solid var(--text-faint);
+  transform: rotate(45deg); opacity: 0; transition: opacity .15s var(--ease), right .15s var(--ease);
+}
+a.stat-link:hover .stat-go { opacity: .9; right: 13px; color: var(--accent); border-color: var(--accent); }
+
+.res-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px 28px; }
+.res-item .res-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; font-size: 13px; color: var(--text-dim); }
+.res-item .res-head strong { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--text); }
+.res-item .res-head strong.ok { color: var(--ok); }
+.res-item .res-head strong.warn { color: var(--warn); }
+.res-item .res-head strong.danger { color: var(--danger); }
+.res-item .res-head code { font-size: 11.5px; }
+
+.dash-apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 20px; }
+.dash-app { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 4px 0; font-size: 13px; }
+.dash-app .net-dot { margin-top: 0; }
+.dash-app-name { font-weight: 600; flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-app-img { color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
