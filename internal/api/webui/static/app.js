@@ -67,7 +67,9 @@ function pickOpenUrl(ctr, tmplSvc, probe) {
   }
   if (!pubs.length) return "";
   let pick = null;
-  const declared = ((tmplSvc && tmplSvc.ports) || []).filter((p) => !p.protocol || p.protocol === "tcp");
+  // 只认模板里「可能是网页」的 TCP 端口。有的 App 把非网页端口列在前面(例如
+  // Pi-hole 先声明 53/DNS),不排除的话探测还没回来时「打开」会先指到 53。
+  const declared = ((tmplSvc && tmplSvc.ports) || []).filter((p) => (!p.protocol || p.protocol === "tcp") && !NON_WEB_PORTS.has(p.containerPort));
   for (const d of declared) {
     pick = pubs.find((p) => p.PrivatePort === d.containerPort);
     if (pick) break;
