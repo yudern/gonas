@@ -30,19 +30,19 @@
       </svg>
       <span class="brand-name">GoNAS</span>
       <button class="nav-toggle" id="nav-toggle" type="button"
-              aria-label="選單 / Menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+              aria-label="選單 / Menu" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/></svg></button>
     </div>
     <ul class="nav-list">
       <li><a href="#/dashboard" data-route="dashboard"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="2.5" width="6" height="6" rx="1.3"/><rect x="11.5" y="2.5" width="6" height="6" rx="1.3"/><rect x="2.5" y="11.5" width="6" height="6" rx="1.3"/><rect x="11.5" y="11.5" width="6" height="6" rx="1.3"/></svg><span class="nav-label">儀表板</span></a></li>
-      <li><a href="#/storage" data-route="storage"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5"/><path d="M3.5 10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5"/></svg><span class="nav-label">儲存</span></a></li>
+      <li class="nav-sep"><a href="#/storage" data-route="storage"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5"/><path d="M3.5 10c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5"/></svg><span class="nav-label">儲存</span></a></li>
       <li><a href="#/files" data-route="files"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.1c.5 0 .97.24 1.26.64l.78 1.06c.29.4.76.64 1.26.64H16c.8 0 1.5.7 1.5 1.5v6.6c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5z"/></svg><span class="nav-label">檔案</span></a></li>
-      <li><a href="#/apps" data-route="apps"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.3"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.3"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.3"/><circle cx="14.25" cy="14.25" r="3"/></svg><span class="nav-label">應用程式</span></a></li>
+      <li><a href="#/apps" data-route="apps"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.8 3.8 6v8L10 17.2 16.2 14V6z"/><path d="M3.8 6 10 9.2 16.2 6M10 9.2v8"/></svg><span class="nav-label">應用程式</span></a></li>
       <li><a href="#/shares" data-route="shares"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="2.3"/><circle cx="15" cy="5" r="2.3"/><circle cx="15" cy="15" r="2.3"/><path d="M6.95 8.9 13.05 5.8M6.95 11.1 13.05 14.2"/></svg><span class="nav-label">共享</span></a></li>
       <li><a href="#/users" data-route="users"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="6.5" r="3"/><path d="M4.2 16.5c0-3.1 2.6-5.2 5.8-5.2s5.8 2.1 5.8 5.2"/></svg><span class="nav-label">使用者</span></a></li>
-      <li><a href="#/monitor" data-route="monitor"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10.5h3l2-5.5 3 10 2-4.5h4.5"/></svg><span class="nav-label">監控</span></a></li>
+      <li class="nav-sep"><a href="#/monitor" data-route="monitor"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10.5h3l2-5.5 3 10 2-4.5h4.5"/></svg><span class="nav-label">監控</span></a></li>
       <li><a href="#/backup" data-route="backup"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v3H3z"/><path d="M4.5 7.5v8.5h11V7.5"/><path d="M8 11h4"/></svg><span class="nav-label">備份</span></a></li>
       <li><a href="#/security" data-route="security"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5 4 5v4.6c0 3.6 2.5 6.8 6 7.9 3.5-1.1 6-4.3 6-7.9V5z"/><path d="M7.6 10l1.7 1.7L12.7 8"/></svg><span class="nav-label">安全</span></a></li>
-      <li><a href="#/system" data-route="system"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5v7"/><path d="M6 5.2a6 6 0 1 0 8 0"/></svg><span class="nav-label">系統</span></a></li>
+      <li class="nav-sep"><a href="#/system" data-route="system"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5v7"/><path d="M6 5.2a6 6 0 1 0 8 0"/></svg><span class="nav-label">系統</span></a></li>
       <li><a href="#/network" data-route="network"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.9 4.5 2.9 7s-.9 4.8-2.9 7c-2-2.2-2.9-4.5-2.9-7S8 5.2 10 3z"/></svg><span class="nav-label">網路</span></a></li>
       <li><a href="#/doctor" data-route="doctor"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3v4a3 3 0 0 0 6 0V3"/><path d="M8 13v-2"/><path d="M8 13a4.5 4.5 0 0 0 4.5 4.5c2.2 0 3.5-1.6 3.5-3.7"/><circle cx="16" cy="11.5" r="2"/></svg><span class="nav-label">系統診斷</span></a></li>
     </ul>

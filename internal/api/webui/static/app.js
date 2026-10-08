@@ -38,6 +38,24 @@ function msg(kind, text) {
   return `<div class="msg ${kind}">${esc(text)}</div>`;
 }
 
+// msgAction:帶一個行動連結的提示條(第六十七輪 UI 精品化)。原本是
+// 「提示條 + 下面另起一顆孤零零的按鈕」,兩個元素分開、按鈕還跟下面的
+// 卡片重複;合成一條,行動就在提示的右側。
+function msgAction(kind, text, href, label) {
+  return `<div class="msg ${kind} has-action"><span class="msg-text">${esc(text)}</span><a href="${esc(href)}" class="msg-action">${esc(label)}</a></div>`;
+}
+
+// appAvatar:應用商店/已安裝列表的圖示磚——取名稱首字,顏色由 id 雜湊決定,
+// 同一個 App 永遠同一種顏色(離線、不依賴任何外部圖示資源)。
+function appAvatar(id, name) {
+  let hsh = 0;
+  const key = String(id || name || "");
+  for (let i = 0; i < key.length; i++) hsh = (hsh * 31 + key.charCodeAt(i)) >>> 0;
+  const hue = hsh % 360;
+  const ch = (String(name || id || "?").trim().slice(0, 1) || "?").toUpperCase();
+  return `<span class="app-avatar" style="--h:${hue}" aria-hidden="true">${esc(ch)}</span>`;
+}
+
 // applyStaticI18n 翻譯 index.html 裡固定存在、跟目前路由無關的文字
 // (側邊欄導覽、登出按鈕)——這些元素在 app.js 載入前就已經在 DOM 裡,
 // 不屬於任何一支 render 函式,所以獨立處理。
@@ -94,6 +112,9 @@ async function router() {
   navLinks.forEach((a) => a.classList.toggle("active", a.dataset.route === route));
 
   content.innerHTML = `<p class="loading">${esc(t("common.loading"))}</p>`;
+  content.classList.remove("page-in");
+  void content.offsetWidth; // 重啟進場動畫(只在切頁時播,頁內重繪不會閃)
+  content.classList.add("page-in");
   try {
     await routes[route](content);
   } catch (err) {
@@ -213,7 +234,7 @@ function updateSidebarUser(me) {
   const box = document.getElementById("sidebar-user");
   if (!box || !me || !me.username) return;
   const roleLabel = me.role === "admin" ? t("auth.roleAdmin") : t("auth.roleViewer");
-  box.innerHTML = `${esc(me.username)}<span class="role-badge">${esc(roleLabel)}</span>`;
+  box.innerHTML = `<span class="su-avatar" aria-hidden="true">${esc(me.username.slice(0, 1).toUpperCase())}</span><span class="su-name">${esc(me.username)}</span><span class="role-badge">${esc(roleLabel)}</span>`;
   box.hidden = false;
 }
 
@@ -353,21 +374,21 @@ async function renderDashboard(el) {
       ${statTile(t("dashboard.storageArray"), arrayLabel(arrayStatus.state), arrayPillClass(arrayStatus.state), "array")}
       ${statTile(t("dashboard.disksDetected"), String(disks.length), "", "disks")}
     </div>
-    ${!dockerStatus.available ? msg("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor" class="secondary">${esc(t("doctor.dashButton"))}</a></div>` : ""}
+    ${!dockerStatus.available ? msgAction("warn", t("dashboard.dockerWarn", { reason: translateError(dockerStatus.error) || t("dashboard.unknownReason") }), "#/doctor", t("doctor.dashButton")) : ""}
     ${missingDeps.length ? `
-    <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
+    <div class="card callout warn">
       ${h2i("stethoscope", esc(t("doctor.dashTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("doctor.dashBody", { n: missingDeps.length, names: missingDeps.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
       <div class="btn-row"><a href="#/doctor" class="btnlink">${esc(t("doctor.dashButton"))}</a></div>
     </div>` : ""}
     ${arrayStatus.state === "unconfigured" ? `
-    <div class="card" style="border-color:var(--accent);background:var(--accent-soft)">
+    <div class="card callout accent">
       ${h2i("sliders", esc(t("setup.ctaTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("setup.ctaBody"))}</p>
       <div class="btn-row"><a href="#/setup" class="btnlink">${esc(t("setup.ctaButton"))}</a></div>
     </div>` : ""}
     ${isAdmin && (arrayStatus.state === "stopped" || arrayStatus.state === "failed") ? `
-    <div class="card" style="border-color:var(--warn);background:var(--warn-soft)">
+    <div class="card callout warn">
       ${h2i("array", esc(t("dashboard.arrayDownTitle")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0 0 12px">${esc(t("dashboard.arrayDownBody"))}${arrayStatus.error ? " " + esc(translateError(arrayStatus.error)) : ""}</p>
       <div id="dash-array-msg"></div>
@@ -847,7 +868,7 @@ async function wizardWelcome(el) {
   const wanted = ["mergerfs", "snapraid", "samba"];
   const missing = (deps || []).filter((d) => wanted.includes(d.key) && !d.installed);
   const depNote = missing.length ? `
-    <div class="card" style="border-color:var(--warn);background:var(--warn-soft);margin-top:12px">
+    <div class="card callout warn" style="margin-top:12px">
       <p style="margin:0 0 10px;font-size:12.5px">${esc(t("setup.depsMissing", { names: missing.map((d) => t("doctor.pkg." + d.key + ".name")).join("、") }))}</p>
       <div class="btn-row"><a href="#/doctor" class="btnlink">${esc(t("doctor.dashButton"))}</a></div>
     </div>` : "";
@@ -2003,14 +2024,15 @@ async function renderApps(el) {
   el.innerHTML = `
     <h1>${esc(t("apps.title"))}</h1>
     <p class="page-subtitle">${esc(t("apps.subtitle"))}</p>
-    ${!dockerStatus.available ? msg("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" })) + `<div class="btn-row" style="margin:-4px 0 10px"><a href="#/doctor" class="secondary">${esc(t("doctor.dashButton"))}</a></div>` : ""}
+    ${!dockerStatus.available ? msgAction("warn", t("apps.dockerWarn", { reason: translateError(dockerStatus.error) || "" }), "#/doctor", t("doctor.dashButton")) : ""}
 
     <div class="card">
       ${h2i("box", esc(t("apps.installed", { n: installed.length })))}
       ${installed.length ? installed.map((app) => `
         <div class="app-card">
           <div class="app-card-main">
-            <div>
+            ${appAvatar(app.template.id, app.template.name)}
+            <div class="app-card-body">
               <h3>${esc(app.template.name)}</h3>
               <p>${esc(translateNotice(app.template.description || ""))}</p>
             </div>
@@ -3399,11 +3421,12 @@ function renderCatalogEntry(tmpl, appdataBase, isInstalled) {
 
   const sourceBadge = tmpl.source === "remote" ? ` <span class="pill neutral">${esc(t("apps.catalogRemoteBadge"))}</span>` : "";
   return `
-    <div class="app-card">
-      <div>
+    <div class="app-card catalog-card">
+      ${appAvatar(tmpl.id, tmpl.name)}
+      <div class="app-card-body">
         <h3>${esc(tmpl.name)}${sourceBadge}</h3>
         <p>${esc(translateNotice(tmpl.description || ""))}</p>
-        <div class="services">${tmpl.services.map((s) => esc(s.image)).join(" · ")}</div>
+        <div class="image-chips">${tmpl.services.map((s) => `<code>${esc(s.image)}</code>`).join("")}</div>
       </div>
       ${isInstalled
         ? `<span class="pill ok" title="${esc(t("apps.alreadyInstalledHint"))}">${esc(t("apps.alreadyInstalled"))}</span>`
@@ -4402,7 +4425,7 @@ function attachPasswordFormHandlers(el) {
 // 重新整理)。刻意用 warn 色系強調「這頁關掉就再也看不到」。
 function recoveryCodesPanel(codes) {
   return `
-    <div class="card" style="border-color:var(--warn);background:var(--warn-soft);margin-top:12px">
+    <div class="card callout warn" style="margin-top:12px">
       ${h2i("key", esc(t("security.recoveryTitle")))}
       <p style="font-size:12.5px;margin:0 0 10px">${esc(t("security.recoveryIntro"))}</p>
       <div class="recovery-grid">${codes.map((c) => `<code>${esc(c)}</code>`).join("")}</div>
