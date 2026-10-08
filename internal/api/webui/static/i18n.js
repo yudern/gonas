@@ -33,6 +33,7 @@ const dict = {
       shares: "共享", users: "共享使用者", monitor: "監控", backup: "備份", security: "安全", system: "系統", doctor: "系統診斷",
       logout: "登出",
     },
+    ui: { simpleMode: "簡潔版", desktopMode: "桌面版" },
     common: {
       loading: "載入中…", loadFailed: "載入失敗:{msg}",
       save: "儲存", saved: "已儲存。", cancel: "取消", delete: "刪除", rename: "重新命名",
@@ -589,6 +590,7 @@ const dict = {
       shares: "共享", users: "共享用户", monitor: "监控", backup: "备份", security: "安全", system: "系统", doctor: "系统诊断",
       logout: "退出登录",
     },
+    ui: { simpleMode: "简洁版", desktopMode: "桌面版" },
     common: {
       loading: "加载中…", loadFailed: "加载失败:{msg}",
       save: "保存", saved: "已保存。", cancel: "取消", delete: "删除", rename: "重命名",
@@ -1145,6 +1147,7 @@ const dict = {
       shares: "Shares", users: "Share Users", monitor: "Monitor", backup: "Backup", security: "Security", system: "System", doctor: "System Doctor",
       logout: "Log out",
     },
+    ui: { simpleMode: "Simple", desktopMode: "Desktop" },
     common: {
       loading: "Loading…", loadFailed: "Failed to load: {msg}",
       save: "Save", saved: "Saved.", cancel: "Cancel", delete: "Delete", rename: "Rename",

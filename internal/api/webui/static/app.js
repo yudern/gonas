@@ -27,6 +27,35 @@ function applyAccent(name) {
 }
 applyAccent(getAccent());
 
+// ---- 介面模式(簡潔側欄 / 桌面視窗)----
+// 第七十二輪(使用者:要一個參考群暉 DSM 的桌面版,和現在的簡潔版並存可切換)。
+// 'simple' = 現在的側欄版;'desktop' = 桌面(桌布+圖示+可拖動視窗+工作列)。
+// 存在 localStorage,載入即套用。手機(窄螢幕)一律用簡潔版,桌面模式不適合拖視窗。
+function getUIMode() {
+  try {
+    const v = localStorage.getItem("gonas.uimode");
+    if (v === "desktop" || v === "simple") return v;
+  } catch {}
+  return "simple";
+}
+function effectiveUIMode() {
+  if (getUIMode() === "desktop" && window.matchMedia("(min-width: 900px)").matches) return "desktop";
+  return "simple";
+}
+function setUIMode(v) {
+  try { localStorage.setItem("gonas.uimode", v === "desktop" ? "desktop" : "simple"); } catch {}
+  location.reload();
+}
+function wireUIModeSwitch() {
+  const box = document.getElementById("uimode-switch");
+  if (!box) return;
+  const cur = getUIMode();
+  box.querySelectorAll("button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.uimodeVal === cur);
+    b.addEventListener("click", () => { if (b.dataset.uimodeVal !== cur) setUIMode(b.dataset.uimodeVal); });
+  });
+}
+
 function wireAccentPicker() {
   const box = document.getElementById("accent-picker");
   if (!box) return;
@@ -202,6 +231,8 @@ async function router() {
   const hash = location.hash.replace(/^#\//, "") || "dashboard";
   const route = routes[hash] ? hash : "dashboard";
 
+  if (effectiveUIMode() === "desktop" && showingApp) { desktopOpen(route); return; }
+
   navLinks.forEach((a) => a.classList.toggle("active", a.dataset.route === route));
 
   content.innerHTML = `<p class="loading">${esc(t("common.loading"))}</p>`;
@@ -251,9 +282,9 @@ function wireNavToggle() {
 // 各頁重繪後自動生效(新卡片預設 collapsed,點一下展開)。純前端、無狀態持久化,
 // 跟監控頁那幾個 <details> 行為一致。
 function wireCollapsibles() {
-  if (!content || content.__collapseWired) return;
-  content.__collapseWired = true;
-  content.addEventListener("click", (ev) => {
+  if (document.body.__collapseWired) return;
+  document.body.__collapseWired = true;
+  document.body.addEventListener("click", (ev) => {
     const h = ev.target.closest(".card-h2");
     if (!h) return;
     const card = h.parentElement;
@@ -271,6 +302,7 @@ async function boot() {
   applyStaticI18n();
   wireLangSwitcher();
   wireAccentPicker();
+  wireUIModeSwitch();
   wireNavToggle();
   wireCollapsibles();
   setUnauthorizedHandler(showLoginGate);
@@ -332,8 +364,15 @@ async function boot() {
 function showApp() {
   showingApp = true;
   authGate.hidden = true;
-  shell.hidden = false;
-  router();
+  if (effectiveUIMode() === "desktop") {
+    shell.hidden = true;
+    mountDesktop();
+    const hash = location.hash.replace(/^#\//, "");
+    desktopOpen(routes[hash] ? hash : "dashboard");
+  } else {
+    shell.hidden = false;
+    router();
+  }
   api.version().then((v) => {
     document.getElementById("sidebar-version").textContent = `gonasd ${v.version} (${v.goos}/${v.goarch})`;
   }).catch(() => {});
@@ -5553,4 +5592,204 @@ function renderDiagnosis(d, errText) {
     </div>`;
   }).join("");
   return hints + rows;
+}
+
+// =====================================================================
+// 桌面模式(DSM 風):桌布 + 頂欄 + 應用圖示 + 可拖動/縮放視窗 + 工作列。
+// 第七十二輪。重用既有的 routes[route](el) 來畫每個視窗的內容,不重寫頁面。
+// 只在寬螢幕啟用;手機由 effectiveUIMode() 退回簡潔版。
+// =====================================================================
+const DESKTOP_APPS = [
+  { route: "dashboard", icon: "grid" },
+  { route: "storage", icon: "array" },
+  { route: "files", icon: "__folder" },
+  { route: "apps", icon: "box" },
+  { route: "shares", icon: "share" },
+  { route: "users", icon: "users" },
+  { route: "monitor", icon: "pulse" },
+  { route: "backup", icon: "backup" },
+  { route: "security", icon: "shield" },
+  { route: "system", icon: "power" },
+  { route: "network", icon: "globe" },
+  { route: "doctor", icon: "stethoscope" },
+];
+const FOLDER_ICON = '<path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.1c.5 0 .97.24 1.26.64l.78 1.06c.29.4.76.64 1.26.64H16c.8 0 1.5.7 1.5 1.5v6.6c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5z"/>';
+function deskIcon(key) {
+  const inner = key === "__folder" ? FOLDER_ICON : (SECTION_ICONS[key] || SECTION_ICONS.grid);
+  return `<svg viewBox="0 0 20 20" aria-hidden="true">${inner}</svg>`;
+}
+
+let desktopBuilt = false;
+let winZ = 10;
+const desktopWindows = {}; // route -> { el, body, taskBtn, prevRect }
+
+function mountDesktop() {
+  document.documentElement.setAttribute("data-uimode", "desktop");
+  if (desktopBuilt) { document.getElementById("desktop").hidden = false; return; }
+  desktopBuilt = true;
+  const d = document.createElement("div");
+  d.id = "desktop";
+  d.innerHTML = `
+    <div class="desk-topbar">
+      <div class="desk-brand">
+        <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="3.6" fill="currentColor"/><rect x="5" y="6.2" width="10" height="2" rx="1" fill="#fff" opacity=".92"/><rect x="5" y="11.8" width="7" height="2" rx="1" fill="#fff" opacity=".55"/></svg>
+        <span>GoNAS</span>
+      </div>
+      <div class="desk-top-right">
+        <div class="accent-picker" id="desk-accent" role="group" aria-label="主題色">
+          <button type="button" class="accent-dot" data-accent-val="teal" style="--d:#2f8b80" title="青綠"></button>
+          <button type="button" class="accent-dot" data-accent-val="blue" style="--d:#4f6ef2" title="科技藍"></button>
+          <button type="button" class="accent-dot" data-accent-val="violet" style="--d:#7c5cff" title="紫"></button>
+        </div>
+        <select id="desk-lang" class="lang-switcher" aria-label="Language">
+          <option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option><option value="en">English</option>
+        </select>
+        <span class="desk-clock" id="desk-clock"></span>
+        <span class="desk-user" id="desk-user"></span>
+        <button type="button" class="secondary desk-simple-btn" id="desk-to-simple"></button>
+        <button type="button" class="secondary" id="desk-logout"></button>
+      </div>
+    </div>
+    <div class="desk-icons" id="desk-icons">
+      ${DESKTOP_APPS.map((a) => `<button type="button" class="desk-icon" data-open="${a.route}"><span class="desk-icon-img">${deskIcon(a.icon)}</span><span class="desk-icon-label">${esc(t("nav." + a.route))}</span></button>`).join("")}
+    </div>
+    <div class="desk-windows" id="desk-windows"></div>
+    <div class="desk-taskbar" id="desk-taskbar"></div>
+  `;
+  document.body.appendChild(d);
+
+  d.querySelectorAll(".desk-icon").forEach((b) => b.addEventListener("click", () => { location.hash = "#/" + b.dataset.open; }));
+  d.querySelector("#desk-to-simple").textContent = t("ui.simpleMode");
+  d.querySelector("#desk-to-simple").addEventListener("click", () => setUIMode("simple"));
+  d.querySelector("#desk-logout").textContent = t("nav.logout");
+  d.querySelector("#desk-logout").addEventListener("click", async () => { try { await api.authLogout(); } catch {} showLoginGate(); });
+
+  // 主題色 / 語言(桌面頂欄)
+  const accentBox = d.querySelector("#desk-accent");
+  const curAccent = getAccent();
+  accentBox.querySelectorAll(".accent-dot").forEach((b) => {
+    b.classList.toggle("active", b.dataset.accentVal === curAccent);
+    b.addEventListener("click", () => { applyAccent(b.dataset.accentVal); try { localStorage.setItem("gonas.accent", b.dataset.accentVal); } catch {} accentBox.querySelectorAll(".accent-dot").forEach((x) => x.classList.toggle("active", x === b)); });
+  });
+  const langSel = d.querySelector("#desk-lang");
+  langSel.value = getLocale();
+  langSel.addEventListener("change", () => { setLocale(langSel.value); location.reload(); });
+
+  // 時鐘
+  const clock = d.querySelector("#desk-clock");
+  const tick = () => { const n = new Date(); clock.textContent = `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`; };
+  tick(); setInterval(tick, 15000);
+  api.me().then((me) => { const u = d.querySelector("#desk-user"); if (me && me.username) u.textContent = me.username; }).catch(() => {});
+}
+
+function desktopFocus(route) {
+  const w = desktopWindows[route];
+  if (!w) return;
+  w.el.style.zIndex = String(++winZ);
+  Object.values(desktopWindows).forEach((x) => x.el.classList.toggle("focused", x === w));
+  Object.values(desktopWindows).forEach((x) => { if (x.taskBtn) x.taskBtn.classList.toggle("active", x === w); });
+}
+
+async function desktopOpen(route) {
+  if (!routes[route]) route = "dashboard";
+  if (desktopWindows[route]) {
+    const w = desktopWindows[route];
+    w.el.hidden = false; w.minimized = false;
+    desktopFocus(route);
+    return;
+  }
+  const layer = document.getElementById("desk-windows");
+  const win = document.createElement("div");
+  win.className = "desk-win";
+  const n = Object.keys(desktopWindows).length;
+  const offset = (n % 6) * 28;
+  win.style.left = (70 + offset) + "px";
+  win.style.top = (24 + offset) + "px";
+  win.style.width = "920px";
+  win.style.height = "620px";
+  win.style.zIndex = String(++winZ);
+  win.innerHTML = `
+    <div class="win-titlebar">
+      <span class="win-title">${esc(t("nav." + route))}</span>
+      <div class="win-actions">
+        <button type="button" class="win-btn win-min" aria-label="最小化">—</button>
+        <button type="button" class="win-btn win-max" aria-label="最大化">▢</button>
+        <button type="button" class="win-btn win-close" aria-label="關閉">✕</button>
+      </div>
+    </div>
+    <div class="win-body"><p class="loading">${esc(t("common.loading"))}</p></div>
+  `;
+  layer.appendChild(win);
+  const body = win.querySelector(".win-body");
+  const rec = { el: win, body, minimized: false, prevRect: null };
+  desktopWindows[route] = rec;
+
+  // 工作列按鈕
+  const taskbar = document.getElementById("desk-taskbar");
+  const taskBtn = document.createElement("button");
+  taskBtn.type = "button";
+  taskBtn.className = "task-btn";
+  taskBtn.innerHTML = `<span class="task-ico">${deskIcon((DESKTOP_APPS.find((a) => a.route === route) || {}).icon || "grid")}</span><span>${esc(t("nav." + route))}</span>`;
+  taskBtn.addEventListener("click", () => {
+    if (rec.minimized || win.hidden) { win.hidden = false; rec.minimized = false; desktopFocus(route); }
+    else if (win.classList.contains("focused")) { win.hidden = true; rec.minimized = true; taskBtn.classList.remove("active"); }
+    else desktopFocus(route);
+  });
+  taskbar.appendChild(taskBtn);
+  rec.taskBtn = taskBtn;
+
+  win.addEventListener("mousedown", () => desktopFocus(route), true);
+  win.querySelector(".win-close").addEventListener("click", () => {
+    win.remove(); taskBtn.remove(); delete desktopWindows[route];
+  });
+  win.querySelector(".win-min").addEventListener("click", () => { win.hidden = true; rec.minimized = true; taskBtn.classList.remove("active"); });
+  win.querySelector(".win-max").addEventListener("click", () => toggleMaxWindow(rec));
+  makeDraggable(win, win.querySelector(".win-titlebar"));
+  win.querySelector(".win-titlebar").addEventListener("dblclick", (e) => { if (!e.target.closest(".win-btn")) toggleMaxWindow(rec); });
+
+  desktopFocus(route);
+  try {
+    await routes[route](body);
+    if (typeof associateLabels === "function") associateLabels(body);
+  } catch (err) {
+    body.innerHTML = msg("error", t("common.loadFailed", { msg: err.message }));
+  }
+}
+
+function toggleMaxWindow(rec) {
+  const win = rec.el;
+  if (win.classList.contains("maximized")) {
+    win.classList.remove("maximized");
+    if (rec.prevRect) { win.style.left = rec.prevRect.left; win.style.top = rec.prevRect.top; win.style.width = rec.prevRect.width; win.style.height = rec.prevRect.height; }
+  } else {
+    rec.prevRect = { left: win.style.left, top: win.style.top, width: win.style.width, height: win.style.height };
+    win.classList.add("maximized");
+    win.style.left = ""; win.style.top = ""; win.style.width = ""; win.style.height = "";
+  }
+}
+
+function makeDraggable(win, handle) {
+  let sx, sy, ox, oy, dragging = false;
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".win-btn")) return;
+    if (win.classList.contains("maximized")) return;
+    dragging = true;
+    sx = e.clientX; sy = e.clientY;
+    const r = win.getBoundingClientRect();
+    const layer = win.parentElement.getBoundingClientRect();
+    ox = r.left - layer.left; oy = r.top - layer.top;
+    handle.setPointerCapture(e.pointerId);
+    win.classList.add("dragging");
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const layer = win.parentElement;
+    let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
+    nx = Math.max(0, Math.min(nx, layer.clientWidth - 120));
+    ny = Math.max(0, Math.min(ny, layer.clientHeight - 44));
+    win.style.left = nx + "px"; win.style.top = ny + "px";
+  });
+  const stop = (e) => { if (dragging) { dragging = false; win.classList.remove("dragging"); try { handle.releasePointerCapture(e.pointerId); } catch {} } };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
 }

@@ -1257,3 +1257,94 @@ a.stat-link:hover .stat-go { opacity: .9; right: 13px; color: var(--accent); bor
 .dash-app .net-dot { margin-top: 0; }
 .dash-app-name { font-weight: 600; flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-app-img { color: var(--text-faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+
+/* =====================================================================
+   第七十二輪:桌面模式(DSM 風)。只在寬螢幕啟用。
+   ===================================================================== */
+.uimode-switch { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: rgba(255,255,255,.06); margin-bottom: 2px; }
+.uimode-switch button {
+  flex: 1; min-height: 28px; padding: 4px 10px; font-size: 12px; border-radius: 7px;
+  background: transparent; color: var(--sidebar-text); border: 1px solid transparent; box-shadow: none; font-weight: 600;
+}
+.uimode-switch button:hover { background: rgba(255,255,255,.07); box-shadow: none; filter: none; }
+.uimode-switch button.active { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+
+#desktop {
+  position: fixed; inset: 0; z-index: 1;
+  display: flex; flex-direction: column;
+  background:
+    radial-gradient(1200px 700px at 78% -10%, color-mix(in srgb, var(--accent) 42%, transparent), transparent 60%),
+    radial-gradient(900px 600px at 10% 110%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 55%),
+    linear-gradient(135deg, #1a2733, #0f1a24 60%, #0b1420);
+  overflow: hidden;
+}
+.desk-topbar {
+  height: 46px; flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; background: rgba(10,16,20,.55); backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(255,255,255,.08); color: #eef3f1; z-index: 3;
+}
+.desk-brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; }
+.desk-brand .brand-mark { width: 22px; height: 22px; color: var(--accent); }
+.desk-top-right { display: flex; align-items: center; gap: 14px; }
+.desk-top-right .accent-picker { padding: 0; }
+.desk-top-right .accent-dot { box-shadow: inset 0 0 0 2px rgba(10,16,20,.8); }
+.desk-top-right .accent-dot.active { box-shadow: inset 0 0 0 2px rgba(10,16,20,.8), 0 0 0 2px var(--d); }
+.desk-top-right .lang-switcher { width: auto; min-height: 30px; background-color: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); color: #eef3f1; }
+.desk-clock { font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 600; letter-spacing: .02em; }
+.desk-user { font-size: 13px; opacity: .9; }
+.desk-top-right .secondary { min-height: 30px; padding: 4px 12px; font-size: 12.5px; background: rgba(255,255,255,.1); color: #eef3f1; border-color: rgba(255,255,255,.16); box-shadow: none; }
+.desk-top-right .secondary:hover { background: rgba(255,255,255,.18); filter: none; box-shadow: none; }
+
+.desk-icons { position: absolute; top: 62px; left: 18px; display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 6px 10px; max-height: calc(100% - 120px); z-index: 1; }
+.desk-icon {
+  width: 92px; height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  background: transparent; border: 1px solid transparent; box-shadow: none; border-radius: 14px; cursor: pointer; padding: 8px 4px;
+}
+.desk-icon:hover { background: rgba(255,255,255,.1); box-shadow: none; filter: none; }
+.desk-icon-img { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent-lo));
+  box-shadow: 0 6px 16px -6px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.25); }
+.desk-icon-img svg { width: 25px; height: 25px; color: var(--on-accent); fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.desk-icon-label { font-size: 12px; color: #eef3f1; text-shadow: 0 1px 3px rgba(0,0,0,.5); font-weight: 500; }
+
+.desk-windows { position: absolute; inset: 46px 0 46px 0; z-index: 2; pointer-events: none; }
+.desk-win {
+  position: absolute; pointer-events: auto; display: flex; flex-direction: column;
+  min-width: 360px; min-height: 240px; background: var(--surface);
+  border-radius: 14px; overflow: hidden; border: 1px solid var(--border-strong);
+  box-shadow: 0 30px 70px -20px rgba(0,0,0,.6), 0 10px 24px -12px rgba(0,0,0,.4);
+  resize: both;
+}
+.desk-win.maximized { inset: 8px 8px 8px 8px; left: 8px !important; top: 8px !important; width: auto !important; height: auto !important; border-radius: 12px; resize: none; }
+.desk-win.focused { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong)); }
+.desk-win.dragging { opacity: .96; }
+.win-titlebar {
+  flex: none; height: 42px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 8px 0 16px; cursor: move; user-select: none;
+  background: var(--surface-2); border-bottom: 1px solid var(--border);
+}
+.win-title { font-size: 13.5px; font-weight: 650; }
+.win-actions { display: flex; gap: 2px; }
+.win-btn { min-height: 30px; width: 34px; padding: 0; font-size: 13px; line-height: 1; border-radius: 8px; background: transparent; color: var(--text-dim); border: none; box-shadow: none; }
+.win-btn:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); box-shadow: none; filter: none; }
+.win-close:hover { background: var(--danger); color: #fff; }
+.win-body { flex: 1; overflow: auto; padding: 20px 22px; }
+.win-body h1 { font-size: 20px; }
+.win-body .page-subtitle { margin-bottom: 20px; }
+
+.desk-taskbar {
+  height: 46px; flex: none; margin-top: auto; display: flex; align-items: center; gap: 8px;
+  padding: 0 14px; background: rgba(10,16,20,.55); backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(255,255,255,.08); z-index: 3;
+}
+.task-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 13px;
+  background: rgba(255,255,255,.08); color: #eef3f1; border: 1px solid transparent; box-shadow: none;
+  border-radius: 9px; font-size: 12.5px; font-weight: 500; max-width: 180px;
+}
+.task-btn:hover { background: rgba(255,255,255,.15); box-shadow: none; filter: none; }
+.task-btn.active { background: color-mix(in srgb, var(--accent) 34%, transparent); border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.task-ico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
+.task-ico svg { width: 16px; height: 16px; color: var(--accent); fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.task-btn span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
