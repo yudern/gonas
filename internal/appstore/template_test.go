@@ -89,3 +89,17 @@ func TestResolveEnv_MissingRequiredValue(t *testing.T) {
 		t.Fatal("expected error when required env var TZ has no value and no default")
 	}
 }
+
+func TestResolvePortsSamePortIgnoresOverride(t *testing.T) {
+	svc := ServiceTemplate{Ports: []PortMapping{
+		{ContainerPort: 8081, HostPort: 8081, SamePort: true},
+		{ContainerPort: 6881, HostPort: 6881},
+	}}
+	got := resolvePorts(svc, map[int]int{8081: 9999, 6881: 7000})
+	if got[0].HostPort != 8081 {
+		t.Errorf("SamePort 的主機埠被覆寫成 %d,應固定為 8081", got[0].HostPort)
+	}
+	if got[1].HostPort != 7000 {
+		t.Errorf("一般埠的覆寫應生效,得到 %d", got[1].HostPort)
+	}
+}

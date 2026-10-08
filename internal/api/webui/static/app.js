@@ -3350,11 +3350,14 @@ function renderEditFields(app) {
       </div>`;
     });
     const port = (svc.ports || []).map((p) => {
-      const cur = portVals[p.containerPort] !== undefined ? portVals[p.containerPort] : (p.hostPort || "");
+      // samePort:这个 App 要求主机端口 = 容器端口(见后端 PortMapping.SamePort),
+      // 输入框锁成只读并说明原因,免得改了之后打开就回 Unauthorized。
+      const cur = p.samePort ? p.containerPort : (portVals[p.containerPort] !== undefined ? portVals[p.containerPort] : (p.hostPort || ""));
       return `
       <div class="field">
         <label>${esc(svc.name)} · ${esc(t("apps.ports"))} (${esc(String(p.containerPort))})</label>
-        <input type="number" name="${esc(svc.name)}.port.${esc(String(p.containerPort))}" value="${esc(String(cur))}">
+        <input type="number" name="${esc(svc.name)}.port.${esc(String(p.containerPort))}" value="${esc(String(cur))}"${p.samePort ? " readonly" : ""}>
+        ${p.samePort ? `<div class="hint">${esc(t("apps.samePortHint"))}</div>` : ""}
       </div>`;
     });
     return [imageField, resField, ...env, ...vol, ...port].join("");

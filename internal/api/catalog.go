@@ -66,10 +66,14 @@ var builtinCatalog = []appstore.AppTemplate{
 					{Key: "PUID", Default: "1000", Description: "執行容器的使用者 ID"},
 					{Key: "PGID", Default: "1000", Description: "執行容器的群組 ID"},
 					{Key: "TZ", Default: "Etc/UTC", Description: "時區,例如 Asia/Taipei"},
-					{Key: "WEBUI_PORT", Default: "8080", Description: "網頁介面埠(要跟下面對應)"},
+					{Key: "WEBUI_PORT", Default: "8081", Description: "網頁介面埠。必須等於下面的埠對應(8081),不要改——qBittorrent 會檢查瀏覽器連的埠是否等於它自己監聽的埠,不一致會回 Unauthorized"},
 				},
 				Ports: []appstore.PortMapping{
-					{ContainerPort: 8080, HostPort: 8081}, // 8080 常被其他 App 佔用,預設給 8081
+					// 第六十八輪(使用者實機:點「打開」得到 Unauthorized):qBittorrent 會比對
+					// Host 標頭的埠與自己監聽的埠(源碼 WebApplication::validateHostHeader),
+					// 原本 8081→8080 的對應必然不一致。8080 常被其他 App 佔用,所以容器內
+					// 也改聽 8081(WEBUI_PORT),主機埠與容器埠一致。
+					{ContainerPort: 8081, HostPort: 8081, SamePort: true},
 					{ContainerPort: 6881, HostPort: 6881},
 					{ContainerPort: 6881, HostPort: 6881, Protocol: "udp"},
 				},

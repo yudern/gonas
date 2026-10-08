@@ -1903,6 +1903,7 @@ deepMerge(dict, dict65);
 // 第六十六輪:容器詳情重做、商店「已安裝」狀態。
 const dict66 = {
   "zh-Hant": { apps: {
+    samePortHint: "這個 App 要求主機埠必須等於容器埠(否則網頁會回 Unauthorized),所以不能修改。",
     alreadyInstalled: "已安裝", alreadyInstalledHint: "這個 App 已經裝好了,在上方「已安裝」裡管理;解除安裝(或容器被刪除)後這裡會重新出現「安裝」。",
     detName: "名稱", detStarted: "啟動於", detFinished: "停止於", detResources: "資源上限(記憶體 / CPU)",
     detCommand: "啟動指令", detWorkdir: "工作目錄", detUser: "執行身分", detHostname: "主機名稱", detHealth: "健康檢查",
@@ -1912,6 +1913,7 @@ const dict66 = {
     detEnvKey: "名稱", detEnvVal: "值", detShow: "顯示", detHide: "隱藏", detLabels: "標籤", detImageId: "映像 ID",
   } },
   "zh-Hans": { apps: {
+    samePortHint: "这个 App 要求主机端口必须等于容器端口(否则网页会返回 Unauthorized),所以不能修改。",
     alreadyInstalled: "已安装", alreadyInstalledHint: "这个 App 已经装好了,在上方「已安装」里管理;卸载(或容器被删除)后这里会重新出现「安装」。",
     detName: "名称", detStarted: "启动于", detFinished: "停止于", detResources: "资源上限(内存 / CPU)",
     detCommand: "启动命令", detWorkdir: "工作目录", detUser: "运行用户", detHostname: "主机名", detHealth: "健康检查",
@@ -1921,6 +1923,7 @@ const dict66 = {
     detEnvKey: "名称", detEnvVal: "值", detShow: "显示", detHide: "隐藏", detLabels: "标签", detImageId: "镜像 ID",
   } },
   "en": { apps: {
+    samePortHint: "This app requires the host port to equal the container port (otherwise its web UI answers \"Unauthorized\"), so it cannot be changed.",
     alreadyInstalled: "Installed", alreadyInstalledHint: "This app is already installed — manage it under “Installed” above. After uninstalling (or if its containers are deleted) the Install button comes back.",
     detName: "Name", detStarted: "Started", detFinished: "Stopped", detResources: "Limits (memory / CPU)",
     detCommand: "Command", detWorkdir: "Working dir", detUser: "User", detHostname: "Hostname", detHealth: "Health",

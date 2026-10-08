@@ -407,6 +407,9 @@ func resolvePorts(svc ServiceTemplate, overrides map[int]int) []docker.PortSpec 
 		if override, ok := overrides[p.ContainerPort]; ok && override != 0 {
 			hostPort = override
 		}
+		if p.SamePort {
+			hostPort = p.ContainerPort // 見 PortMapping.SamePort:這類 App 主機埠不可改
+		}
 		ports = append(ports, docker.PortSpec{
 			ContainerPort: p.ContainerPort,
 			HostPort:      hostPort,

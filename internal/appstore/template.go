@@ -55,6 +55,10 @@ type PortMapping struct {
 	ContainerPort int    `json:"containerPort"`
 	HostPort      int    `json:"hostPort"`
 	Protocol      string `json:"protocol,omitempty"` // "tcp"（預設）或 "udp"
+	// SamePort 表示這個 App 會檢查瀏覽器請求的 Host 埠是否等於它自己監聽的埠
+	// (例如 qBittorrent:不一致就回 401 "Unauthorized"),所以主機埠必須等於
+	// 容器埠,使用者不能改成別的數字。第六十八輪(使用者實機)。
+	SamePort bool `json:"samePort,omitempty"`
 }
 
 // VolumeMapping 描述一個掛載。HostPath 留空代表「安裝精靈必須讓使用者選一個
