@@ -244,6 +244,26 @@ function wireNavToggle() {
   }));
 }
 
+
+// ---- 可折疊卡片(不常用區塊,預設收起)----
+// 第七十一輪(使用者:不常用的都收起來)。給 .collapsible-card 的標題列(.card-h2)
+// 一個點擊切換:收起時用 CSS 把標題以外的內容藏起來。用事件委派掛在 #content 上一次,
+// 各頁重繪後自動生效(新卡片預設 collapsed,點一下展開)。純前端、無狀態持久化,
+// 跟監控頁那幾個 <details> 行為一致。
+function wireCollapsibles() {
+  if (!content || content.__collapseWired) return;
+  content.__collapseWired = true;
+  content.addEventListener("click", (ev) => {
+    const h = ev.target.closest(".card-h2");
+    if (!h) return;
+    const card = h.parentElement;
+    if (!card || !card.classList.contains("collapsible-card")) return;
+    // 標題列裡若有連結/按鈕,讓它正常運作,不觸發折疊。
+    if (ev.target.closest("a, button")) return;
+    card.classList.toggle("collapsed");
+  });
+}
+
 async function boot() {
   // 第五十八輪 UI 覆核(#7):讓 <html lang> 跟著實際語言走,否則不管切到
   // 英文/簡中,輔助技術與瀏覽器都以為整頁是繁中(index.html 寫死 zh-Hant)。
@@ -252,6 +272,7 @@ async function boot() {
   wireLangSwitcher();
   wireAccentPicker();
   wireNavToggle();
+  wireCollapsibles();
   setUnauthorizedHandler(showLoginGate);
 
   // 第五十八輪 UI 覆核:兩個全站層級的無障礙/防呆機制。
@@ -516,7 +537,7 @@ async function renderDashboard(el) {
 // 拿到設定更新來源/立即檢查/套用更新這些操作按鈕——跟後端
 // requireAuth/requireAdmin 的分法完全對應,見
 // internal/api/router.go 對 /api/v1/system/update* 路由的註冊說明。
-function renderSystemUpdateCard(update, currentVersion, isAdmin) {
+function renderSystemUpdateCard(update, currentVersion, isAdmin, platform) {
   if (!update) {
     return `
     <div class="card">
@@ -595,6 +616,7 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin) {
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
       <p style="margin:0 0 4px;font-weight:600;font-size:13.5px">${esc(t("update.offlineTitle"))}</p>
       <p class="hint" style="margin:0 0 10px">${esc(t("update.offlineHint"))}</p>
+      <div class="arch-hint">${esc(t("update.archHint", { platform: platform || "linux/?" }))}</div>
       <form id="update-upload-form">
         <input type="file" id="update-upload-file" accept="" style="font-size:13px">
         <div class="btn-row" style="margin-top:10px">
@@ -1177,7 +1199,7 @@ async function renderStorage(el) {
     </div>
 
     ${arrayStatus.hasParity ? `
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("calendar", esc(t("storage.scrubScheduleTitle")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.scrubScheduleHint"))}</p>
       <div id="scrub-sched-msg"></div>
@@ -1193,7 +1215,7 @@ async function renderStorage(el) {
     </div>` : ""}
 
     ${arrayStatus.state !== "unconfigured" ? `
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("stethoscope", esc(t("storage.smartTitle")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.smartHint"))}</p>
       ${smartSchedule.lastRunAt ? `<p style="margin:0 0 10px"><span class="pill neutral">${esc(t("storage.smartLastRun", { time: formatDateTime(smartSchedule.lastRunAt) }))}</span></p>` : ""}
@@ -1219,7 +1241,7 @@ async function renderStorage(el) {
     </div>` : ""}
 
     ${arrayStatus.hasParity && (arrayStatus.dataDisks && arrayStatus.dataDisks.length) ? `
-    <div class="card" style="border-color:var(--warn-border, var(--border))">
+    <div class="card collapsible-card collapsed" style="border-color:var(--warn-border, var(--border))">
       ${h2i("array", esc(t("storage.recoveryTitle")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("storage.recoveryHint"))}</p>
       <div id="recovery-msg"></div>
@@ -2211,7 +2233,7 @@ async function renderApps(el) {
     </div>` : ""}
 
     ${dockerStatus.available && (images && images.length) ? `
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("box", esc(t("apps.images", { n: images.length })))}
       <p class="hint">${esc(t("apps.imagesHint"))}</p>
       <div id="images-msg"></div>
@@ -2234,8 +2256,8 @@ async function renderApps(el) {
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase, installed.some((a) => a.template && a.template.id === tmpl.id))).join("")}
     </div>
 
-    <details class="card collapsible">
-      <summary>${h2i("plus", esc(t("apps.customInstall")))}</summary>
+    <div class="card collapsible-card collapsed">
+      ${h2i("plus", esc(t("apps.customInstall")))}
       <p class="hint">${esc(t("apps.customInstallHint"))}</p>
       <div id="custom-install-msg"></div>
       <form class="stacked" id="custom-install-form">
@@ -2246,7 +2268,7 @@ async function renderApps(el) {
         <div class="btn-row" style="margin-top:4px"><button type="button" id="add-service" class="secondary">${esc(t("apps.addService"))}</button></div>
         <div class="btn-row"><button type="submit">${esc(t("apps.install"))}</button></div>
       </form>
-    </details>
+    </div>
   `;
 
   el.querySelectorAll("[data-uninstall]").forEach((btn) => {
@@ -3797,12 +3819,12 @@ function renderUPSCard(status, cfg, names, isAdmin) {
     </form>` : "";
 
   return `
-    <details class="card collapsible">
-      <summary>${h2i("battery", esc(t("ups.title")))}</summary>
+    <div class="card collapsible-card collapsed">
+      ${h2i("battery", esc(t("ups.title")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("ups.hint"))}</p>
       ${statusHTML}
       ${configHTML}
-    </details>`;
+    </div>`;
 }
 
 function wireUPS(el) {
@@ -4297,13 +4319,13 @@ async function renderSystem(el) {
       </div>
     </div>` : ""}
 
-    ${renderSystemUpdateCard(update, version.version, isAdmin)}
+    ${renderSystemUpdateCard(update, version.version, isAdmin, `${version.goos || "linux"}/${version.goarch || ""}`)}
 
     ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
     ${isAdmin ? `
-    <details class="card collapsible">
-      <summary>${h2i("lock", esc(t("security.https")))}</summary>
+    <div class="card collapsible-card collapsed">
+      ${h2i("lock", esc(t("security.https")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
         ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
         ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
@@ -4320,7 +4342,7 @@ async function renderSystem(el) {
         </div>
         <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
       </form>
-    </details>` : ""}
+    </div>` : ""}
   `;
 
   attachSystemUpdateHandlers(el, isAdmin);
@@ -4359,7 +4381,7 @@ async function renderSecurity(el) {
       </form>
     </div>
 
-    <div class="card" id="totp-card">
+    <div class="card collapsible-card collapsed" id="totp-card">
       ${renderTOTPSection(me.totpEnabled)}
     </div>
 
@@ -4400,7 +4422,7 @@ async function renderSecurity(el) {
     </div>
     ` : ""}
 
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("shield", esc(t("security.vpn")))}
       ${renderVPNSection(vpnStatus, peers)}
     </div>
@@ -4445,7 +4467,7 @@ function wirePowerButtons(el) {
 function renderAuditLogCard(auditLog) {
   if (!auditLog) {
     return `
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("log", esc(t("security.auditLog")))}
       <p style="color:var(--text-dim);font-size:13px;margin:0">${esc(t("security.auditLogLoadError"))}</p>
     </div>`;
@@ -4453,7 +4475,7 @@ function renderAuditLogCard(auditLog) {
 
   const entries = auditLog.entries || [];
   return `
-    <div class="card">
+    <div class="card collapsible-card collapsed">
       ${h2i("log", esc(t("security.auditLog")))}
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("security.auditLogHint"))}</p>
       <div class="table-wrap">

@@ -1145,3 +1145,90 @@ h2.card-h2 { font-weight: 680; }
 /* 链接型 accent 文本跟随主题色 */
 a { color: var(--accent-text); }
 .breadcrumb a, .file-name.is-dir { color: var(--accent-text); }
+
+
+/* =====================================================================
+   第七十一輪:質感升級(綜合 群暉 DSM / 飛牛 fnOS / 威聯通 QTS 的長處)
+   採用方向(見對話中的設計總結):
+   - fnOS 的「漂浮卡片 + 大量留白 + 柔和圓角」→ 淺色去掉硬邊框,靠柔和陰影分層;
+   - DSM 的「作用中項目填色膠囊 + 規整排版」→ 側欄 active 改填色膠囊;
+   - 統一更大的圓角、更寬的內距、更清楚的字級層級。
+   深色模式陰影看不見,保留一條極細邊框 + 微抬升面。
+   不常用區塊預設收起(.collapsible-card)。
+   ===================================================================== */
+
+/* ---- 更柔和的畫布與漂浮卡片 ---- */
+:root { --bg: #edf1f5; --surface-2: #eef2f6; --border: #e3e9ef; --border-strong: #d4dde6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0d1317; --surface: #161d23; --surface-2: #1b232b; --border: #262f38; --border-strong: #333e49; }
+}
+:root[data-theme="dark"] { --bg: #0d1317; --surface: #161d23; --surface-2: #1b232b; --border: #262f38; --border-strong: #333e49; }
+
+.card, .stat-tile {
+  border-radius: 16px;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 2px rgba(20,30,40,.04), 0 6px 20px -8px rgba(20,30,40,.10);
+}
+.card { padding: 24px 26px; margin-bottom: 18px; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .card,
+  :root:not([data-theme="light"]) .stat-tile { border-color: var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+}
+:root[data-theme="dark"] .card, :root[data-theme="dark"] .stat-tile { border-color: var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+/* 提示型卡片保留彩色描邊,強調身份 */
+.card.callout { box-shadow: none; }
+
+/* ---- 字級層級再拉開 ---- */
+.content { padding: 40px 48px 80px; }
+h1 { font-size: 26px; letter-spacing: -.02em; }
+.page-subtitle { margin-bottom: 30px; }
+h2.card-h2 { font-size: 15.5px; font-weight: 650; margin-bottom: 18px; }
+.stat-tile { padding: 18px 20px 20px; }
+.stat-tile .value { font-size: 23px; }
+.grid { gap: 16px; }
+
+/* ---- 側邊欄:作用中項目=填色膠囊(DSM) ---- */
+.sidebar { background: linear-gradient(180deg, var(--sidebar-bg), color-mix(in srgb, var(--sidebar-bg) 88%, #000)); }
+.nav-list a { border-radius: 10px; padding: 10px 12px; }
+.nav-list a.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: #fff; box-shadow: none;
+}
+.nav-list a.active .nav-icon { color: var(--accent); }
+.nav-list a.active::before { display: none; }
+.nav-list a:hover:not(.active) { background: rgba(255,255,255,.055); }
+
+/* ---- 可折疊卡片(不常用區塊) ---- */
+.collapsible-card > .card-h2 {
+  cursor: pointer; user-select: none; margin-bottom: 18px;
+  padding-right: 26px; position: relative;
+}
+.collapsible-card.collapsed > .card-h2 { margin-bottom: 0; }
+.collapsible-card > .card-h2::after {
+  content: ""; position: absolute; right: 4px; top: 50%;
+  width: 8px; height: 8px; margin-top: -6px;
+  border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint);
+  transform: rotate(45deg); transition: transform .18s var(--ease);
+}
+.collapsible-card:not(.collapsed) > .card-h2::after { transform: rotate(-135deg); margin-top: -2px; }
+.collapsible-card > .card-h2:hover::after { border-color: var(--accent); }
+.collapsible-card.collapsed > *:not(.card-h2) { display: none !important; }
+
+/* ---- 架構提示(離線上傳更新) ---- */
+.arch-hint {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin: 0 0 12px; padding: 7px 12px; border-radius: 9px;
+  background: var(--accent-soft); color: var(--accent-text);
+  font-size: 12.5px; font-weight: 500;
+}
+.arch-hint::before {
+  content: ""; width: 14px; height: 14px; flex: none;
+  background: currentColor;
+  -webkit-mask: var(--chip-icon) center/contain no-repeat; mask: var(--chip-icon) center/contain no-repeat;
+  --chip-icon: url("/icons/chip.svg");
+}
+
+@media (max-width: 720px) {
+  .content { padding: 22px 16px 56px; }
+  .card { padding: 18px 16px; }
+}
