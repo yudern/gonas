@@ -7,6 +7,48 @@ const shell = document.getElementById("shell");
 const authGate = document.getElementById("auth-gate");
 const authGateContent = document.getElementById("auth-gate-content");
 
+// ---- 主題色(accent)----
+// 第七十輪 UI 升級(使用者:配色兩套都保留,可切換)。在 <html> 上掛 data-accent,
+// CSS 用 :root[data-accent=...] 覆寫 accent 系列 token(深/淺色各一套)。預設青綠。
+// 在模組載入時就套用,盡量避免切頁時閃一下舊色。偏好存在 localStorage(本機設定,
+// 讀寫都包 try/catch,無痕模式/被封鎖時安靜退回預設,不影響其他功能)。
+const ACCENTS = ["teal", "blue", "violet"];
+function getAccent() {
+  try {
+    const v = localStorage.getItem("gonas.accent");
+    if (ACCENTS.includes(v)) return v;
+  } catch {}
+  return "teal";
+}
+function applyAccent(name) {
+  const v = ACCENTS.includes(name) ? name : "teal";
+  if (v === "teal") document.documentElement.removeAttribute("data-accent");
+  else document.documentElement.setAttribute("data-accent", v);
+}
+applyAccent(getAccent());
+
+function wireAccentPicker() {
+  const box = document.getElementById("accent-picker");
+  if (!box) return;
+  const cur = getAccent();
+  box.querySelectorAll(".accent-dot").forEach((b) => {
+    b.classList.toggle("active", b.dataset.accentVal === cur);
+    b.setAttribute("aria-pressed", b.dataset.accentVal === cur ? "true" : "false");
+    b.addEventListener("click", () => {
+      const v = b.dataset.accentVal;
+      applyAccent(v);
+      try { localStorage.setItem("gonas.accent", v); } catch {}
+      box.querySelectorAll(".accent-dot").forEach((x) => {
+        const on = x === b;
+        x.classList.toggle("active", on);
+        x.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      // 即時重畫目前頁面,讓圖表等用 canvas 畫的顏色也跟著換。
+      if (typeof router === "function") router();
+    });
+  });
+}
+
 const routes = {
   dashboard: renderDashboard,
   setup: renderSetupWizard,
@@ -208,6 +250,7 @@ async function boot() {
   document.documentElement.lang = getLocale();
   applyStaticI18n();
   wireLangSwitcher();
+  wireAccentPicker();
   wireNavToggle();
   setUnauthorizedHandler(showLoginGate);
 
@@ -2191,8 +2234,8 @@ async function renderApps(el) {
       ${catalog.map((tmpl) => renderCatalogEntry(tmpl, appdataBase, installed.some((a) => a.template && a.template.id === tmpl.id))).join("")}
     </div>
 
-    <div class="card">
-      ${h2i("plus", esc(t("apps.customInstall")))}
+    <details class="card collapsible">
+      <summary>${h2i("plus", esc(t("apps.customInstall")))}</summary>
       <p class="hint">${esc(t("apps.customInstallHint"))}</p>
       <div id="custom-install-msg"></div>
       <form class="stacked" id="custom-install-form">
@@ -2203,7 +2246,7 @@ async function renderApps(el) {
         <div class="btn-row" style="margin-top:4px"><button type="button" id="add-service" class="secondary">${esc(t("apps.addService"))}</button></div>
         <div class="btn-row"><button type="submit">${esc(t("apps.install"))}</button></div>
       </form>
-    </div>
+    </details>
   `;
 
   el.querySelectorAll("[data-uninstall]").forEach((btn) => {
@@ -3754,12 +3797,12 @@ function renderUPSCard(status, cfg, names, isAdmin) {
     </form>` : "";
 
   return `
-    <div class="card">
-      ${h2i("battery", esc(t("ups.title")))}
+    <details class="card collapsible">
+      <summary>${h2i("battery", esc(t("ups.title")))}</summary>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">${esc(t("ups.hint"))}</p>
       ${statusHTML}
       ${configHTML}
-    </div>`;
+    </details>`;
 }
 
 function wireUPS(el) {
@@ -4259,8 +4302,8 @@ async function renderSystem(el) {
     ${renderUPSCard(upsStat, upsCfg, upsNames, isAdmin)}
 
     ${isAdmin ? `
-    <div class="card">
-      ${h2i("lock", esc(t("security.https")))}
+    <details class="card collapsible">
+      <summary>${h2i("lock", esc(t("security.https")))}</summary>
       <p style="color:var(--text-dim);font-size:12.5px;margin:0 0 12px">
         ${esc(t("security.currentStatus"))}<span class="pill ${https.enabled ? "ok" : "neutral"}">${https.enabled ? esc(t("security.enabledLabel")) : esc(t("security.disabledLabel"))}</span>
         ${https.certPath ? ` · ${esc(t("security.certFile"))} <code>${esc(https.certPath)}</code>` : ""}
@@ -4277,7 +4320,7 @@ async function renderSystem(el) {
         </div>
         <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
       </form>
-    </div>` : ""}
+    </details>` : ""}
   `;
 
   attachSystemUpdateHandlers(el, isAdmin);

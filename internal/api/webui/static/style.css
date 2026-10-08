@@ -1062,3 +1062,86 @@ p.empty-state { border: 1px dashed var(--border-strong); border-radius: 12px; pa
 }
 .service-row button:hover, .panel-tools button:hover { background: var(--surface-2); filter: none; box-shadow: none; }
 .service-row button:disabled { background: var(--surface-2); color: var(--text-faint); }
+
+
+/* =====================================================================
+   第七十輪:整體 UI 升級(綜合 fnOS 乾淨留白 + DSM 專業規整)
+   1) 可切換主題色(accent)——青綠(預設)/科技藍/紫,深淺各一套;
+   2) 不常用區塊收進可折疊卡片(summary 當標題列);
+   3) 側邊欄分區留白、作用中項目左側色條;卡片標題與間距再規整。
+   只動 CSS 與少量結構,不碰任何後端行為;離線可用、無外部資源。
+   ===================================================================== */
+
+/* ---- 主題色:科技藍 ---- */
+:root[data-accent="blue"] {
+  --accent: #4f6ef2; --accent-soft: #e9edfd; --accent-text: #3b4fcc;
+  --accent-hi: #5c7bff; --accent-lo: #3f57e0;
+  --ring: 0 0 0 3px rgba(79,110,242,.24);
+  --row-hover: rgba(79,110,242,.06);
+}
+:root[data-accent="violet"] {
+  --accent: #7c5cff; --accent-soft: #efeafe; --accent-text: #6a46d8;
+  --accent-hi: #8f74ff; --accent-lo: #6a46f0;
+  --ring: 0 0 0 3px rgba(124,92,255,.24);
+  --row-hover: rgba(124,92,255,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-accent="blue"]:not([data-theme="light"]) {
+    --accent: #8098ff; --accent-soft: rgba(128,152,255,.15); --accent-text: #aab8ff;
+    --accent-hi: #93a6ff; --accent-lo: #6d82f2;
+    --ring: 0 0 0 3px rgba(128,152,255,.3); --row-hover: rgba(128,152,255,.08);
+  }
+  :root[data-accent="violet"]:not([data-theme="light"]) {
+    --accent: #a98cff; --accent-soft: rgba(169,140,255,.16); --accent-text: #c2aeff;
+    --accent-hi: #b79fff; --accent-lo: #9070f5;
+    --ring: 0 0 0 3px rgba(169,140,255,.3); --row-hover: rgba(169,140,255,.08);
+  }
+}
+:root[data-theme="dark"][data-accent="blue"] {
+  --accent: #8098ff; --accent-soft: rgba(128,152,255,.15); --accent-text: #aab8ff;
+  --accent-hi: #93a6ff; --accent-lo: #6d82f2;
+  --ring: 0 0 0 3px rgba(128,152,255,.3); --row-hover: rgba(128,152,255,.08);
+}
+:root[data-theme="dark"][data-accent="violet"] {
+  --accent: #a98cff; --accent-soft: rgba(169,140,255,.16); --accent-text: #c2aeff;
+  --accent-hi: #b79fff; --accent-lo: #9070f5;
+  --ring: 0 0 0 3px rgba(169,140,255,.3); --row-hover: rgba(169,140,255,.08);
+}
+
+/* ---- 主題色切換器(側邊欄頁尾) ---- */
+.accent-picker { display: flex; gap: 8px; padding: 2px 2px 2px; }
+.accent-dot {
+  width: 20px; height: 20px; min-height: 0; padding: 0; flex: none;
+  border-radius: 50%; background: var(--d); border: 2px solid transparent;
+  box-shadow: inset 0 0 0 2px var(--sidebar-bg); cursor: pointer;
+  transition: transform .12s var(--ease), box-shadow .12s var(--ease);
+}
+.accent-dot:hover { transform: scale(1.12); filter: none; }
+.accent-dot.active { box-shadow: inset 0 0 0 2px var(--sidebar-bg), 0 0 0 2px var(--d); }
+.accent-dot:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+/* ---- 側邊欄:作用中項目左側色條(DSM 風),分區標題 ---- */
+.nav-list a { position: relative; }
+.nav-list a.active::before {
+  content: ""; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 18px; border-radius: 0 3px 3px 0; background: var(--accent);
+}
+.sidebar { padding-left: 16px; padding-right: 14px; }
+
+/* ---- 折疊卡片:summary 當標題列 ---- */
+details.card.collapsible > summary { padding: 2px 0; }
+details.card.collapsible:not([open]) > summary { padding: 2px 0; }
+details.card.collapsible[open] > summary { margin-bottom: 16px; }
+details.card.collapsible > summary h2 { margin: 0; }
+details.card.collapsible > summary:hover h2 { color: var(--accent-text); }
+details.card.collapsible > summary:hover .card-icon { background: var(--accent); color: var(--on-accent); }
+details.card.collapsible { transition: border-color .15s var(--ease); }
+details.card.collapsible[open] { border-color: var(--border-strong); }
+
+/* ---- 再規整:标题字重、卡片间距、页面标题 ---- */
+h2.card-h2 { font-weight: 680; }
+.card { margin-bottom: 18px; }
+.page-subtitle { color: var(--text-dim); }
+/* 链接型 accent 文本跟随主题色 */
+a { color: var(--accent-text); }
+.breadcrumb a, .file-name.is-dir { color: var(--accent-text); }
