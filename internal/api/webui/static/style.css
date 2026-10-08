@@ -1348,3 +1348,6 @@ a.stat-link:hover .stat-go { opacity: .9; right: 13px; color: var(--accent); bor
 .task-ico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; }
 .task-ico svg { width: 16px; height: 16px; color: var(--accent); fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .task-btn span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 修正:.desk-win 是 display:flex,會蓋掉 [hidden] 的 display:none,導致「最小化」無效。 */
+.desk-win[hidden] { display: none !important; }

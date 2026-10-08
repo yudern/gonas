@@ -51,6 +51,7 @@ function wireUIModeSwitch() {
   if (!box) return;
   const cur = getUIMode();
   box.querySelectorAll("button").forEach((b) => {
+    b.textContent = b.dataset.uimodeVal === "desktop" ? t("ui.desktopMode") : t("ui.simpleMode");
     b.classList.toggle("active", b.dataset.uimodeVal === cur);
     b.addEventListener("click", () => { if (b.dataset.uimodeVal !== cur) setUIMode(b.dataset.uimodeVal); });
   });
@@ -60,7 +61,9 @@ function wireAccentPicker() {
   const box = document.getElementById("accent-picker");
   if (!box) return;
   const cur = getAccent();
+  const accTitle = (v) => t(v === "blue" ? "ui.accentBlue" : v === "violet" ? "ui.accentViolet" : "ui.accentTeal");
   box.querySelectorAll(".accent-dot").forEach((b) => {
+    b.title = accTitle(b.dataset.accentVal); b.setAttribute("aria-label", accTitle(b.dataset.accentVal));
     b.classList.toggle("active", b.dataset.accentVal === cur);
     b.setAttribute("aria-pressed", b.dataset.accentVal === cur ? "true" : "false");
     b.addEventListener("click", () => {
@@ -367,8 +370,8 @@ function showApp() {
   if (effectiveUIMode() === "desktop") {
     shell.hidden = true;
     mountDesktop();
-    const hash = location.hash.replace(/^#\//, "");
-    desktopOpen(routes[hash] ? hash : "dashboard");
+    // 不自動開視窗:切換語言/配色/模式都會重載,若按 hash 自動開窗會「莫名其妙
+    // 彈出一個視窗」(使用者反映)。桌面乾淨啟動,由使用者點圖示開啟。
   } else {
     shell.hidden = false;
     router();
@@ -2227,8 +2230,8 @@ async function renderApps(el) {
           <div class="app-card-main">
             ${appAvatar(app.template.id, app.template.name)}
             <div class="app-card-body">
-              <h3>${esc(app.template.name)}</h3>
-              <p>${esc(translateNotice(app.template.description || ""))}</p>
+              <h3>${esc(appcatName(app.template))}</h3>
+              <p>${esc(appcatDesc(app.template))}</p>
             </div>
             <div class="btn-row" style="margin:0">
               <button class="secondary" data-check-update="${esc(app.template.id)}">${esc(t("apps.checkUpdate"))}</button>
@@ -3594,6 +3597,25 @@ function renderCatalogSource(src) {
   `;
 }
 
+// appcat*:應用商店文案一律走前端 i18n(第七十三輪:使用者反映英文/簡體介面裡
+// 混進繁體——根因是這些名稱/說明寫死在後端 catalog.go)。以 app id 為鍵在三種語言
+// 裡查;查不到才退回後端字串,保證切語言時全部跟著變、不再混語言。
+function appcatName(tmpl) {
+  const k = "appcat." + tmpl.id + ".name"; const v = t(k);
+  return v === k ? tmpl.name : v;
+}
+function appcatDesc(tmpl) {
+  const k = "appcat." + tmpl.id + ".desc"; const v = t(k);
+  return v === k ? translateNotice(tmpl.description || "") : v;
+}
+function appcatEnvDesc(id, key, fallback) {
+  let k = "appcat." + id + ".env." + key, v = t(k);
+  if (v !== k) return v;
+  k = "appcatEnv." + key; v = t(k);
+  if (v !== k) return v;
+  return translateNotice(fallback || "");
+}
+
 function renderCatalogEntry(tmpl, appdataBase, isInstalled) {
   const base = appdataBase || "/mnt/tank";
   const fields = tmpl.services.flatMap((svc) => {
@@ -3617,7 +3639,7 @@ function renderCatalogEntry(tmpl, appdataBase, isInstalled) {
       <div class="field">
         <label>${esc(svc.name)} · ${esc(e.key)}${e.required ? esc(t("apps.required")) : ""}</label>
         <input type="${/pass/i.test(e.key) ? "password" : "text"}" name="${esc(svc.name)}.env.${esc(e.key)}" placeholder="${esc(e.default || "")}" ${e.required ? "required" : ""}>
-        ${e.description ? `<div class="hint">${esc(translateNotice(e.description))}</div>` : ""}
+        ${e.description ? `<div class="hint">${esc(appcatEnvDesc(tmpl.id, e.key, e.description))}</div>` : ""}
       </div>`);
     // 第六十輪:掛載路徑改成「預填實際值」(不是 placeholder),使用者直接
     // 按確認即可裝,不用自己想路徑。多服務 App 每個服務各給一個子目錄,避免
@@ -3638,8 +3660,8 @@ function renderCatalogEntry(tmpl, appdataBase, isInstalled) {
     <div class="app-card catalog-card">
       ${appAvatar(tmpl.id, tmpl.name)}
       <div class="app-card-body">
-        <h3>${esc(tmpl.name)}${sourceBadge}</h3>
-        <p>${esc(translateNotice(tmpl.description || ""))}</p>
+        <h3>${esc(appcatName(tmpl))}${sourceBadge}</h3>
+        <p>${esc(appcatDesc(tmpl))}</p>
         <div class="image-chips">${tmpl.services.map((s) => `<code>${esc(s.image)}</code>`).join("")}</div>
       </div>
       ${isInstalled
@@ -5636,12 +5658,12 @@ function mountDesktop() {
         <span>GoNAS</span>
       </div>
       <div class="desk-top-right">
-        <div class="accent-picker" id="desk-accent" role="group" aria-label="主題色">
+        <div class="accent-picker" id="desk-accent" role="group" aria-label="${esc(t("ui.accent"))}">
           <button type="button" class="accent-dot" data-accent-val="teal" style="--d:#2f8b80" title="青綠"></button>
           <button type="button" class="accent-dot" data-accent-val="blue" style="--d:#4f6ef2" title="科技藍"></button>
           <button type="button" class="accent-dot" data-accent-val="violet" style="--d:#7c5cff" title="紫"></button>
         </div>
-        <select id="desk-lang" class="lang-switcher" aria-label="Language">
+        <select id="desk-lang" class="lang-switcher" aria-label="${esc(t("ui.language"))}">
           <option value="zh-Hant">繁體中文</option><option value="zh-Hans">简体中文</option><option value="en">English</option>
         </select>
         <span class="desk-clock" id="desk-clock"></span>
@@ -5658,7 +5680,7 @@ function mountDesktop() {
   `;
   document.body.appendChild(d);
 
-  d.querySelectorAll(".desk-icon").forEach((b) => b.addEventListener("click", () => { location.hash = "#/" + b.dataset.open; }));
+  d.querySelectorAll(".desk-icon").forEach((b) => b.addEventListener("click", () => desktopOpen(b.dataset.open)));
   d.querySelector("#desk-to-simple").textContent = t("ui.simpleMode");
   d.querySelector("#desk-to-simple").addEventListener("click", () => setUIMode("simple"));
   d.querySelector("#desk-logout").textContent = t("nav.logout");
@@ -5667,7 +5689,9 @@ function mountDesktop() {
   // 主題色 / 語言(桌面頂欄)
   const accentBox = d.querySelector("#desk-accent");
   const curAccent = getAccent();
+  const deskAccTitle = (v) => t(v === "blue" ? "ui.accentBlue" : v === "violet" ? "ui.accentViolet" : "ui.accentTeal");
   accentBox.querySelectorAll(".accent-dot").forEach((b) => {
+    b.title = deskAccTitle(b.dataset.accentVal); b.setAttribute("aria-label", deskAccTitle(b.dataset.accentVal));
     b.classList.toggle("active", b.dataset.accentVal === curAccent);
     b.addEventListener("click", () => { applyAccent(b.dataset.accentVal); try { localStorage.setItem("gonas.accent", b.dataset.accentVal); } catch {} accentBox.querySelectorAll(".accent-dot").forEach((x) => x.classList.toggle("active", x === b)); });
   });
@@ -5712,9 +5736,9 @@ async function desktopOpen(route) {
     <div class="win-titlebar">
       <span class="win-title">${esc(t("nav." + route))}</span>
       <div class="win-actions">
-        <button type="button" class="win-btn win-min" aria-label="最小化">—</button>
-        <button type="button" class="win-btn win-max" aria-label="最大化">▢</button>
-        <button type="button" class="win-btn win-close" aria-label="關閉">✕</button>
+        <button type="button" class="win-btn win-min" aria-label="${esc(t("ui.minimize"))}" title="${esc(t("ui.minimize"))}">—</button>
+        <button type="button" class="win-btn win-max" aria-label="${esc(t("ui.maximize"))}" title="${esc(t("ui.maximize"))}">▢</button>
+        <button type="button" class="win-btn win-close" aria-label="${esc(t("ui.closeWin"))}" title="${esc(t("ui.closeWin"))}">✕</button>
       </div>
     </div>
     <div class="win-body"><p class="loading">${esc(t("common.loading"))}</p></div>
