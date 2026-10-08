@@ -36,6 +36,9 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	if strings.ContainsAny(shell, " \t\n") {
 		shell = ""
 	}
+	// 終端機訊息要跟著 Web UI 的語言走(第七十四輪:使用者實機——繁體介面下
+	// 終端卻顯示簡體提示)。前端開 WebSocket 時帶 ?lang=<locale>。
+	lang := r.URL.Query().Get("lang")
 
 	ws, err := upgradeWebSocket(w, r)
 	if err != nil {
@@ -51,9 +54,7 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	if shell == "" {
 		found, noShell := s.pickContainerShell(r.Context(), id)
 		if noShell {
-			_ = ws.WriteBinary([]byte("\r\n[GoNAS] 这个容器的镜像是精简镜像,里面没有任何 shell(/bin/bash、/bin/sh 都不存在),所以无法打开终端。\r\n" +
-				"[GoNAS] This container's image has no shell (no /bin/bash or /bin/sh), so a terminal can't be opened.\r\n" +
-				"\r\n可以改用「查看日志」「详情」排查;Portainer 这类应用请直接打开它的网页界面管理。\r\n"))
+			_ = ws.WriteBinary([]byte(terminalNoShellMsg(lang)))
 			ws.WriteClose()
 			return
 		}
@@ -63,7 +64,7 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	exec, err := s.docker.StartInteractiveExec(r.Context(), id, []string{shell})
 	if err != nil {
 		s.logger.Warn("starting interactive exec failed", "err", err, "containerId", id)
-		_ = ws.WriteBinary([]byte("\r\n[GoNAS] 无法进入容器终端: " + err.Error() + "\r\n"))
+		_ = ws.WriteBinary([]byte(terminalExecErrPrefix(lang) + err.Error() + "\r\n"))
 		ws.WriteClose()
 		return
 	}
@@ -155,4 +156,31 @@ func (s *Server) pickContainerShell(ctx context.Context, id string) (shell strin
 		return "/bin/sh", false
 	}
 	return "", true
+}
+
+// terminalNoShellMsg / terminalExecErrPrefix 依 Web UI 語言回傳終端機提示文字
+// (第七十四輪)。lang 來自 WebSocket 的 ?lang=;未知時退回繁體。
+func terminalNoShellMsg(lang string) string {
+	switch lang {
+	case "zh-Hans":
+		return "\r\n[GoNAS] 这个容器的镜像是精简镜像,里面没有任何 shell(/bin/bash、/bin/sh 都不存在),所以无法打开终端。\r\n" +
+			"\r\n可以改用「查看日志」「详情」排查;Portainer 这类应用请直接打开它的网页界面管理。\r\n"
+	case "en":
+		return "\r\n[GoNAS] This container's image is minimal and has no shell (neither /bin/bash nor /bin/sh exists), so a terminal can't be opened.\r\n" +
+			"\r\nUse \"View logs\" or \"Details\" to inspect it instead; for apps like Portainer, open its own web UI to manage it.\r\n"
+	default:
+		return "\r\n[GoNAS] 這個容器的映像是精簡映像,裡面沒有任何 shell(/bin/bash、/bin/sh 都不存在),所以無法開啟終端機。\r\n" +
+			"\r\n可以改用「查看日誌」「詳情」排查;Portainer 這類應用請直接開啟它的網頁介面管理。\r\n"
+	}
+}
+
+func terminalExecErrPrefix(lang string) string {
+	switch lang {
+	case "zh-Hans":
+		return "\r\n[GoNAS] 无法进入容器终端: "
+	case "en":
+		return "\r\n[GoNAS] Could not open the container terminal: "
+	default:
+		return "\r\n[GoNAS] 無法進入容器終端機: "
+	}
 }

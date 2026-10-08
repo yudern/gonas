@@ -1351,3 +1351,18 @@ a.stat-link:hover .stat-go { opacity: .9; right: 13px; color: var(--accent); bor
 
 /* 修正:.desk-win 是 display:flex,會蓋掉 [hidden] 的 display:none,導致「最小化」無效。 */
 .desk-win[hidden] { display: none !important; }
+
+/* ---- 第七十四輪:自訂檔案選擇按鈕(原生 <input type=file> 的「選擇檔案」文字跟
+   瀏覽器語言走,不受介面語言控制;改成自己畫的按鈕才能跟著介面語言) ---- */
+.file-pick { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; cursor: pointer; }
+.file-pick-btn {
+  font-weight: 600; font-size: 13px; padding: 8px 15px; border-radius: 9px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-sm); transition: background .15s var(--ease);
+}
+.file-pick:hover .file-pick-btn { background: var(--surface-2); }
+.file-pick-name { font-size: 13px; color: var(--text-faint); overflow-wrap: anywhere; }
+.file-pick-name.has-file { color: var(--text); font-weight: 500; }
+
+/* ---- 排版:寬螢幕/全螢幕時內容區太窄、兩側留白過大(使用者反映)。放寬上限。 ---- */
+.content { max-width: 1320px; }

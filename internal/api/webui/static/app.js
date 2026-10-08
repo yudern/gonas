@@ -688,7 +688,11 @@ function renderSystemUpdateCard(update, currentVersion, isAdmin, platform) {
       <p class="hint" style="margin:0 0 10px">${esc(t("update.offlineHint"))}</p>
       <div class="arch-hint">${esc(t("update.archHint", { platform: platform || "linux/?" }))}</div>
       <form id="update-upload-form">
-        <input type="file" id="update-upload-file" accept="" style="font-size:13px">
+        <label class="file-pick">
+          <input type="file" id="update-upload-file" accept="" hidden>
+          <span class="file-pick-btn">${esc(t("update.chooseFile"))}</span>
+          <span class="file-pick-name" id="update-upload-name">${esc(t("update.noFileChosen"))}</span>
+        </label>
         <div class="btn-row" style="margin-top:10px">
           <button type="submit" id="update-upload-btn" ${update.applyInProgress ? "disabled" : ""}>${esc(t("update.offlineUpload"))}</button>
         </div>
@@ -783,6 +787,15 @@ function attachSystemUpdateHandlers(el, isAdmin) {
     });
   }
 
+  const uploadFileInput = el.querySelector("#update-upload-file");
+  const uploadNameEl = el.querySelector("#update-upload-name");
+  if (uploadFileInput && uploadNameEl) {
+    uploadFileInput.addEventListener("change", () => {
+      const f = uploadFileInput.files && uploadFileInput.files[0];
+      uploadNameEl.textContent = f ? f.name : t("update.noFileChosen");
+      uploadNameEl.classList.toggle("has-file", !!f);
+    });
+  }
   const uploadForm = el.querySelector("#update-upload-form");
   if (uploadForm) {
     uploadForm.addEventListener("submit", async (ev) => {
@@ -3328,7 +3341,7 @@ async function showContainerTerminalPanel(el, containerID) {
 
   // WebSocket:同源,ws/wss 跟著頁面的 http/https。
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${scheme}//${location.host}/api/v1/docker/containers/${encodeURIComponent(containerID)}/terminal`);
+  const ws = new WebSocket(`${scheme}//${location.host}/api/v1/docker/containers/${encodeURIComponent(containerID)}/terminal?lang=${encodeURIComponent(getLocale())}`);
   ws.binaryType = "arraybuffer";
   const enc = new TextEncoder();
   const dec = new TextDecoder();
