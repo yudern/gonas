@@ -47,9 +47,9 @@ function msg(kind, text) {
 // 443/8443/9443 之类的端口用 https。
 const NON_WEB_PORTS = new Set([22, 25, 53, 139, 445, 1883, 2049, 3306, 5432, 5900, 6379, 6881, 51413]);
 const WEB_PORT_RANK = [80, 8080, 8081, 3000, 5000, 9000, 8096, 8123, 8000, 443, 8443, 9443];
-function pickOpenUrl(ctr, tmplSvc) {
+function pickOpenUrl(ctr, tmplSvc, probe) {
   const seen = new Set();
-  const pubs = [];
+  let pubs = [];
   (ctr.Ports || []).forEach((p) => {
     if (!p.PublicPort || !(p.Type === "tcp" || !p.Type)) return;
     const key = p.PrivatePort + ":" + p.PublicPort;
@@ -57,6 +57,14 @@ function pickOpenUrl(ctr, tmplSvc) {
     seen.add(key);
     pubs.push(p);
   });
+  // probe:后端实际对每个已发布端口发 HTTP/HTTPS 请求的结果(只含「真的讲 HTTP」的端口)。
+  // 有结果就只在这些端口里选——BT/DNS/数据库端口根本不会出现,不管是不是官方镜像。
+  const probed = {};
+  (probe || []).forEach((q) => { probed[q.port] = q; });
+  if (probe && probe.length) {
+    const web = pubs.filter((p) => probed[p.PublicPort]);
+    if (web.length) pubs = web;
+  }
   if (!pubs.length) return "";
   let pick = null;
   const declared = ((tmplSvc && tmplSvc.ports) || []).filter((p) => !p.protocol || p.protocol === "tcp");
@@ -66,13 +74,16 @@ function pickOpenUrl(ctr, tmplSvc) {
   }
   if (!pick) {
     const rank = (p) => {
-      if (NON_WEB_PORTS.has(p.PrivatePort)) return 1000 + p.PrivatePort;
-      const i = WEB_PORT_RANK.indexOf(p.PrivatePort);
-      return i >= 0 ? i : 100 + p.PrivatePort;
+      const q = probed[p.PublicPort];
+      const base = NON_WEB_PORTS.has(p.PrivatePort) ? 1000 + p.PrivatePort
+        : (WEB_PORT_RANK.indexOf(p.PrivatePort) >= 0 ? WEB_PORT_RANK.indexOf(p.PrivatePort) : 100 + p.PrivatePort);
+      // 探测到回 text/html 的最像「给人看的网页」,排最前;其次是正常/要求登录的回应。
+      return base + (q ? (q.html ? 0 : 5000) : 9000);
     };
     pick = pubs.slice().sort((a, b) => rank(a) - rank(b))[0];
   }
-  const https = [443, 8443, 9443].includes(pick.PrivatePort);
+  const q = probed[pick.PublicPort];
+  const https = q ? q.scheme === "https" : [443, 8443, 9443].includes(pick.PrivatePort);
   return `${https ? "https" : "http"}://${location.hostname}:${pick.PublicPort}`;
 }
 
@@ -2101,7 +2112,7 @@ async function renderApps(el) {
               const statePill = containerStatePill(st);
               const openUrl = openUrlById[id];
               const openLink = running && openUrl
-                ? `<a class="btnlink-sm" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>`
+                ? `<a class="btnlink-sm" data-open-id="${esc(id)}" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>`
                 : "";
               return `
               <div class="service-row">
@@ -2134,7 +2145,7 @@ async function renderApps(el) {
         const name = (c.Names && c.Names[0] ? c.Names[0].replace(/^\//, "") : id.slice(0, 12));
         const openUrl = openUrlById[id];
         const statePill = containerStatePill(c.State);
-        const openLink = running && openUrl ? `<a class="btnlink-sm" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>` : "";
+        const openLink = running && openUrl ? `<a class="btnlink-sm" data-open-id="${esc(id)}" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>` : "";
         return `
           <div class="service-row">
             <span>${esc(name)} <span style="color:var(--text-faint)">${esc(c.Image || "")}</span> ${statePill}</span>
@@ -2229,6 +2240,23 @@ async function renderApps(el) {
   });
 
   // 「检查更新」:比对 registry 摘要,显示有无新版(不下载);有新版再点「更新」。
+  // 页面先用「模板/常见端口」的推测立刻画出「打开」链接,再让后端实际探测每个已发布
+  // 端口讲不讲 HTTP,探测完回头把链接修正到真正的网页端口(探测最多几秒,不卡页面)。
+  if (dockerStatus.available) {
+    api.dockerWebPorts().then((probes) => {
+      if (location.hash !== "#/apps") return;
+      const byId = {};
+      (containers || []).forEach((c) => { byId[c.Id] = c; });
+      el.querySelectorAll("a[data-open-id]").forEach((a) => {
+        const id = a.dataset.openId;
+        const c = byId[id];
+        if (!c) return;
+        const u = pickOpenUrl(c, tmplSvcById[id], (probes || {})[id]);
+        if (u) { a.href = u; a.title = u; }
+      });
+    }).catch(() => {});
+  }
+
   el.querySelectorAll("[data-check-update]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.checkUpdate;

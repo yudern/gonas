@@ -551,6 +551,7 @@ func New(logger *slog.Logger, dataDir string) (*Server, http.Handler, error) {
 	mux.HandleFunc("PUT /api/v1/docker/registry-config", s.requireAdmin(s.handleDockerRegistryConfigSet))
 	mux.HandleFunc("GET /api/v1/docker/ping", s.requireAuth(s.handleDockerPing))
 	mux.HandleFunc("GET /api/v1/docker/containers", s.requireAuth(s.handleDockerContainers))
+	mux.HandleFunc("GET /api/v1/docker/web-ports", s.requireAuth(s.handleDockerWebPorts))
 	mux.HandleFunc("GET /api/v1/docker/images", s.requireAuth(s.handleDockerImages))
 	mux.HandleFunc("POST /api/v1/docker/images/prune", s.requireAdmin(s.handleDockerImagesPrune))
 	mux.HandleFunc("DELETE /api/v1/docker/images/{id}", s.requireAdmin(s.handleDockerImageRemove))

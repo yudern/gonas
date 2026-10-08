@@ -20,6 +20,7 @@ type Container struct {
 
 // PortBinding 對應容器目前實際的埠對應狀態(不是設定,是查詢結果)。
 type PortBinding struct {
+	IP          string `json:"IP,omitempty"`
 	PrivatePort int    `json:"PrivatePort"`
 	PublicPort  int    `json:"PublicPort,omitempty"`
 	Type        string `json:"Type"` // "tcp" / "udp"

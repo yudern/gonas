@@ -96,6 +96,7 @@ export const api = {
   registryConfig: () => request("GET", "/api/v1/docker/registry-config"),
   setRegistryConfig: (registryMirrors, insecureRegistries) => request("PUT", "/api/v1/docker/registry-config", { registryMirrors, insecureRegistries }),
   containers: () => request("GET", "/api/v1/docker/containers"),
+  dockerWebPorts: () => request("GET", "/api/v1/docker/web-ports"),
   images: () => request("GET", "/api/v1/docker/images"),
   removeImage: (id) => request("DELETE", `/api/v1/docker/images/${encodeURIComponent(id)}`),
   pruneImages: () => request("POST", "/api/v1/docker/images/prune"),

@@ -1909,7 +1909,7 @@ const dict66 = {
     detCommand: "啟動指令", detWorkdir: "工作目錄", detUser: "執行身分", detHostname: "主機名稱", detHealth: "健康檢查",
     detExit: "結束碼 {code}", detRestarted: "(已重啟 {n} 次)", detPrivileged: "特權模式", detYes: "是",
     detCaps: "額外權限", detDevices: "裝置", detNetworks: "網路", detNetName: "網路", detGateway: "閘道",
-    detPorts: "埠對應", detNotPublished: "未對應到主機", detMountType: "類型", detMountSrc: "主機路徑 / 卷", detMountDst: "容器路徑",
+    detPorts: "埠對應", detNotPublished: "(映像宣告的容器內部埠,未對外發布,屬正常)", detMountType: "類型", detMountSrc: "主機路徑 / 卷", detMountDst: "容器路徑",
     detEnvKey: "名稱", detEnvVal: "值", detShow: "顯示", detHide: "隱藏", detLabels: "標籤", detImageId: "映像 ID",
   } },
   "zh-Hans": { apps: {
@@ -1919,7 +1919,7 @@ const dict66 = {
     detCommand: "启动命令", detWorkdir: "工作目录", detUser: "运行用户", detHostname: "主机名", detHealth: "健康检查",
     detExit: "退出码 {code}", detRestarted: "(已重启 {n} 次)", detPrivileged: "特权模式", detYes: "是",
     detCaps: "额外权限", detDevices: "设备", detNetworks: "网络", detNetName: "网络", detGateway: "网关",
-    detPorts: "端口映射", detNotPublished: "未映射到主机", detMountType: "类型", detMountSrc: "主机路径 / 卷", detMountDst: "容器路径",
+    detPorts: "端口映射", detNotPublished: "(镜像声明的容器内部端口,未对外发布,属正常)", detMountType: "类型", detMountSrc: "主机路径 / 卷", detMountDst: "容器路径",
     detEnvKey: "名称", detEnvVal: "值", detShow: "显示", detHide: "隐藏", detLabels: "标签", detImageId: "镜像 ID",
   } },
   "en": { apps: {
@@ -1929,7 +1929,7 @@ const dict66 = {
     detCommand: "Command", detWorkdir: "Working dir", detUser: "User", detHostname: "Hostname", detHealth: "Health",
     detExit: "exit code {code}", detRestarted: "(restarted {n}×)", detPrivileged: "Privileged", detYes: "yes",
     detCaps: "Added capabilities", detDevices: "Devices", detNetworks: "Networks", detNetName: "Network", detGateway: "Gateway",
-    detPorts: "Ports", detNotPublished: "not published", detMountType: "Type", detMountSrc: "Host path / volume", detMountDst: "Container path",
+    detPorts: "Ports", detNotPublished: "(port declared by the image, not published to the host — normal)", detMountType: "Type", detMountSrc: "Host path / volume", detMountDst: "Container path",
     detEnvKey: "Name", detEnvVal: "Value", detShow: "Show", detHide: "Hide", detLabels: "Labels", detImageId: "Image ID",
   } },
 };
