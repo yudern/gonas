@@ -38,6 +38,44 @@ function msg(kind, text) {
   return `<div class="msg ${kind}">${esc(text)}</div>`;
 }
 
+// pickOpenUrl:决定「打开」按钮该去哪个端口。
+// 之前取 Docker 回传的第一个 TCP 发布端口,而 Docker 是按容器端口排序的——
+// qBittorrent 的 6881(BT 传输端口)排在 8080(网页)前面,「打开」就跑去 6881,
+// 浏览器只会得到 ERR_CONNECTION_RESET。现在的选择顺序:
+//   1. 应用模板里声明的第一个 TCP 端口(模板作者总是把网页端口放第一个);
+//   2. 否则避开已知的非网页端口(BT/DNS/SSH/数据库…),优先常见网页端口;
+// 443/8443/9443 之类的端口用 https。
+const NON_WEB_PORTS = new Set([22, 25, 53, 139, 445, 1883, 2049, 3306, 5432, 5900, 6379, 6881, 51413]);
+const WEB_PORT_RANK = [80, 8080, 8081, 3000, 5000, 9000, 8096, 8123, 8000, 443, 8443, 9443];
+function pickOpenUrl(ctr, tmplSvc) {
+  const seen = new Set();
+  const pubs = [];
+  (ctr.Ports || []).forEach((p) => {
+    if (!p.PublicPort || !(p.Type === "tcp" || !p.Type)) return;
+    const key = p.PrivatePort + ":" + p.PublicPort;
+    if (seen.has(key)) return; // IPv4/IPv6 各回一笔,去重
+    seen.add(key);
+    pubs.push(p);
+  });
+  if (!pubs.length) return "";
+  let pick = null;
+  const declared = ((tmplSvc && tmplSvc.ports) || []).filter((p) => !p.protocol || p.protocol === "tcp");
+  for (const d of declared) {
+    pick = pubs.find((p) => p.PrivatePort === d.containerPort);
+    if (pick) break;
+  }
+  if (!pick) {
+    const rank = (p) => {
+      if (NON_WEB_PORTS.has(p.PrivatePort)) return 1000 + p.PrivatePort;
+      const i = WEB_PORT_RANK.indexOf(p.PrivatePort);
+      return i >= 0 ? i : 100 + p.PrivatePort;
+    };
+    pick = pubs.slice().sort((a, b) => rank(a) - rank(b))[0];
+  }
+  const https = [443, 8443, 9443].includes(pick.PrivatePort);
+  return `${https ? "https" : "http"}://${location.hostname}:${pick.PublicPort}`;
+}
+
 // msgAction:帶一個行動連結的提示條(第六十七輪 UI 精品化)。原本是
 // 「提示條 + 下面另起一顆孤零零的按鈕」,兩個元素分開、按鈕還跟下面的
 // 卡片重複;合成一條,行動就在提示的右側。
@@ -2008,12 +2046,19 @@ async function renderApps(el) {
   // 注意:容器清单来自 docker.Container,JSON 字段是大写开头(Id/State/Ports/
   // Labels/Names/Image),与 InstallResult.containerIds(小写)不同,别搞混。
   const stateById = {};
-  const portById = {};
+  const openUrlById = {};
+  // 容器 id -> 模板里对应的服务定义(用来知道哪个端口才是网页端口)。
+  const tmplSvcById = {};
+  installed.forEach((app) => {
+    const svcs = (app.template && app.template.services) || [];
+    Object.entries((app.result && app.result.containerIds) || {}).forEach(([svc, cid]) => {
+      tmplSvcById[cid] = svcs.find((s) => s.name === svc);
+    });
+  });
   (containers || []).forEach((c) => {
     stateById[c.Id] = c.State;
-    // 找出这个容器对外发布的第一个 TCP 端口,用来生成「打开」链接。
-    const pub = (c.Ports || []).find((p) => p.PublicPort && (p.Type === "tcp" || !p.Type));
-    if (pub) portById[c.Id] = pub.PublicPort;
+    const u = pickOpenUrl(c, tmplSvcById[c.Id]);
+    if (u) openUrlById[c.Id] = u;
   });
   // 非 GoNAS 应用商店安装的独立容器(CLI/compose/Portainer 建的):没有
   // com.gonas.app 标签。单独列出让用户也能管理(第六十轮产品复审)。
@@ -2054,9 +2099,9 @@ async function renderApps(el) {
               const st = stateById[id];
               const running = st === "running";
               const statePill = containerStatePill(st);
-              const port = portById[id];
-              const openLink = running && port
-                ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>`
+              const openUrl = openUrlById[id];
+              const openLink = running && openUrl
+                ? `<a class="btnlink-sm" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>`
                 : "";
               return `
               <div class="service-row">
@@ -2087,9 +2132,9 @@ async function renderApps(el) {
         const id = c.Id;
         const running = c.State === "running";
         const name = (c.Names && c.Names[0] ? c.Names[0].replace(/^\//, "") : id.slice(0, 12));
-        const port = portById[id];
+        const openUrl = openUrlById[id];
         const statePill = containerStatePill(c.State);
-        const openLink = running && port ? `<a class="btnlink-sm" href="http://${location.hostname}:${port}" target="_blank" rel="noopener">${esc(t("apps.open"))}</a>` : "";
+        const openLink = running && openUrl ? `<a class="btnlink-sm" href="${esc(openUrl)}" target="_blank" rel="noopener" title="${esc(openUrl)}">${esc(t("apps.open"))}</a>` : "";
         return `
           <div class="service-row">
             <span>${esc(name)} <span style="color:var(--text-faint)">${esc(c.Image || "")}</span> ${statePill}</span>
