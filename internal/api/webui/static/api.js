@@ -76,6 +76,7 @@ export const api = {
   setTimezone: (timezone) => request("PUT", "/api/v1/system/time/timezone", { timezone }),
   setNTP: (enabled) => request("PUT", "/api/v1/system/time/ntp", { enabled }),
   setManualTime: (t) => request("PUT", "/api/v1/system/time/manual", { time: t }),
+  importConfig: (file, sections) => request("POST", "/api/v1/system/config/import", { file, sections }),
   upsStatus: () => request("GET", "/api/v1/ups/status"),
   upsList: () => request("GET", "/api/v1/ups/list"),
   upsConfig: () => request("GET", "/api/v1/ups/config"),

@@ -3887,6 +3887,73 @@ function isBooleanMetric(metric) {
   return metric === "arrayFailed" || metric === "smartFailed";
 }
 
+// wireConfigCard 處理設定匯入:讀檔→預覽(數量/手動清單)→勾選區塊→還原。
+function wireConfigCard(el) {
+  const fileInput = el.querySelector("#cfg-import-file");
+  const nameEl = el.querySelector("#cfg-import-name");
+  const preview = el.querySelector("#cfg-import-preview");
+  const msgBox = el.querySelector("#cfg-import-msg");
+  if (!fileInput) return;
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (nameEl) { nameEl.textContent = f ? f.name : t("update.noFileChosen"); nameEl.classList.toggle("has-file", !!f); }
+    if (msgBox) msgBox.innerHTML = "";
+    if (!f) { preview.innerHTML = ""; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      let data;
+      try { data = JSON.parse(reader.result); } catch { preview.innerHTML = msg("error", t("cfg.badFile")); return; }
+      if (!data || data.magic !== "gonas-config-export" || !data.config) { preview.innerHTML = msg("error", t("cfg.badFile")); return; }
+      renderImportPreview(el, data);
+    };
+    reader.readAsText(f);
+  });
+}
+
+function renderImportPreview(el, data) {
+  const preview = el.querySelector("#cfg-import-preview");
+  const c = data.config || {};
+  const nAdmins = (c.admins || []).length;
+  const nRules = (c.alertRules || []).length;
+  const manual = [];
+  if (c.pool) manual.push(t("cfg.manualPool"));
+  if ((c.shares || []).length) manual.push(t("cfg.manualShares", { n: c.shares.length }));
+  if ((c.exports || []).length) manual.push(t("cfg.manualExports", { n: c.exports.length }));
+  if ((c.users || []).length) manual.push(t("cfg.manualUsers", { n: c.users.length }));
+  if ((c.installedApps || []).length) manual.push(t("cfg.manualApps", { n: c.installedApps.length }));
+  if (c.wireGuard) manual.push(t("cfg.manualWg"));
+  const when = data.exportedAt ? formatDateTime(data.exportedAt) : "";
+  preview.innerHTML = `
+    <div class="card" style="background:var(--surface-2);box-shadow:none;margin:0 0 12px">
+      <p class="hint" style="margin:0 0 12px">${esc(t("cfg.fileFrom", { host: data.hostname || "—", version: data.gonasVersion || "—", date: when }))}</p>
+      <p style="margin:0 0 8px;font-weight:600;font-size:13px">${esc(t("cfg.restoreSections"))}</p>
+      <div class="checkbox-row"><label><input type="checkbox" class="cfg-sec" data-sec="accounts" checked> ${esc(t("cfg.secAccounts", { n: nAdmins }))}</label></div>
+      <div class="checkbox-row"><label><input type="checkbox" class="cfg-sec" data-sec="notifications" checked> ${esc(t("cfg.secNotifications", { n: nRules }))}</label></div>
+      <div class="checkbox-row"><label><input type="checkbox" class="cfg-sec" data-sec="systemConfig" checked> ${esc(t("cfg.secSystem"))}</label></div>
+      ${manual.length ? `<p class="hint" style="margin:12px 0 4px"><strong>${esc(t("cfg.manualTitle"))}</strong></p><p class="hint" style="margin:0">${manual.map(esc).join("、")}</p>` : ""}
+      ${msg("warn", t("cfg.restoreWarn"))}
+      <div class="btn-row"><button type="button" id="cfg-restore-btn">${esc(t("cfg.restore"))}</button></div>
+    </div>`;
+  const btn = preview.querySelector("#cfg-restore-btn");
+  const msgBox = el.querySelector("#cfg-import-msg");
+  btn.addEventListener("click", async () => {
+    const sections = {};
+    preview.querySelectorAll(".cfg-sec").forEach((cb) => { sections[cb.dataset.sec] = cb.checked; });
+    if (!sections.accounts && !sections.notifications && !sections.systemConfig) {
+      msgBox.innerHTML = msg("error", t("cfg.nothingSelected")); return;
+    }
+    btn.disabled = true;
+    try {
+      const rep = await api.importConfig(data, sections);
+      const items = (rep.restored || []).map((k) => t("cfg.sec_" + k)).join("、");
+      msgBox.innerHTML = msg("ok", t("cfg.restored", { items: items || "—" }));
+    } catch (err) {
+      btn.disabled = false;
+      msgBox.innerHTML = msg("error", translateError(err.message));
+    }
+  });
+}
+
 // renderTimeCard 畫「時間與時區」卡(第七十五輪:NAS 最基礎的系統時間設定)。
 function renderTimeCard(data, isAdmin) {
   const st = data && data.status;
@@ -4533,6 +4600,23 @@ async function renderSystem(el) {
         <div class="btn-row"><button type="submit">${esc(t("security.saveHttps"))}</button></div>
       </form>
     </div>` : ""}
+
+    ${isAdmin ? `
+    <details class="card collapsible2">
+      <summary>${h2i("backup", esc(t("cfg.title")))}</summary>
+      <p class="hint" style="margin:14px 0 12px">${esc(t("cfg.hint"))}</p>
+      <div class="btn-row"><a class="btnlink" href="/api/v1/system/config/export" download>${esc(t("cfg.export"))}</a></div>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)">
+        <p style="margin:0 0 10px;font-weight:600;font-size:13.5px">${esc(t("cfg.importTitle"))}</p>
+        <label class="file-pick">
+          <input type="file" id="cfg-import-file" accept=".json,application/json" hidden>
+          <span class="file-pick-btn">${esc(t("update.chooseFile"))}</span>
+          <span class="file-pick-name" id="cfg-import-name">${esc(t("update.noFileChosen"))}</span>
+        </label>
+        <div id="cfg-import-preview" style="margin-top:12px"></div>
+        <div id="cfg-import-msg"></div>
+      </div>
+    </details>` : ""}
   `;
 
   attachSystemUpdateHandlers(el, isAdmin);
@@ -4540,6 +4624,7 @@ async function renderSystem(el) {
   if (isAdmin) wirePowerButtons(el);
   attachHTTPSFormHandlers(el);
   wireTimeCard(el, timeData);
+  wireConfigCard(el);
 }
 
 // ---------- 安全 ----------
