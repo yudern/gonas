@@ -50,6 +50,7 @@ const dict = {
     appcatEnv: { PUID: "執行容器的使用者 ID", PGID: "執行容器的群組 ID", TZ: "時區,例如 Asia/Taipei" },
     time: {
       title: "時間與時區", currentTime: "目前時間", timezone: "時區", ntp: "網路校時(NTP)",
+      commonZone: "常用時區", orType: "或輸入其他時區(可搜尋)", zones: { "Asia/Shanghai": "中國標準時間 — 上海/北京", "Asia/Hong_Kong": "香港時間", "Asia/Taipei": "台北時間", "Asia/Tokyo": "日本 — 東京", "Asia/Seoul": "韓國 — 首爾", "Asia/Singapore": "新加坡", "Asia/Kolkata": "印度", "Asia/Dubai": "阿聯酋 — 杜拜", "Europe/London": "英國 — 倫敦", "Europe/Paris": "中歐 — 巴黎", "Europe/Berlin": "中歐 — 柏林", "Europe/Moscow": "俄羅斯 — 莫斯科", "America/New_York": "美東 — 紐約", "America/Chicago": "美中 — 芝加哥", "America/Denver": "美山區 — 丹佛", "America/Los_Angeles": "美西 — 洛杉磯", "Australia/Sydney": "澳洲 — 雪梨", "UTC": "協調世界時 (UTC)" },
       ntpSynced: "已與時間伺服器同步", ntpNotSynced: "已開啟但尚未同步", ntpOff: "未開啟自動校時",
       enableNtp: "自動與網路時間伺服器同步(建議開啟)", saveTimezone: "儲存時區",
       timezoneHint: "輸入或選擇時區,例如 Asia/Taipei、Asia/Shanghai。",
@@ -641,6 +642,7 @@ const dict = {
     appcatEnv: { PUID: "运行容器的用户 ID", PGID: "运行容器的用户组 ID", TZ: "时区,例如 Asia/Shanghai" },
     time: {
       title: "时间与时区", currentTime: "当前时间", timezone: "时区", ntp: "网络校时(NTP)",
+      commonZone: "常用时区", orType: "或输入其他时区(可搜索)", zones: { "Asia/Shanghai": "中国标准时间 — 上海/北京", "Asia/Hong_Kong": "香港时间", "Asia/Taipei": "台北时间", "Asia/Tokyo": "日本 — 东京", "Asia/Seoul": "韩国 — 首尔", "Asia/Singapore": "新加坡", "Asia/Kolkata": "印度", "Asia/Dubai": "阿联酋 — 迪拜", "Europe/London": "英国 — 伦敦", "Europe/Paris": "中欧 — 巴黎", "Europe/Berlin": "中欧 — 柏林", "Europe/Moscow": "俄罗斯 — 莫斯科", "America/New_York": "美东 — 纽约", "America/Chicago": "美中 — 芝加哥", "America/Denver": "美山区 — 丹佛", "America/Los_Angeles": "美西 — 洛杉矶", "Australia/Sydney": "澳洲 — 悉尼", "UTC": "协调世界时 (UTC)" },
       ntpSynced: "已与时间服务器同步", ntpNotSynced: "已开启但尚未同步", ntpOff: "未开启自动校时",
       enableNtp: "自动与网络时间服务器同步(建议开启)", saveTimezone: "保存时区",
       timezoneHint: "输入或选择时区,例如 Asia/Shanghai、Asia/Taipei。",
@@ -1232,6 +1234,7 @@ const dict = {
     appcatEnv: { PUID: "User ID that runs the container", PGID: "Group ID that runs the container", TZ: "Timezone, e.g. Asia/Shanghai" },
     time: {
       title: "Time & Time Zone", currentTime: "Current time", timezone: "Time zone", ntp: "Network time (NTP)",
+      commonZone: "Common time zones", orType: "Or type another time zone (searchable)", zones: { "Asia/Shanghai": "China Standard Time — Shanghai/Beijing", "Asia/Hong_Kong": "Hong Kong", "Asia/Taipei": "Taipei", "Asia/Tokyo": "Japan — Tokyo", "Asia/Seoul": "Korea — Seoul", "Asia/Singapore": "Singapore", "Asia/Kolkata": "India — Kolkata", "Asia/Dubai": "UAE — Dubai", "Europe/London": "UK — London", "Europe/Paris": "Central Europe — Paris", "Europe/Berlin": "Central Europe — Berlin", "Europe/Moscow": "Russia — Moscow", "America/New_York": "US East — New York", "America/Chicago": "US Central — Chicago", "America/Denver": "US Mountain — Denver", "America/Los_Angeles": "US Pacific — Los Angeles", "Australia/Sydney": "Australia — Sydney", "UTC": "Coordinated Universal Time (UTC)" },
       ntpSynced: "Synchronized with time server", ntpNotSynced: "On, not yet synchronized", ntpOff: "Automatic sync off",
       enableNtp: "Automatically sync with a network time server (recommended)", saveTimezone: "Save time zone",
       timezoneHint: "Type or pick a time zone, e.g. Asia/Shanghai, America/New_York.",

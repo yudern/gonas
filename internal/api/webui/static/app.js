@@ -3954,6 +3954,8 @@ function renderImportPreview(el, data) {
   });
 }
 
+const COMMON_TZ_IDS = ["Asia/Shanghai","Asia/Hong_Kong","Asia/Taipei","Asia/Tokyo","Asia/Seoul","Asia/Singapore","Asia/Kolkata","Asia/Dubai","Europe/London","Europe/Paris","Europe/Berlin","Europe/Moscow","America/New_York","America/Chicago","America/Denver","America/Los_Angeles","Australia/Sydney","UTC"];
+
 // renderTimeCard 畫「時間與時區」卡(第七十五輪:NAS 最基礎的系統時間設定)。
 function renderTimeCard(data, isAdmin) {
   const st = data && data.status;
@@ -3965,8 +3967,15 @@ function renderTimeCard(data, isAdmin) {
     : `<span class="pill neutral">${esc(t("time.ntpOff"))}</span>`;
   const canEdit = isAdmin && st.canManage;
   const controls = !canEdit ? (st.canManage ? "" : `<p class="hint" style="margin-top:10px">${esc(t("time.cannotManage"))}</p>`) : `
-    <div class="field" style="margin-top:14px;max-width:420px">
-      <label>${esc(t("time.timezone"))}</label>
+    <div class="field" style="margin-top:14px;max-width:460px">
+      <label>${esc(t("time.commonZone"))}</label>
+      <select id="tz-quick">
+        <option value="">—</option>
+        ${COMMON_TZ_IDS.map((z) => `<option value="${esc(z)}" ${z === st.timezone ? "selected" : ""}>${esc(t("time.zones." + z))} — ${esc(z)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field" style="margin-top:10px;max-width:460px">
+      <label>${esc(t("time.orType"))}</label>
       <input type="text" id="tz-input" list="tz-list" value="${esc(st.timezone || "")}" autocomplete="off">
       <datalist id="tz-list">${(data.timezones || []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist>
       <div class="hint">${esc(t("time.timezoneHint"))}</div>
@@ -4011,6 +4020,9 @@ function wireTimeCard(el, data) {
   }
   const msgBox = el.querySelector("#time-msg");
   const refresh = () => renderSystem(el);
+  const tzQuick = el.querySelector("#tz-quick");
+  const tzInput = el.querySelector("#tz-input");
+  if (tzQuick && tzInput) tzQuick.addEventListener("change", () => { if (tzQuick.value) tzInput.value = tzQuick.value; });
   const tzSave = el.querySelector("#tz-save");
   if (tzSave) tzSave.addEventListener("click", async () => {
     const tz = (el.querySelector("#tz-input").value || "").trim();
